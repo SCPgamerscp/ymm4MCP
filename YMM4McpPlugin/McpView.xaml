@@ -1,0 +1,57 @@
+<UserControl x:Class="YMM4McpPlugin.McpView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:YMM4McpPlugin"
+             Width="450" Height="350">
+    <UserControl.DataContext>
+        <local:McpViewModel/>
+    </UserControl.DataContext>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- タイトル・ステータス -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="🤖 YMM4 MCP連携サーバー"
+                       FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding StatusText}" Margin="12,0,0,0"
+                       Foreground="{Binding IsRunning, Converter={x:Static local:BoolToBrushConverter.Instance}}"
+                       VerticalAlignment="Center" FontWeight="SemiBold"/>
+        </StackPanel>
+
+        <!-- URL表示 -->
+        <Border Grid.Row="1" Background="#1e1e2e" CornerRadius="4"
+                Padding="8,6" Margin="0,0,0,8">
+            <TextBlock Text="{Binding BaseUrl, StringFormat='URL: {0}api/'}"
+                       Foreground="#cdd6f4" FontFamily="Consolas" FontSize="12"/>
+        </Border>
+
+        <!-- ログエリア -->
+        <Border Grid.Row="2" Background="#181825" CornerRadius="4"
+                Padding="4" Margin="0,0,0,8">
+            <ScrollViewer x:Name="LogScroll" VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="LogTextBlock"
+                           Text="{Binding Log}"
+                           Foreground="#a6e3a1" FontFamily="Consolas" FontSize="11"
+                           TextWrapping="Wrap"/>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ボタン群 -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="ログクリア" Command="{Binding ClearLogCommand}"
+                    Padding="12,6" Margin="0,0,8,0"/>
+            <Button Content="■ 停止" Command="{Binding StopCommand}"
+                    Padding="12,6" Margin="0,0,8,0"
+                    Background="#f38ba8" Foreground="White"/>
+            <Button Content="▶ 起動" Command="{Binding StartCommand}"
+                    Padding="12,6"
+                    Background="#a6e3a1" Foreground="#1e1e2e" FontWeight="Bold"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

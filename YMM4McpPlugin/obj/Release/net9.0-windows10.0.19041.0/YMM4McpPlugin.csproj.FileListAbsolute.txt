@@ -1,0 +1,5 @@
+C:\Users\ecrea\OneDrive\デスクトップ\ymm4プラグイン\YMM4McpPlugin\obj\Release\net9.0-windows10.0.19041.0\McpView.g.cs
+C:\Users\ecrea\OneDrive\デスクトップ\ymm4プラグイン\YMM4McpPlugin\obj\Release\net9.0-windows10.0.19041.0\GeneratedInternalTypeHelper.g.cs
+C:\Users\ecrea\OneDrive\デスクトップ\ymm4プラグイン\YMM4McpPlugin\obj\Release\net9.0-windows10.0.19041.0\YMM4McpPlugin_MarkupCompile.cache
+C:\Users\ecrea\OneDrive\デスクトップ\ymm4プラグイン\YMM4McpPlugin\obj\Release\net9.0-windows10.0.19041.0\YMM4McpPlugin_MarkupCompile.lref
+C:\Users\ecrea\OneDrive\デスクトップ\ymm4プラグイン\YMM4McpPlugin\obj\Release\net9.0-windows10.0.19041.0\YMM4McpPlugin.csproj.AssemblyReference.cache

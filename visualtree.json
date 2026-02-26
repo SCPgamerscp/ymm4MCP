@@ -1,0 +1,3505 @@
+﻿{
+    "count":  500,
+    "elements":  [
+                     {
+                         "depth":  0,
+                         "name":  "",
+                         "type":  "MainView",
+                         "w":  1550,
+                         "h":  830
+                     },
+                     {
+                         "depth":  1,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1536,
+                         "h":  793
+                     },
+                     {
+                         "depth":  2,
+                         "name":  "",
+                         "type":  "AdornerDecorator",
+                         "w":  1536,
+                         "h":  793
+                     },
+                     {
+                         "depth":  3,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1536,
+                         "h":  793
+                     },
+                     {
+                         "depth":  3,
+                         "name":  "",
+                         "type":  "AdornerLayer",
+                         "w":  1536,
+                         "h":  793
+                     },
+                     {
+                         "depth":  4,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1536,
+                         "h":  793
+                     },
+                     {
+                         "depth":  5,
+                         "name":  "focusSink",
+                         "type":  "TextBox",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  5,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  1536,
+                         "h":  793
+                     },
+                     {
+                         "depth":  6,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  2,
+                         "h":  2
+                     },
+                     {
+                         "depth":  6,
+                         "name":  "",
+                         "type":  "Menu",
+                         "w":  1536,
+                         "h":  18
+                     },
+                     {
+                         "depth":  6,
+                         "name":  "",
+                         "type":  "StatusBar",
+                         "w":  1536,
+                         "h":  26
+                     },
+                     {
+                         "depth":  6,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  7,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  7,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1536,
+                         "h":  18
+                     },
+                     {
+                         "depth":  7,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1536,
+                         "h":  26
+                     },
+                     {
+                         "depth":  7,
+                         "name":  "docker",
+                         "type":  "DockingManager",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  8,
+                         "name":  "",
+                         "type":  "ItemsPresenter",
+                         "w":  1536,
+                         "h":  18
+                     },
+                     {
+                         "depth":  8,
+                         "name":  "",
+                         "type":  "ItemsPresenter",
+                         "w":  1536,
+                         "h":  26
+                     },
+                     {
+                         "depth":  8,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  9,
+                         "name":  "",
+                         "type":  "WrapPanel",
+                         "w":  1536,
+                         "h":  18
+                     },
+                     {
+                         "depth":  9,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  1536,
+                         "h":  26
+                     },
+                     {
+                         "depth":  9,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "MenuItem",
+                         "w":  61,
+                         "h":  18
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "MenuItem",
+                         "w":  51,
+                         "h":  18
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "MenuItem",
+                         "w":  70,
+                         "h":  18
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "MenuItem",
+                         "w":  54,
+                         "h":  18
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "MenuItem",
+                         "w":  58,
+                         "h":  18
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "StatusBarItem",
+                         "w":  70,
+                         "h":  26
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "StatusBarItem",
+                         "w":  66,
+                         "h":  26
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "StatusBarItem",
+                         "w":  149,
+                         "h":  26
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "StatusBarItem",
+                         "w":  1158,
+                         "h":  26
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  10,
+                         "name":  "PART_AutoHideArea",
+                         "type":  "ContentPresenter",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "templateRoot",
+                         "type":  "Border",
+                         "w":  61,
+                         "h":  18
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "templateRoot",
+                         "type":  "Border",
+                         "w":  51,
+                         "h":  18
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "templateRoot",
+                         "type":  "Border",
+                         "w":  70,
+                         "h":  18
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "templateRoot",
+                         "type":  "Border",
+                         "w":  54,
+                         "h":  18
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "templateRoot",
+                         "type":  "Border",
+                         "w":  58,
+                         "h":  18
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  70,
+                         "h":  26
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  66,
+                         "h":  26
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  149,
+                         "h":  26
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1158,
+                         "h":  26
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "LayoutPanelControl",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "LayoutAnchorSideControl",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "LayoutAnchorSideControl",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "LayoutAnchorSideControl",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "LayoutAnchorSideControl",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  11,
+                         "name":  "",
+                         "type":  "LayoutAutoHideWindowControl",
+                         "w":  1536,
+                         "h":  750
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  59,
+                         "h":  16
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  69,
+                         "h":  16
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  52,
+                         "h":  16
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  57,
+                         "h":  16
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  65,
+                         "h":  18
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  59,
+                         "h":  16
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  142,
+                         "h":  19
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  71,
+                         "h":  16
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "LayoutPanelControl",
+                         "w":  1122,
+                         "h":  750
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "LayoutGridResizerControl",
+                         "w":  6,
+                         "h":  750
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "LayoutAnchorablePaneControl",
+                         "w":  408,
+                         "h":  750
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ItemsControl",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ItemsControl",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ItemsControl",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  12,
+                         "name":  "",
+                         "type":  "ItemsControl",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "Icon",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "GlyphPanel",
+                         "type":  "Path",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "Icon",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "GlyphPanel",
+                         "type":  "Path",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "Icon",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "GlyphPanel",
+                         "type":  "Path",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  57,
+                         "h":  16
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "Icon",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "GlyphPanel",
+                         "type":  "Path",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "Icon",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "GlyphPanel",
+                         "type":  "Path",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  65,
+                         "h":  18
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  59,
+                         "h":  16
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Button",
+                         "w":  142,
+                         "h":  19
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  71,
+                         "h":  16
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "LayoutAnchorablePaneGroupControl",
+                         "w":  1122,
+                         "h":  301
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "LayoutGridResizerControl",
+                         "w":  1122,
+                         "h":  6
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "LayoutDocumentPaneGroupControl",
+                         "w":  1122,
+                         "h":  443
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  6,
+                         "h":  750
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  750
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  13,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "AccessText",
+                         "w":  57,
+                         "h":  16
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "TextBox",
+                         "w":  65,
+                         "h":  18
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  142,
+                         "h":  19
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "LayoutAnchorablePaneControl",
+                         "w":  1122,
+                         "h":  301
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  6
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "LayoutDocumentPaneControl",
+                         "w":  1122,
+                         "h":  443
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  328,
+                         "h":  750
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "Title",
+                         "type":  "AnchorablePaneTitle",
+                         "w":  408,
+                         "h":  18
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "ContentPanel",
+                         "type":  "Border",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "HeaderPanel",
+                         "type":  "AnchorablePaneTabPanel",
+                         "w":  328,
+                         "h":  18
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "ItemsPresenter",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "ItemsPresenter",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "ItemsPresenter",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  14,
+                         "name":  "",
+                         "type":  "ItemsPresenter",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  57,
+                         "h":  16
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  65,
+                         "h":  18
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  12,
+                         "h":  18
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  139,
+                         "h":  16
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  301
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  443
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "PART_Border",
+                         "type":  "Border",
+                         "w":  408,
+                         "h":  18
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "PART_SelectedContentHost",
+                         "type":  "ContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "StackPanel",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "StackPanel",
+                         "w":  0,
+                         "h":  750
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "StackPanel",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  15,
+                         "name":  "",
+                         "type":  "StackPanel",
+                         "w":  1536,
+                         "h":  0
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  63,
+                         "h":  16
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  10,
+                         "h":  16
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  139,
+                         "h":  16
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1042,
+                         "h":  301
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "Title",
+                         "type":  "AnchorablePaneTitle",
+                         "w":  1122,
+                         "h":  18
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "ContentPanel",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "HeaderPanel",
+                         "type":  "AnchorablePaneTabPanel",
+                         "w":  1042,
+                         "h":  18
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  443
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "ContentPanel",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  416
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "TabHeaders",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  28
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  18
+                     },
+                     {
+                         "depth":  16,
+                         "name":  "",
+                         "type":  "LayoutAnchorableControl",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  63,
+                         "h":  16
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "PART_Border",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  18
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "PART_SelectedContentHost",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "PART_SelectedContentHost",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "HeaderScrollViewer",
+                         "type":  "ScrollViewer",
+                         "w":  1070,
+                         "h":  28
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "MenuDropDownButton",
+                         "type":  "DropDownButton",
+                         "w":  26,
+                         "h":  26
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "SettingsMenuDropDownButton",
+                         "type":  "DropDownButton",
+                         "w":  26,
+                         "h":  26
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  18
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "",
+                         "type":  "DropDownControlArea",
+                         "w":  328,
+                         "h":  18
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  80,
+                         "h":  18
+                     },
+                     {
+                         "depth":  17,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "ScrollContentPresenter",
+                         "w":  63,
+                         "h":  16
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  18
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "LayoutAnchorableControl",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "LayoutDocumentControl",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1070,
+                         "h":  28
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  328,
+                         "h":  18
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "PART_AutoHidePin",
+                         "type":  "Button",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "PART_HidePin",
+                         "type":  "Button",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  18,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "TextBoxView",
+                         "w":  59,
+                         "h":  16
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "AdornerLayer",
+                         "w":  63,
+                         "h":  16
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "DropDownControlArea",
+                         "w":  1042,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  80,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "ScrollContentPresenter",
+                         "w":  1070,
+                         "h":  28
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "PART_Button",
+                         "type":  "Button",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "PART_ToggleButton",
+                         "type":  "ToggleButton",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  328,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  19,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1042,
+                         "h":  18
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "PART_AutoHidePin",
+                         "type":  "Button",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "PART_HidePin",
+                         "type":  "Button",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1070,
+                         "h":  28
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "AdornerLayer",
+                         "w":  1070,
+                         "h":  28
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  324,
+                         "h":  18
+                     },
+                     {
+                         "depth":  20,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1042,
+                         "h":  18
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  18,
+                         "h":  18
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "HeaderPanel",
+                         "type":  "DocumentPaneTabPanel",
+                         "w":  122,
+                         "h":  26
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  21,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  1038,
+                         "h":  18
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "",
+                         "type":  "TabItem",
+                         "w":  126,
+                         "h":  27
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "PART_ContentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "FocusSink",
+                         "type":  "TextBox",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  22,
+                         "name":  "",
+                         "type":  "ContentControl",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "FocusSink",
+                         "type":  "TextBox",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "",
+                         "type":  "ContentControl",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  126,
+                         "h":  27
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "PART_Button",
+                         "type":  "Button",
+                         "w":  24,
+                         "h":  26
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "PART_ToggleButton",
+                         "type":  "ToggleButton",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  2,
+                         "h":  2
+                     },
+                     {
+                         "depth":  23,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "FocusSink",
+                         "type":  "TextBox",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "",
+                         "type":  "ContentControl",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  2,
+                         "h":  2
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  126,
+                         "h":  27
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  26
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  24,
+                         "name":  "",
+                         "type":  "ItemEditorView",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  2,
+                         "h":  2
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "",
+                         "type":  "TimelineView",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "ContentWrapper",
+                         "type":  "Border",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  20,
+                         "h":  22
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  7,
+                         "h":  24
+                     },
+                     {
+                         "depth":  25,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  26,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  26,
+                         "name":  "",
+                         "type":  "PreviewView",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  26,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  26,
+                         "name":  "Content",
+                         "type":  "ContentPresenter",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  26,
+                         "name":  "PART_ContentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  22,
+                         "h":  22
+                     },
+                     {
+                         "depth":  26,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  27,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  27,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  27,
+                         "name":  "",
+                         "type":  "LayoutDocumentTabItem",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  27,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  28,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  28,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  1122,
+                         "h":  414
+                     },
+                     {
+                         "depth":  28,
+                         "name":  "",
+                         "type":  "DropDownControlArea",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  28,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  28,
+                         "name":  "editor",
+                         "type":  "PropertiesEditor",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  283
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  20,
+                         "h":  414
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "ToolBarTray",
+                         "w":  1102,
+                         "h":  81
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1102,
+                         "h":  26
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1102,
+                         "h":  26
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  80,
+                         "h":  282
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "ScrollViewer",
+                         "w":  1022,
+                         "h":  282
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  136,
+                         "h":  16
+                     },
+                     {
+                         "depth":  29,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1122,
+                         "h":  259
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  1122,
+                         "h":  24
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "this",
+                         "type":  "VerticalLevelMeter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "loudnessMeterLabel",
+                         "type":  "Grid",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "this",
+                         "type":  "VerticalLevelMeter",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "this",
+                         "type":  "VerticalLevelMeter",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  20,
+                         "h":  414
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "soundLevelMeterLabel",
+                         "type":  "Grid",
+                         "w":  20,
+                         "h":  414
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ToolBar",
+                         "w":  179,
+                         "h":  27
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ToolBar",
+                         "w":  369,
+                         "h":  27
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ToolBar",
+                         "w":  429,
+                         "h":  27
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ToolBar",
+                         "w":  223,
+                         "h":  27
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ToolBar",
+                         "w":  140,
+                         "h":  27
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "this",
+                         "type":  "CharacterComboBox",
+                         "w":  146,
+                         "h":  26
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  810,
+                         "h":  26
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  120,
+                         "h":  26
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1102,
+                         "h":  26
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ScrollViewer",
+                         "w":  80,
+                         "h":  265
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  80,
+                         "h":  17
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1022,
+                         "h":  282
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  30,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  461,
+                         "h":  259
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "ContentControl",
+                         "w":  461,
+                         "h":  259
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "ComboBox",
+                         "w":  60,
+                         "h":  24
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "TextBoxSlider",
+                         "w":  150,
+                         "h":  20
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Slider",
+                         "w":  647,
+                         "h":  18
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "UniformGrid",
+                         "w":  20,
+                         "h":  414
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "UniformGrid",
+                         "w":  20,
+                         "h":  414
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "UniformGrid",
+                         "w":  20,
+                         "h":  414
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "Grid",
+                         "type":  "Grid",
+                         "w":  175,
+                         "h":  25
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "Grid",
+                         "type":  "Grid",
+                         "w":  365,
+                         "h":  25
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "Grid",
+                         "type":  "Grid",
+                         "w":  425,
+                         "h":  25
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "Grid",
+                         "type":  "Grid",
+                         "w":  219,
+                         "h":  25
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "Grid",
+                         "type":  "Grid",
+                         "w":  136,
+                         "h":  25
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  146,
+                         "h":  26
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "addSerifTextBox",
+                         "type":  "RichTextEditor",
+                         "w":  810,
+                         "h":  26
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "TextBlock",
+                         "w":  806,
+                         "h":  16
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "addVoiceComboBox",
+                         "type":  "EnumComboBox",
+                         "w":  120,
+                         "h":  26
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Button",
+                         "w":  102,
+                         "h":  26
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  1005,
+                         "h":  26
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  80,
+                         "h":  265
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "ScrollContentPresenter",
+                         "w":  1005,
+                         "h":  265
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "ScrollBar",
+                         "w":  17,
+                         "h":  265
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "ScrollBar",
+                         "w":  1005,
+                         "h":  17
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  31,
+                         "name":  "",
+                         "type":  "ItemsControl",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  461,
+                         "h":  259
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "templateRoot",
+                         "type":  "Grid",
+                         "w":  60,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  150,
+                         "h":  20
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  24,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  647,
+                         "h":  18
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "OverflowGrid",
+                         "type":  "Grid",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "MainPanelBorder",
+                         "type":  "Border",
+                         "w":  164,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "OverflowGrid",
+                         "type":  "Grid",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "MainPanelBorder",
+                         "type":  "Border",
+                         "w":  354,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "OverflowGrid",
+                         "type":  "Grid",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "MainPanelBorder",
+                         "type":  "Border",
+                         "w":  414,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "OverflowGrid",
+                         "type":  "Grid",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "MainPanelBorder",
+                         "type":  "Border",
+                         "w":  208,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "OverflowGrid",
+                         "type":  "Grid",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "MainPanelBorder",
+                         "type":  "Border",
+                         "w":  125,
+                         "h":  25
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  146,
+                         "h":  26
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  810,
+                         "h":  26
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  26,
+                         "h":  26
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "PART_ComboBox",
+                         "type":  "ComboBox",
+                         "w":  120,
+                         "h":  26
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  102,
+                         "h":  26
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "TimelineScaleView",
+                         "w":  1005,
+                         "h":  26
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ScrollContentPresenter",
+                         "w":  80,
+                         "h":  265
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "AdornerLayer",
+                         "w":  1005,
+                         "h":  265
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "Bg",
+                         "type":  "Grid",
+                         "w":  17,
+                         "h":  265
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "Bg",
+                         "type":  "Grid",
+                         "w":  1005,
+                         "h":  17
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  32,
+                         "name":  "",
+                         "type":  "ScrollViewer",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "WindowsFormsHost",
+                         "w":  461,
+                         "h":  259
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "toggleButton",
+                         "type":  "ToggleButton",
+                         "w":  60,
+                         "h":  24
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  24,
+                         "h":  16
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_TextBox",
+                         "type":  "TextBox",
+                         "w":  35,
+                         "h":  20
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_Slider",
+                         "type":  "Slider",
+                         "w":  95,
+                         "h":  18
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Canvas",
+                         "w":  95,
+                         "h":  20
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  14,
+                         "h":  14
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  21,
+                         "h":  21
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  647,
+                         "h":  18
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowButton",
+                         "type":  "ToggleButton",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowPopup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  164,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowButton",
+                         "type":  "ToggleButton",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowPopup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  354,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowButton",
+                         "type":  "ToggleButton",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowPopup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  414,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowButton",
+                         "type":  "ToggleButton",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowPopup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  208,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowButton",
+                         "type":  "ToggleButton",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "OverflowPopup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "DockPanel",
+                         "w":  125,
+                         "h":  25
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  146,
+                         "h":  26
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PARTS_ScrollViewer",
+                         "type":  "ScrollViewer",
+                         "w":  810,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  810,
+                         "h":  26
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  16,
+                         "h":  16
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "templateRoot",
+                         "type":  "Grid",
+                         "w":  120,
+                         "h":  26
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  24,
+                         "h":  16
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  1005,
+                         "h":  26
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  80,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "AdornerLayer",
+                         "w":  80,
+                         "h":  265
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "VirtualingCnavas",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "VirtualingCnavas",
+                         "w":  124215,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "VirtualingCnavas",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  17,
+                         "h":  231
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_LineUpButton",
+                         "type":  "RepeatButton",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_Track",
+                         "type":  "Track",
+                         "w":  17,
+                         "h":  231
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_LineDownButton",
+                         "type":  "RepeatButton",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Border",
+                         "w":  971,
+                         "h":  17
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_LineLeftButton",
+                         "type":  "RepeatButton",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_Track",
+                         "type":  "Track",
+                         "w":  971,
+                         "h":  17
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "PART_LineRightButton",
+                         "type":  "RepeatButton",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  120,
+                         "h":  24
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "DocumentCloseButton",
+                         "type":  "Button",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  33,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "templateRoot",
+                         "type":  "Border",
+                         "w":  60,
+                         "h":  24
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  35,
+                         "h":  20
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  95,
+                         "h":  18
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_Arrow",
+                         "type":  "ContentControl",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "TopTick",
+                         "type":  "TickBar",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "BottomTick",
+                         "type":  "TickBar",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "TrackBackground",
+                         "type":  "Border",
+                         "w":  638,
+                         "h":  4
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_Track",
+                         "type":  "Track",
+                         "w":  647,
+                         "h":  18
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarThumb",
+                         "type":  "Thumb",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarHeader",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_ToolBarPanel",
+                         "type":  "ToolBarPanel",
+                         "w":  155,
+                         "h":  22
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarThumb",
+                         "type":  "Thumb",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarHeader",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_ToolBarPanel",
+                         "type":  "ToolBarPanel",
+                         "w":  345,
+                         "h":  22
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarThumb",
+                         "type":  "Thumb",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarHeader",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_ToolBarPanel",
+                         "type":  "ToolBarPanel",
+                         "w":  405,
+                         "h":  22
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarThumb",
+                         "type":  "Thumb",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarHeader",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_ToolBarPanel",
+                         "type":  "ToolBarPanel",
+                         "w":  199,
+                         "h":  22
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "Bd",
+                         "type":  "Border",
+                         "w":  15,
+                         "h":  25
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarThumb",
+                         "type":  "Thumb",
+                         "w":  10,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "ToolBarHeader",
+                         "type":  "ContentPresenter",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_ToolBarPanel",
+                         "type":  "ToolBarPanel",
+                         "w":  116,
+                         "h":  22
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "combobox",
+                         "type":  "ComboBox",
+                         "w":  121,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  810,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PARTS_TextBox",
+                         "type":  "TextBox",
+                         "w":  810,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PARTS_RichTextBox",
+                         "type":  "RichTextBox",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "PART_Popup",
+                         "type":  "Popup",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "toggleButton",
+                         "type":  "ToggleButton",
+                         "w":  120,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "contentPresenter",
+                         "type":  "ContentPresenter",
+                         "w":  92,
+                         "h":  16
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "ContentPresenter",
+                         "w":  1005,
+                         "h":  26
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  80,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Canvas",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "FastCanvasItemsControl",
+                         "w":  125220,
+                         "h":  288
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1005,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1,
+                         "h":  265
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1,
+                         "h":  265
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1,
+                         "h":  265
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  1,
+                         "h":  265
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Control",
+                         "w":  124216,
+                         "h":  32
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  1,
+                         "h":  288
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  1,
+                         "h":  288
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Thumb",
+                         "w":  17,
+                         "h":  213
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "RepeatButton",
+                         "w":  963,
+                         "h":  17
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "border",
+                         "type":  "Border",
+                         "w":  17,
+                         "h":  17
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  106,
+                         "h":  24
+                     },
+                     {
+                         "depth":  34,
+                         "name":  "",
+                         "type":  "ScrollContentPresenter",
+                         "w":  408,
+                         "h":  732
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "splitBorder",
+                         "type":  "Border",
+                         "w":  17,
+                         "h":  22
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "PART_ContentHost",
+                         "type":  "ScrollViewer",
+                         "w":  34,
+                         "h":  18
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  95,
+                         "h":  18
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Canvas",
+                         "w":  648,
+                         "h":  4
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "RepeatButton",
+                         "w":  636,
+                         "h":  18
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "Thumb",
+                         "type":  "Thumb",
+                         "w":  11,
+                         "h":  18
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  221
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  69
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  221
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Rectangle",
+                         "w":  10,
+                         "h":  69
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "Grid",
+                         "w":  10,
+                         "h":  414
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "",
+                         "type":  "StackPanel",
+                         "w":  155,
+                         "h":  22
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "groupButton",
+                         "type":  "Button",
+                         "w":  22,
+                         "h":  22
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "ungroupButton",
+                         "type":  "Button",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "enableClippingButton",
+                         "type":  "Button",
+                         "w":  22,
+                         "h":  22
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "disableClippingButton",
+                         "type":  "Button",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "lockButton",
+                         "type":  "Button",
+                         "w":  22,
+                         "h":  22
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "unlockButton",
+                         "type":  "Button",
+                         "w":  0,
+                         "h":  0
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "waveformButton",
+                         "type":  "SplitButton",
+                         "w":  30,
+                         "h":  22
+                     },
+                     {
+                         "depth":  35,
+                         "name":  "waveformOffButton",
+                         "type":  "SplitButton",
+                         "w":  0,
+                         "h":  0
+                     }
+                 ]
+}

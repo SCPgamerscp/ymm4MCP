@@ -1,0 +1,131 @@
+﻿{
+    "count":  18,
+    "areas":  [
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "McpViewModel",
+                      "props":  "      ",
+                      "commands":  "StartCommand StopCommand ClearLogCommand",
+                      "methods":  "AddLog(String) OnPropertyChanged(String) \u003cget_StartCommand\u003eb__16_0(Object) \u003cget_StartCommand\u003eb__16_1(Object) \u003cget_StopCommand\u003eb__18_0(Object) \u003cget_StopCommand\u003eb__18_1(Object) \u003cget_ClearLogCommand\u003eb__20_0(Object) \u003c.ctor\u003eb__21_0(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ItemEditorViewModel",
+                      "props":  "     ",
+                      "commands":  "BeginEditCommand EndEditCommand PropertyEditorAttributeCreatedCommand",
+                      "methods":  "SetTimelineToolInfo(TimelineToolInfo) UndoRedoManager_HistoryChanged(Object,EventArgs) Timeline_PropertyChanged(Object,PropertyChangedEventArgs) UpdateSelectItems() UpdateEditorInfo(Timeline,Scenes) FocusToDefaultPropertyEditor() Dispose(Boolean) Dispose() \u003c.ctor\u003eb__24_2(PropertyEditorAttributeCreatedArgs) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "PreviewViewModel",
+                      "props":  "                 ",
+                      "commands":  "ToggleMuteCommand UnmuteCommand",
+                      "methods":  "SetTimelineToolInfo(TimelineToolInfo) This_PropertyChanged(Object,PropertyChangedEventArgs) VideoInfo_PropertyChanged(Object,PropertyChangedEventArgs) Timeline_PropertyChanged(Object,PropertyChangedEventArgs) Player_PropertyChanged(Object,PropertyChangedEventArgs) YMMSettings_PropertyChanged(Object,PropertyChangedEventArgs) UpdatePlayerPlaybackRate() Player_ExceptionThrown(Object,TimelinePlayerExceptionThrownEventArgs) TogglePlayAsync() StopAsync() SeekAsync(TimeSpan) SeekAsync(Int32) SeekToStartAsync() SeekToEndAsync() SeekToNextFrameAsync() SeekToPrevFrameAsync() SaveImage(String,Boolean) GetBitmap(Boolean) SaveImageToClipboard() StopPlayerThreadAsync() RestartPlayerThreadAsync() Dispose() \u003c.ctor\u003eb__55_0() \u003cSetTimelineToolInfo\u003eb__56_0() \u003cSetTimelineToolInfo\u003eb__56_1() \u003cSetTimelineToolInfo\u003eb__56_2() \u003cSetTimelineToolInfo\u003eb__56_3() Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  },
+                  {
+                      "areaType":  "ToolAreaViewModel",
+                      "vmType":  "ToolAreaViewModel",
+                      "props":  "          ",
+                      "commands":  "",
+                      "methods":  "ExistsOtherViewModes() ToolAreaViewModels_CollectionChanged(Object,NotifyCollectionChangedEventArgs) ToolAreaViewModel_PropertyChanged(Object,PropertyChangedEventArgs) CreateViewModel() ToolVm_PropertyChanged(Object,PropertyChangedEventArgs) CanSuspendViewModel() UpdateViewModelLifecycle() ReleaseViewModel() ToolVm_CreateNewToolViewRequested(Object,CreateNewToolViewRequestedEventArgs) SaveState() LoadState(SerializableToolState) LoadState(ToolState) ClearProjectTemporaryState() SetTimelineToolInfo(TimelineToolInfo) Dispose() \u003cExistsOtherViewModes\u003eb__43_0(ToolAreaViewModel) Set(T\u0026,T,String,String[]) Set(Expression`1,T,String,String[]) Get(Expression`1) OnPropertyChanging(String) OnPropertyChanged(String) GetType() MemberwiseClone() Finalize() ToString() Equals(Object) GetHashCode()"
+                  }
+              ]
+}

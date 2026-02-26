@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ymm4": {
+      "command": "python",
+      "args": ["C:/Users/ecrea/OneDrive/デスクトップ/ymm4プラグイン/mcp-server/server.py"],
+      "env": {}
+    }
+  }
+}
