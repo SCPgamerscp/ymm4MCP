@@ -49,10 +49,11 @@ async def ymm4_get(path: str) -> dict:
         res.raise_for_status()
         return res.json()
 
-async def ymm4_post(path: str, body: dict = {}) -> dict:
+async def ymm4_post(path: str, body: dict | None = None) -> dict:
     """YMM4 API POSTリクエスト"""
+    payload = body or {}
     async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
+        res = await client.post(f"{YMM4_API_BASE}{path}", json=payload)
         res.raise_for_status()
         return res.json()
 
@@ -231,6 +232,8 @@ async def add_script(args: dict) -> dict:
     lines = args.get("lines", [])
     fps = args.get("fps", 30)
     chars_per_sec = args.get("chars_per_sec", 5)
+    if chars_per_sec <= 0:
+        raise ValueError("chars_per_sec must be greater than 0")
     current_frame = args.get("start_frame", 0)
 
     # キャラクターごとのデフォルトレイヤー
@@ -260,7 +263,8 @@ async def add_script(args: dict) -> dict:
             "frame":     current_frame,
             "layer":     layer,
         })
-        results.append({"character": character, "text": text[:20] + "...", "frame": current_frame, **res})
+        preview_text = text if len(text) <= 20 else text[:20] + "..."
+        results.append({"character": character, "text": preview_text, "frame": current_frame, **res})
         current_frame += length
 
     return {"success": True, "added": len(results), "total_frames": current_frame, "details": results}
@@ -367,6 +371,9 @@ async def dispatch_preview(args: dict) -> CallToolResult:
                         mimeType="image/png"
                     ))
             return CallToolResult(content=contents)
+
+        case _:
+            raise ValueError(f"Unknown preview action: {action}")
 
 
 def _preview_result(data: dict) -> CallToolResult:
