@@ -42,19 +42,27 @@ app = Server("ymm4-mcp")
 # HTTPクライアント
 # ============================================================
 
+_http_client = httpx.AsyncClient(timeout=10.0)
+
+async def _handle_response(res: httpx.Response) -> dict:
+    if res.is_error:
+        try:
+            error_data = res.json()
+            error_msg = error_data.get("error", res.text)
+        except Exception:
+            error_msg = res.text
+        raise RuntimeError(f"YMM4 API Error ({res.status_code}): {error_msg}")
+    return res.json()
+
 async def ymm4_get(path: str) -> dict:
     """YMM4 API GETリクエスト"""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.get(f"{YMM4_API_BASE}{path}")
-        res.raise_for_status()
-        return res.json()
+    res = await _http_client.get(f"{YMM4_API_BASE}{path}")
+    return await _handle_response(res)
 
 async def ymm4_post(path: str, body: dict = {}) -> dict:
     """YMM4 API POSTリクエスト"""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
-        res.raise_for_status()
-        return res.json()
+    res = await _http_client.post(f"{YMM4_API_BASE}{path}", json=body)
+    return await _handle_response(res)
 
 # ============================================================
 # ツール定義

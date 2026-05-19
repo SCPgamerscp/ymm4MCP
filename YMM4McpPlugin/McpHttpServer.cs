@@ -300,7 +300,7 @@ namespace YMM4McpPlugin
             int layer = GetInt(b, "layer", 3);
             int length = GetInt(b, "length", 300);
 
-            return Application.Current.Dispatcher.Invoke(() =>
+            var result = Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
                 if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
@@ -332,35 +332,45 @@ namespace YMM4McpPlugin
                         return (object)new { success = false, error = "AddTachieItem見つからず", methods };
                     }
                     addMethod.Invoke(mainModel, new object?[] { frame, layer, targetChar });
-
-                    // 追加されたアイテムのlengthを調整
-                    Start_SleepMs(300);
-                    var rawItems = GetPropEnum(tvm, "Items");
-                    if (rawItems != null)
-                        foreach (var iv in rawItems)
-                        {
-                            var item = GetPropObj(iv, "Item") ?? iv;
-                            var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            var lProp = item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            var lenProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            if (fProp == null || lProp == null) continue;
-                            try
-                            {
-                                int f2 = (int)(fProp.GetValue(item) ?? -1);
-                                int l2 = (int)(lProp.GetValue(item) ?? -1);
-                                if (f2 == frame && l2 == layer && lenProp != null)
-                                { lenProp.SetValue(item, length); break; }
-                            }
-                            catch { }
-                        }
-
-                    return (object)new { success = true, character = ch, frame, layer, length };
+                    return (object)new { success = true, note = "Item added" };
                 }
                 catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
             });
-        }
 
-        private static void Start_SleepMs(int ms) => System.Threading.Thread.Sleep(ms);
+            if (result is { } r && r.GetType().GetProperty("success")?.GetValue(r) is bool s && !s) return result;
+
+            // 追加されたアイテムのlengthを調整（UIスレッドをブロックしないよう非同期で待機）
+            await Task.Delay(300);
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { success = true, character = ch, frame, layer, length, note = "VM取得失敗のため長さ調整スキップ" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { success = true, character = ch, frame, layer, length, note = "TVM取得失敗のため長さ調整スキップ" };
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems != null)
+                {
+                    foreach (var iv in rawItems)
+                    {
+                        var item = GetPropObj(iv, "Item") ?? iv;
+                        var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        var lProp = item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        var lenProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (fProp == null || lProp == null) continue;
+                        try
+                        {
+                            int f2 = (int)(fProp.GetValue(item) ?? -1);
+                            int l2 = (int)(lProp.GetValue(item) ?? -1);
+                            if (f2 == frame && l2 == layer && lenProp != null)
+                            { lenProp.SetValue(item, length); break; }
+                        }
+                        catch { }
+                    }
+                }
+                return (object)new { success = true, character = ch, frame, layer, length };
+            });
+        }
 
         private object? GetMainModel(object vm)
         {
@@ -1789,7 +1799,7 @@ namespace YMM4McpPlugin
 
                 using var capture = new NAudio.Wave.WasapiLoopbackCapture();
                 var waveFormat = capture.WaveFormat;
-                var buffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
+                var buffer = new System.Collections.Concurrent.ConcurrentQueue<byte[]>();
                 var tcs = new TaskCompletionSource<bool>();
 
                 capture.DataAvailable += (s, e) =>
@@ -1798,7 +1808,7 @@ namespace YMM4McpPlugin
                     {
                         var chunk = new byte[e.BytesRecorded];
                         Buffer.BlockCopy(e.Buffer, 0, chunk, 0, e.BytesRecorded);
-                        buffer.Add(chunk);
+                        buffer.Enqueue(chunk);
                     }
                 };
                 capture.RecordingStopped += (s, e) => tcs.TrySetResult(true);
@@ -1861,7 +1871,7 @@ namespace YMM4McpPlugin
                 // 2) 録音・再生・キャプチャを並行実行
                 using var capture = new NAudio.Wave.WasapiLoopbackCapture();
                 var waveFormat = capture.WaveFormat;
-                var audioBuffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
+                var audioBuffer = new System.Collections.Concurrent.ConcurrentQueue<byte[]>();
                 var recordTcs = new TaskCompletionSource<bool>();
                 capture.DataAvailable += (s, e) =>
                 {
@@ -1869,7 +1879,7 @@ namespace YMM4McpPlugin
                     {
                         var chunk = new byte[e.BytesRecorded];
                         Buffer.BlockCopy(e.Buffer, 0, chunk, 0, e.BytesRecorded);
-                        audioBuffer.Add(chunk);
+                        audioBuffer.Enqueue(chunk);
                     }
                 };
                 capture.RecordingStopped += (s, e) => recordTcs.TrySetResult(true);
