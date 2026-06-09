@@ -105,8 +105,10 @@ namespace YMM4McpPlugin
                     ("GET", "/api/debug/type") => GetTypeInfo(req),
                     ("GET", "/api/debug/timelinemethods") => DebugTimelineMethods(),
                     ("GET", "/api/debug/voicetypes") => DebugVoiceTypes(),
+                    ("GET", "/api/debug/group") => DebugGroup(),
                     ("POST", "/api/items/text") => await AddTextItem(req),
                     ("POST", "/api/items/voice") => await AddVoiceItem(req),
+                    ("POST", "/api/items/group-control") => await AddGroupControlItem(req),
                     ("POST", "/api/items/reorder") => await ReorderItems(req),
                     ("POST", "/api/items/arrange") => await ArrangeItems(req),
                     ("POST", "/api/items/move") => await MoveItem(req),
@@ -116,6 +118,7 @@ namespace YMM4McpPlugin
                     ("POST", "/api/items/effect/video") => await AddVideoEffect(req),
                     ("POST", "/api/items/effect") => await AddEffectToItem(req),
                     ("POST", "/api/items/prop") => await SetItemProp(req),
+                    ("POST", "/api/items/group/add") => await SetItemGroup(req),
                     ("GET", "/api/effects/list") => ListEffects(),
                     ("POST", "/api/items/delete") => await DeleteItems(req),
                     ("GET", "/api/debug/tachie") => DebugTachie(),
@@ -445,6 +448,117 @@ namespace YMM4McpPlugin
                 if (p == null) return (object)new { success = false, error = $"プロパティ'{pName}'なし" };
                 try { p.SetValue(targetItem, Convert.ChangeType(pVal, p.PropertyType)); return (object)new { success = true, prop = pName, value = pVal }; }
                 catch (Exception ex) { return (object)new { success = false, error = ex.Message }; }
+            });
+        }
+
+        private async Task<object> AddGroupControlItem(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            int frame = GetInt(b, "frame", 0);
+            int layer = GetInt(b, "layer", 0);
+            int length = GetInt(b, "length", 300);
+            int group = GetInt(b, "group", 0);
+            bool sameGroupOnly = GetBool(b, "sameGroupOnly", true);
+            int layerRange = GetInt(b, "layerRange", 0);
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
+                var mainModel = GetMainModel(vm);
+                var timelineObj = GetTimelineObject(vm, tvm);
+                var candidates = GetGroupDebugPayload(vm, tvm, mainModel, timelineObj);
+
+                var type = FindGroupControlType();
+                if (type == null)
+                    return (object)new { success = false, error = "グループ制御アイテム型が見つかりません", candidates };
+
+                object? item = null;
+                try
+                {
+                    item = CreateBestEffort(type, frame, layer, length, group, sameGroupOnly, layerRange);
+                    if (item == null) return (object)new { success = false, error = "グループ制御アイテムを生成できません", type = type.FullName, constructors = DescribeConstructors(type), candidates };
+
+                    var propResults = new List<object>
+                    {
+                        TrySetAnyProp(item, new[] { "Frame" }, frame),
+                        TrySetAnyProp(item, new[] { "Layer" }, layer),
+                        TrySetAnyProp(item, new[] { "Length", "Duration" }, length),
+                        TrySetAnyProp(item, GroupPropNames, group),
+                        TrySetAnyProp(item, new[] { "SameGroupOnly", "IsSameGroupOnly", "TargetSameGroupOnly", "同じグループのみ" }, sameGroupOnly),
+                        TrySetAnyProp(item, new[] { "LayerRange", "Range", "TargetLayerRange", "対象レイヤー数", "レイヤー範囲" }, layerRange)
+                    };
+
+                    var addResult = TryAddTimelineItem(vm, tvm, mainModel, timelineObj, item, frame, layer, length, group, sameGroupOnly, layerRange);
+                    if (!addResult.Success)
+                        return (object)new { success = false, error = addResult.Error, type = type.FullName, properties = propResults, add = addResult.Detail, candidates };
+
+                    return (object)new { success = true, type = type.FullName, frame, layer, length, group, sameGroupOnly, layerRange, add = addResult.Detail, properties = propResults };
+                }
+                catch (Exception ex)
+                {
+                    return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message, type = type.FullName, candidates };
+                }
+            });
+        }
+
+        private async Task<object> SetItemGroup(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            int group = GetInt(b, "group", 0);
+            var targets = new List<(int frame, int layer)>();
+            if (b.TryGetValue("targets", out var te) && te.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var t in te.EnumerateArray())
+                {
+                    if (t.ValueKind != JsonValueKind.Object) continue;
+                    int frame = t.TryGetProperty("frame", out var fe) && fe.ValueKind == JsonValueKind.Number ? fe.GetInt32() : -1;
+                    int layer = t.TryGetProperty("layer", out var le) && le.ValueKind == JsonValueKind.Number ? le.GetInt32() : -1;
+                    if (frame >= 0 && layer >= 0) targets.Add((frame, layer));
+                }
+            }
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
+                var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
+                if (targets.Count == 0) return (object)new { success = false, error = "targetsが空です" };
+
+                var items = rawItems.Cast<object>()
+                    .Select(iv => new { View = iv, Item = GetPropObj(iv, "Item") ?? iv })
+                    .ToList();
+                var results = new List<object>();
+                int succeeded = 0;
+
+                foreach (var target in targets)
+                {
+                    var found = items.FirstOrDefault(x => GetIntProp(x.Item, "Frame") == target.frame && GetIntProp(x.Item, "Layer") == target.layer);
+                    if (found == null)
+                    {
+                        results.Add(new { target.frame, target.layer, success = false, error = "アイテム未発見" });
+                        continue;
+                    }
+
+                    var before = GetAnyProp(found.Item, GroupPropNames);
+                    var set = TrySetAnyProp(found.Item, GroupPropNames, group);
+                    var after = GetAnyProp(found.Item, GroupPropNames);
+                    if (set.Success) succeeded++;
+                    results.Add(new
+                    {
+                        target.frame,
+                        target.layer,
+                        itemType = found.Item.GetType().FullName,
+                        success = set.Success,
+                        property = set.Property,
+                        before,
+                        after,
+                        error = set.Error,
+                        groupProperties = set.Success ? null : DescribeMatchingProperties(found.Item.GetType(), "Group")
+                    });
+                }
+
+                return (object)new { success = succeeded == targets.Count, targetCount = targets.Count, successCount = succeeded, failureCount = targets.Count - succeeded, results };
             });
         }
 
@@ -1077,6 +1191,19 @@ namespace YMM4McpPlugin
             });
         }
 
+        private object DebugGroup()
+        {
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                var mainModel = GetMainModel(vm);
+                var timelineObj = tvm != null ? GetTimelineObject(vm, tvm) : null;
+                return GetGroupDebugPayload(vm, tvm, mainModel, timelineObj);
+            });
+        }
+
         private object DebugItems()
         {
             return Application.Current.Dispatcher.Invoke(() =>
@@ -1324,6 +1451,11 @@ namespace YMM4McpPlugin
 
         // ── ヘルパー ──────────────────────────────────────────
 
+        private static readonly string[] GroupPropNames = new[]
+        {
+            "Group", "GroupId", "GroupID", "GroupIndex", "GroupNo", "GroupNumber", "GroupName", "グループ"
+        };
+
         private static object? GetMainViewModel()
         {
             return Application.Current.Windows.OfType<Window>()
@@ -1334,6 +1466,302 @@ namespace YMM4McpPlugin
         private static object? GetPropObj(object o, string n) { try { var t = o.GetType(); return (t.GetProperty(n) ?? t.GetProperty(n, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))?.GetValue(o) ?? (t.GetField(n) ?? t.GetField(n, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))?.GetValue(o); } catch { return null; } }
         private static string GetPropStr(object o, string n) { try { return (o.GetType().GetProperty(n) ?? o.GetType().GetProperty(n, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))?.GetValue(o) as string ?? ""; } catch { return ""; } }
         private static System.Collections.IEnumerable? GetPropEnum(object o, string n) { try { return o.GetType().GetProperty(n)?.GetValue(o) as System.Collections.IEnumerable; } catch { return null; } }
+
+        private static object? GetTimelineObject(object vm, object tvm)
+        {
+            return GetPropObj(tvm, "Timeline")
+                ?? GetPropObj(vm, "Timeline")
+                ?? tvm.GetType().GetField("timeline", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(tvm)
+                ?? tvm.GetType().GetField("_timeline", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(tvm);
+        }
+
+        private static IEnumerable<Type> GetLoadedTypes()
+        {
+            return AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(a => { try { return a.GetTypes(); } catch { return System.Array.Empty<Type>(); } });
+        }
+
+        private static bool IsGroupRelated(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            return text.Contains("Group", StringComparison.OrdinalIgnoreCase) || text.Contains("グループ") || text.Contains("群");
+        }
+
+        private static Type? FindGroupControlType()
+        {
+            return GetLoadedTypes()
+                .Where(t => !t.IsAbstract && !t.IsInterface && !t.IsEnum && IsGroupControlRelated(t.Name, t.FullName))
+                .OrderByDescending(t => t.Name.Contains("Item", StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault();
+        }
+
+        private static bool IsGroupControlRelated(string name, string? fullName)
+        {
+            return name.Contains("GroupControl", StringComparison.OrdinalIgnoreCase)
+                || (fullName?.Contains("GroupControl", StringComparison.OrdinalIgnoreCase) == true)
+                || name.Contains("グループ制御")
+                || (fullName?.Contains("グループ制御") == true);
+        }
+
+        private static object GetGroupDebugPayload(object? vm, object? tvm, object? mainModel, object? timelineObj)
+        {
+            var groupTypes = GetLoadedTypes()
+                .Where(t => IsGroupRelated(t.Name) || IsGroupRelated(t.FullName))
+                .Select(t => new
+                {
+                    t.FullName,
+                    t.Name,
+                    t.IsAbstract,
+                    constructors = DescribeConstructors(t),
+                    properties = t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                        .Where(p => IsGroupRelated(p.Name) || p.Name is "Frame" or "Layer" or "Length")
+                        .Select(p => new { p.Name, type = p.PropertyType.FullName, p.CanWrite })
+                        .ToArray(),
+                    methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+                        .Where(m => IsGroupRelated(m.Name))
+                        .Select(DescribeMethod)
+                        .Take(30)
+                        .ToArray()
+                })
+                .Take(80)
+                .ToArray();
+
+            return new
+            {
+                groupTypes,
+                activeTimelineViewModel = DescribeGroupMembers("ActiveTimelineViewModel", tvm),
+                mainModel = DescribeGroupMembers("MainModel", mainModel),
+                timeline = DescribeGroupMembers("timeline", timelineObj),
+                mainViewModel = DescribeGroupMembers("MainViewModel", vm),
+            };
+        }
+
+        private static object DescribeGroupMembers(string name, object? obj)
+        {
+            if (obj == null) return new { name, found = false };
+            var type = obj.GetType();
+            return new
+            {
+                name,
+                found = true,
+                type = type.FullName,
+                methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Where(m => IsGroupRelated(m.Name) || m.Name.Contains("Add") || m.Name.Contains("Item"))
+                    .Select(DescribeMethod)
+                    .Take(80)
+                    .ToArray(),
+                properties = type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Where(p => IsGroupRelated(p.Name) || IsGroupRelated(p.PropertyType.Name))
+                    .Select(p => new { p.Name, type = p.PropertyType.FullName, p.CanWrite })
+                    .Take(80)
+                    .ToArray(),
+                fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Where(f => IsGroupRelated(f.Name) || IsGroupRelated(f.FieldType.Name) || f.Name.Contains("timeline", StringComparison.OrdinalIgnoreCase))
+                    .Select(f => new { f.Name, type = f.FieldType.FullName })
+                    .Take(80)
+                    .ToArray()
+            };
+        }
+
+        private static string[] DescribeConstructors(Type type)
+        {
+            return type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Select(c => "(" + string.Join(", ", c.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}")) + ")")
+                .ToArray();
+        }
+
+        private static string DescribeMethod(MethodInfo m)
+        {
+            return $"{m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name))})";
+        }
+
+        private static object? CreateBestEffort(Type type, int frame, int layer, int length, int group, bool sameGroupOnly, int layerRange)
+        {
+            var constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .OrderBy(c => c.GetParameters().Length == 0 ? 0 : 1)
+                .ThenBy(c => c.GetParameters().Length);
+            foreach (var ctor in constructors)
+            {
+                try
+                {
+                    var args = ctor.GetParameters().Select(p => GuessValueForParameter(p, frame, layer, length, group, sameGroupOnly, layerRange)).ToArray();
+                    return ctor.Invoke(args);
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static object? GuessValueForParameter(ParameterInfo p, int frame, int layer, int length, int group, bool sameGroupOnly, int layerRange)
+        {
+            var n = p.Name ?? "";
+            var t = Nullable.GetUnderlyingType(p.ParameterType) ?? p.ParameterType;
+            if (t == typeof(int))
+            {
+                if (n.Contains("frame", StringComparison.OrdinalIgnoreCase)) return frame;
+                if (n.Contains("layer", StringComparison.OrdinalIgnoreCase) && n.Contains("range", StringComparison.OrdinalIgnoreCase)) return layerRange;
+                if (n.Contains("layer", StringComparison.OrdinalIgnoreCase)) return layer;
+                if (n.Contains("length", StringComparison.OrdinalIgnoreCase) || n.Contains("duration", StringComparison.OrdinalIgnoreCase)) return length;
+                if (n.Contains("group", StringComparison.OrdinalIgnoreCase)) return group;
+                return 0;
+            }
+            if (t == typeof(bool)) return n.Contains("same", StringComparison.OrdinalIgnoreCase) || sameGroupOnly;
+            if (t == typeof(string)) return "";
+            if (t.IsEnum) return Enum.GetValues(t).GetValue(0);
+            return p.HasDefaultValue ? p.DefaultValue : null;
+        }
+
+        private readonly record struct AddAttempt(bool Success, string? Error, object? Detail);
+
+        private static AddAttempt TryAddTimelineItem(object vm, object tvm, object? mainModel, object? timelineObj, object item, int frame, int layer, int length, int group, bool sameGroupOnly, int layerRange)
+        {
+            var targets = new[] { mainModel, timelineObj, tvm, vm }.Where(x => x != null).Cast<object>().ToArray();
+            var errors = new List<string>();
+
+            foreach (var target in targets)
+            {
+                foreach (var method in target.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Where(m => m.Name.Contains("Add") && (m.Name.Contains("Group") || m.Name.Contains("Item"))))
+                {
+                    if (TryInvokeAddMethod(target, method, item, frame, layer, length, group, sameGroupOnly, layerRange, out var error))
+                        return new AddAttempt(true, null, new { target = target.GetType().FullName, method = DescribeMethod(method) });
+                    if (!string.IsNullOrEmpty(error)) errors.Add($"{target.GetType().Name}.{method.Name}: {error}");
+                }
+            }
+
+            return new AddAttempt(false, "グループ制御アイテムを追加できるメソッドが見つかりません", new { errors = errors.Take(20).ToArray() });
+        }
+
+        private static bool TryInvokeAddMethod(object target, MethodInfo method, object item, int frame, int layer, int length, int group, bool sameGroupOnly, int layerRange, out string? error)
+        {
+            error = null;
+            try
+            {
+                var ps = method.GetParameters();
+                object?[] args;
+                if (ps.Length == 1 && ps[0].ParameterType.IsAssignableFrom(item.GetType()))
+                {
+                    args = new[] { item };
+                }
+                else if (ps.Length == 1 && typeof(System.Collections.IEnumerable).IsAssignableFrom(ps[0].ParameterType) && ps[0].ParameterType != typeof(string))
+                {
+                    var elemType = ps[0].ParameterType.IsArray
+                        ? ps[0].ParameterType.GetElementType()
+                        : item.GetType().GetInterfaces().FirstOrDefault(i => i.Name == "IItem")
+                          ?? ps[0].ParameterType.GetGenericArguments().FirstOrDefault()
+                          ?? item.GetType();
+                    var arr = Array.CreateInstance(elemType ?? item.GetType(), 1);
+                    arr.SetValue(item, 0);
+                    args = new object?[] { arr };
+                }
+                else
+                {
+                    args = ps.Select(p => GuessValueForParameter(p, frame, layer, length, group, sameGroupOnly, layerRange)).ToArray();
+                    for (int i = 0; i < ps.Length; i++)
+                    {
+                        if (args[i] == null && ps[i].ParameterType.IsAssignableFrom(item.GetType())) args[i] = item;
+                    }
+                }
+
+                var result = method.Invoke(target, args);
+                if (result is Task t) t.GetAwaiter().GetResult();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.InnerException?.Message ?? ex.Message;
+                return false;
+            }
+        }
+
+        private readonly record struct PropSetResult(bool Success, string? Property, string? Error);
+
+        private static PropSetResult TrySetAnyProp(object obj, IEnumerable<string> names, object value)
+        {
+            var props = obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where(p => p.GetIndexParameters().Length == 0)
+                .ToArray();
+            foreach (var name in names)
+            {
+                var p = props.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (p == null) continue;
+                if (TrySetPropertyValue(obj, p, value, out var error)) return new PropSetResult(true, p.Name, null);
+                return new PropSetResult(false, p.Name, error);
+            }
+            return new PropSetResult(false, null, "プロパティが見つかりません");
+        }
+
+        private static bool TrySetPropertyValue(object obj, PropertyInfo prop, object value, out string? error)
+        {
+            error = null;
+            try
+            {
+                var cur = prop.GetValue(obj);
+                var valueProp = cur?.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (valueProp != null && valueProp.CanWrite)
+                {
+                    valueProp.SetValue(cur, ConvertTo(value, valueProp.PropertyType));
+                    return true;
+                }
+                if (prop.CanWrite)
+                {
+                    prop.SetValue(obj, ConvertTo(value, prop.PropertyType));
+                    return true;
+                }
+                error = "書き込み不可";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                error = ex.InnerException?.Message ?? ex.Message;
+                return false;
+            }
+        }
+
+        private static object? ConvertTo(object value, Type type)
+        {
+            var t = Nullable.GetUnderlyingType(type) ?? type;
+            if (t.IsEnum)
+            {
+                if (value is string s) return Enum.Parse(t, s, true);
+                return Enum.ToObject(t, value);
+            }
+            return Convert.ChangeType(value, t);
+        }
+
+        private static object? GetAnyProp(object obj, IEnumerable<string> names)
+        {
+            var props = obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where(p => p.GetIndexParameters().Length == 0)
+                .ToArray();
+            foreach (var name in names)
+            {
+                var p = props.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (p == null) continue;
+                try
+                {
+                    var val = p.GetValue(obj);
+                    var valueProp = val?.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    return valueProp != null ? valueProp.GetValue(val) : val;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static int GetIntProp(object obj, string name)
+        {
+            try { return Convert.ToInt32(GetAnyProp(obj, new[] { name }) ?? -1); }
+            catch { return -1; }
+        }
+
+        private static object[] DescribeMatchingProperties(Type type, string pattern)
+        {
+            return type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where(p => p.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase) || p.Name.Contains("グループ"))
+                .Select(p => new { p.Name, type = p.PropertyType.FullName, p.CanWrite })
+                .Cast<object>()
+                .ToArray();
+        }
 
         private object GetProps(HttpListenerRequest req)
         {
@@ -1638,6 +2066,7 @@ namespace YMM4McpPlugin
 
         private static string GetStr(Dictionary<string, JsonElement> d, string k, string def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? def : def;
         private static int GetInt(Dictionary<string, JsonElement> d, string k, int def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : def;
+        private static bool GetBool(Dictionary<string, JsonElement> d, string k, bool def) => d.TryGetValue(k, out var v) ? v.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => def } : def;
         private void Log(string msg) => LogMessage?.Invoke($"[{DateTime.Now:HH:mm:ss}] {msg}");
 
         // ================================================================

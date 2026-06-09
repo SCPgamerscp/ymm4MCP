@@ -111,6 +111,9 @@ pip install -r requirements.txt
 | `POST /api/script/add` | 複数セリフを一括追加（文字数から長さ自動計算） |
 | `POST /api/item/edit` | アイテムのプロパティを変更 |
 | `POST /api/item/delete` | アイテムを削除（layer+frame指定） |
+| `POST /api/items/group-control` | YMM4 のグループ制御アイテムを frame/layer/length に追加。group / sameGroupOnly / layerRange は内部プロパティが見つかった場合に設定 |
+| `POST /api/items/group/add` | targets の frame/layer に一致する既存アイテムへ group 相当プロパティを付与・変更 |
+| `GET  /api/debug/group` | Group / GroupControl / グループ制御 関連の型、メソッド、プロパティ候補を列挙 |
 
 ### 映像確認系
 | エンドポイント | 説明 |
@@ -139,13 +142,18 @@ pip install -r requirements.txt
 | `get_info` | `project` | プロジェクト情報取得 |
 | `get_info` | `items` | タイムライン全アイテム取得 |
 | `get_info` | `effects_list` | エフェクト一覧 |
+| `get_info` | `group_debug` | `/api/debug/group` から group 関連の内部 API 候補を取得 |
 | `control` | `play` | 再生 |
 | `control` | `stop` | 停止 |
 | `control` | `save` | 保存 |
 | `add_item` | `voice` | セリフ1件追加 |
+| `add_item` | `group_control` | グループ制御アイテムを追加。frame, layer, length, group, sameGroupOnly, layerRange を指定 |
 | `add_script` | —— | 複数セリフ一括追加（文字数→フレーム自動計算） |
 | `edit_item` | `property` | フレーム位置・長さ等を変更 |
+| `edit_item` | `group` | targets の frame/layer に一致する既存アイテムの group 設定を変更 |
 | `edit_item` | `delete` | アイテム削除 |
+
+注意: グループ制御と group 設定は YMM4 内部 API に依存します。YMM4 のバージョンによって型名、メソッド名、プロパティ名が異なる可能性があるため、実機環境では `GET /api/debug/group` または `action="get_info", sub_action="group_debug"` で候補を確認してから動作確認してください。
 
 **add_scriptのパラメータ：**
 ```python
