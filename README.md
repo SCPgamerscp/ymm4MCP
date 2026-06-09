@@ -114,6 +114,14 @@ pip install -r requirements.txt
 | `POST /api/items/group-control` | YMM4 のグループ制御アイテムを frame/layer/length に追加。group / sameGroupOnly / layerRange は内部プロパティが見つかった場合に設定 |
 | `POST /api/items/group/add` | targets の frame/layer に一致する既存アイテムへ group 相当プロパティを付与・変更 |
 | `GET  /api/debug/group` | Group / GroupControl / グループ制御 関連の型、メソッド、プロパティ候補を列挙 |
+| `GET  /api/debug/item` | `frame` / `layer` / `type` に一致するアイテムのプロパティを浅く列挙。group-control beta 検証用 |
+
+Beta note: group-control motion fields are experimental. `/api/items/group-control`
+accepts optional `x`, `y`, `zoom`, `scale`, `rotation`, `opacity` arrays such as
+`"x":[0,-100]`, plus `repeat:true`, but YMM4 internal property names differ by
+version. The API applies any matching properties it can find and reports failures
+per field. Use `GET /api/debug/group` and `GET /api/debug/item?frame=...&layer=...`
+when verifying a YMM4 version.
 
 ### 映像確認系
 | エンドポイント | 説明 |
@@ -154,6 +162,10 @@ pip install -r requirements.txt
 | `edit_item` | `delete` | アイテム削除 |
 
 注意: グループ制御と group 設定は YMM4 内部 API に依存します。YMM4 のバージョンによって型名、メソッド名、プロパティ名が異なる可能性があるため、実機環境では `GET /api/debug/group` または `action="get_info", sub_action="group_debug"` で候補を確認してから動作確認してください。
+
+Beta note: MCP `add_item/group_control` also forwards optional `x`, `y`, `zoom`,
+`scale`, `rotation`, `opacity`, and `repeat` fields. Treat this as beta-level
+support until each target YMM4 version has been verified.
 
 **add_scriptのパラメータ：**
 ```python

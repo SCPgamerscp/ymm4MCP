@@ -1604,7 +1604,7 @@ namespace YMM4McpPlugin
         {
             foreach (var name in names)
             {
-                var p = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                var p = FindProperty(obj.GetType(), name);
                 if (p == null || p.GetIndexParameters().Length > 0) continue;
                 try
                 {
@@ -1614,7 +1614,7 @@ namespace YMM4McpPlugin
                         bool any = false;
                         if (from.HasValue) any |= TrySetNamedValue(target, new[] { "From", "Start", "StartValue", "Begin", "BeginValue" }, from.Value);
                         if (to.HasValue) any |= TrySetNamedValue(target, new[] { "To", "End", "EndValue", "Value" }, to.Value);
-                        if (any) return new { success = true, motion = label, property = p.Name, from, to, mode = "nested" };
+                        if (any) return new { success = true, motion = label, property = p.Name, from, to, mode = "nested", animationType = TryEnableAnimation(target) };
                     }
                     var value = to ?? from;
                     if (value.HasValue && p.CanWrite)
@@ -1648,7 +1648,7 @@ namespace YMM4McpPlugin
             property = null;
             foreach (var name in names)
             {
-                var p = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                var p = FindProperty(obj.GetType(), name);
                 if (p == null || p.GetIndexParameters().Length > 0) continue;
                 try
                 {
@@ -1661,6 +1661,45 @@ namespace YMM4McpPlugin
                 catch { }
             }
             return false;
+        }
+
+        private static object TryEnableAnimation(object animation)
+        {
+            var p = FindProperty(animation.GetType(), "AnimationType");
+            if (p == null || !p.CanWrite)
+                return new { success = false, error = "AnimationType property not found" };
+            var t = Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType;
+            if (!t.IsEnum)
+                return new { success = false, error = "AnimationType is not enum" };
+
+            var values = Enum.GetValues(t).Cast<object>().ToArray();
+            object? selected = values.FirstOrDefault(v =>
+            {
+                var s = v.ToString() ?? "";
+                return s.Contains("直線") || s.Contains("Linear", StringComparison.OrdinalIgnoreCase) || s.Contains("補間");
+            }) ?? values.FirstOrDefault(v => Convert.ToInt32(v) != 0);
+            if (selected == null)
+                return new { success = false, error = "AnimationType value not found" };
+
+            try
+            {
+                p.SetValue(animation, selected);
+                return new { success = true, value = selected.ToString() };
+            }
+            catch (Exception ex)
+            {
+                return new { success = false, error = ex.InnerException?.Message ?? ex.Message };
+            }
+        }
+
+        private static PropertyInfo? FindProperty(Type type, string name)
+        {
+            for (var t = type; t != null && t != typeof(object); t = t.BaseType)
+            {
+                var p = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                if (p != null) return p;
+            }
+            return null;
         }
 
         private static object GetGroupDebugPayload(object? vm, object? tvm, object? mainModel, object? timelineObj)
@@ -1884,6 +1923,11 @@ namespace YMM4McpPlugin
             error = null;
             try
             {
+                if (prop.CanWrite && prop.GetMethod == null)
+                {
+                    prop.SetValue(obj, ConvertTo(value, prop.PropertyType));
+                    return true;
+                }
                 var cur = prop.GetValue(obj);
                 var valueProp = cur?.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (valueProp != null && valueProp.CanWrite)

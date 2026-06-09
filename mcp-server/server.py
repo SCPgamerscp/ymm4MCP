@@ -90,6 +90,13 @@ TOOLS = [
                 "group": {"type": "integer"},
                 "sameGroupOnly": {"type": "boolean"},
                 "layerRange": {"type": "integer"},
+                "x": {"type": "array", "items": {"type": "number"}, "description": "group_control beta: [from, to] X motion"},
+                "y": {"type": "array", "items": {"type": "number"}, "description": "group_control beta: [from, to] Y motion"},
+                "zoom": {"type": "array", "items": {"type": "number"}, "description": "group_control beta: [from, to] zoom motion"},
+                "scale": {"type": "array", "items": {"type": "number"}, "description": "group_control beta: [from, to] scale motion"},
+                "rotation": {"type": "array", "items": {"type": "number"}, "description": "group_control beta: [from, to] rotation motion"},
+                "opacity": {"type": "array", "items": {"type": "number"}, "description": "group_control beta: [from, to] opacity motion"},
+                "repeat": {"type": "boolean", "description": "group_control beta: repeat/loop flag when YMM4 exposes a compatible property"},
                 "targets": {
                     "type": "array",
                     "items": {
@@ -196,6 +203,8 @@ async def dispatch(args: dict) -> Any:
             if "group" in args: payload["group"] = args["group"]
             if "sameGroupOnly" in args: payload["sameGroupOnly"] = args["sameGroupOnly"]
             if "layerRange" in args: payload["layerRange"] = args["layerRange"]
+            for key in ("x", "y", "zoom", "scale", "rotation", "opacity", "repeat"):
+                if key in args: payload[key] = args[key]
             
             match sub_action:
                 case "text": return await ymm4_post("/items/text", payload)
