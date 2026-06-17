@@ -121,6 +121,34 @@ pip install -r requirements.txt
 | `POST /api/playback/play` | 再生開始 |
 | `POST /api/playback/stop` | 再生停止 |
 
+### タイムライン高度操作・状態取得系 ★NEW
+| エンドポイント | 説明 |
+|---|---|
+| `GET  /api/selection` | 現在UIで選択中のアイテム（座標・レイヤー・フレーム・長さ）＋再生位置を取得 |
+| `POST /api/items/select` | frame+layer指定でアイテムを選択（clear=trueで全解除） |
+| `POST /api/timeline/resolve-overlaps` | レイヤー単位で重なりを解消（gapで最小すき間指定） |
+| `POST /api/timeline/shift` | fromFrame以降のアイテムをdeltaフレーム一括シフト |
+| `GET  /api/items/effects` | 指定アイテムの全エフェクトとパラメータ現在値を取得 |
+
+> **重なり防止の核心**: `POST /api/items/voice`（およびadd_script）は、`AddVoiceItemAsync`完了後に
+> タイムラインを走査して**実際の音声長(`length`/フレーム数)と`endFrame`を取得して返す**ようになりました。
+> add_scriptはこの実長を使って次のセリフ開始位置を決めるため、文字数推定のズレによる重なりが根絶されます。
+
+### 全機能アクセス用 汎用API ★NEW
+個別エンドポイントで未対応のYMM4内部機能に、リフレクション経由で直接アクセスできます。
+
+| エンドポイント | 説明 |
+|---|---|
+| `POST /api/command` | 任意のICommandを実行（`name`,`target`,`param`）。UndoCommand等をAPI経由でトリガー |
+| `GET  /api/commands` | Main/ActiveTimeline/Player/Projectで利用可能なコマンド一覧と実行可否 |
+| `POST /api/reflect/get` | 任意オブジェクトの任意プロパティ/フィールドを取得（`target`,`path`） |
+| `POST /api/reflect/set` | 任意プロパティ/フィールドに値を設定（ReactivePropertyの.Valueも対応） |
+| `POST /api/reflect/invoke` | 任意メソッドを引数付き呼び出し（戻り値がTaskなら自動await） |
+| `GET  /api/reflect/inspect` | オブジェクトの型・プロパティ・メソッド・コマンド一覧（機能の発見用） |
+
+**target**: `Main`(MainViewModel) / `ActiveTimeline` / `Player` / `Project`
+**path**: `Items[0].Item.Length` のようにドット・インデックスで深掘り可（ReactivePropertyは自動展開）
+
 ### 音声・映像同時取得系
 | エンドポイント | 説明 |
 |---|---|
@@ -142,10 +170,19 @@ pip install -r requirements.txt
 | `control` | `play` | 再生 |
 | `control` | `stop` | 停止 |
 | `control` | `save` | 保存 |
-| `add_item` | `voice` | セリフ1件追加 |
-| `add_script` | —— | 複数セリフ一括追加（文字数→フレーム自動計算） |
+| `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
+| `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | フレーム位置・長さ等を変更 |
 | `edit_item` | `delete` | アイテム削除 |
+| `edit_item` | `move` | ファイル名指定でアイテムを移動 |
+| `edit_item` | `select` | frame+layer指定でアイテムを選択（clearで全解除） |
+| `edit_item` | `resolve_overlaps` | 重なり解消（gap指定可） |
+| `edit_item` | `shift` | from_frame以降をdeltaフレーム一括シフト |
+| `get_info` | `selection` | 選択中アイテムの詳細取得 |
+| `get_info` | `commands` | 利用可能コマンド一覧 |
+| `get_info` | `effects` | 指定アイテムのエフェクト現在値取得 |
+| `control` | `undo` / `redo` | 元に戻す / やり直し |
+| `control` | `split` / `align` | 再生位置で分割 / 整列 |
 
 **add_scriptのパラメータ：**
 ```python
@@ -181,6 +218,47 @@ capture_interval_ms=2000   # 画像取得間隔（推奨: 2000ms以上）
 # → 音声: watch_result.wav に保存
 # → 画像: PNGとしてレスポンスに含まれる
 ```
+
+---
+
+### `ymm4_advanced`（全機能アクセス系）★NEW
+
+個別ツールで未対応のYMM4内部機能に、リフレクション経由で直接アクセスする上級ツール。
+**YMM4のあらゆる機能をMCPから操作可能**にします。
+
+| action | 説明 |
+|---|---|
+| `inspect` | 対象オブジェクトのプロパティ・メソッド・コマンド一覧を取得（まず構造を調べる） |
+| `get` | 任意プロパティ/フィールドの現在値を取得 |
+| `set` | 任意プロパティ/フィールドに値を設定 |
+| `invoke` | 任意メソッドを引数付きで呼び出す（Taskは自動await） |
+| `command` | 任意のICommandを実行（UIメニュー限定機能を直接トリガー） |
+| `list_commands` | 利用可能な全コマンドと実行可否を一覧 |
+
+**使用例：**
+```python
+# 1. まず構造を調べる
+action="inspect", target="ActiveTimeline"
+
+# 2. 値を取得（深掘りパス対応）
+action="get", target="ActiveTimeline", path="Items[0].Item.Length"
+
+# 3. 値を設定
+action="set", target="Project", path="Name", value="新プロジェクト名"
+
+# 4. メソッド呼び出し
+action="invoke", target="ActiveTimeline", method="SelectAll", args=[]
+
+# 5. コマンド実行（元に戻す）
+action="command", target="Main", name="UndoCommand"
+
+# 6. どんなコマンドが使えるか発見
+action="list_commands"
+```
+
+> **設計思想**: `SplitItemCommand`/`AlignItemsCommand` 等の正確なコマンド名はYMM4バージョンで
+> 異なる場合があります。`list_commands`/`inspect`で実際の名前を発見してから`command`で実行する
+> ワークフローにより、バージョン差異を吸収できます。
 
 ---
 
