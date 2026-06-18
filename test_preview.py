@@ -1,10 +1,9 @@
 import httpx
 import asyncio
 import base64
-import os
-import json
 
 BASE_URL = "http://localhost:8765/api"
+
 
 async def test_capture():
     print("Testing capture...")
@@ -19,6 +18,7 @@ async def test_capture():
             print("Saved capture_result.png")
         else:
             print(f"Capture failed: {data.get('error')}")
+
 
 async def test_seek_capture():
     print("Testing seek and capture at frame 100...")
@@ -39,19 +39,25 @@ async def test_seek_capture():
             print(f"Failed to parse JSON or processing: {e}")
             print(f"Response text: {resp.text}")
 
+
 async def test_position():
     print("Testing playback position...")
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"{BASE_URL}/preview/position")
         print(f"Position: {resp.json()}")
 
+
 async def test_record():
     print("Testing audio record (2 seconds)...")
     async with httpx.AsyncClient() as client:
-        resp = await client.post(f"{BASE_URL}/preview/record", json={"duration_ms": 2000})
+        resp = await client.post(
+            f"{BASE_URL}/preview/record", json={"duration_ms": 2000}
+        )
         data = resp.json()
         if data["success"]:
-            print(f"Record success: {data['bytes_recorded']} bytes, RMS: {data['rms_level']}")
+            print(
+                f"Record success: {data['bytes_recorded']} bytes, RMS: {data['rms_level']}"
+            )
             audio_data = base64.b64decode(data["audio"])
             with open("record_result.wav", "wb") as f:
                 f.write(audio_data)
@@ -59,11 +65,13 @@ async def test_record():
         else:
             print(f"Record failed: {data.get('error')}")
 
+
 async def main():
     await test_capture()
     await test_seek_capture()
     await test_position()
     await test_record()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
