@@ -1,0 +1,8 @@
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.userprefs

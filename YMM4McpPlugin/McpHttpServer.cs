@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -18,6 +19,78 @@ using System.Windows.Media.Imaging;
 
 namespace YMM4McpPlugin
 {
+    public static class PropertyCache
+
+    {
+
+        private static readonly ConcurrentDictionary<Type, PropertyInfo?> _frameCache = new();
+
+        private static readonly ConcurrentDictionary<Type, PropertyInfo?> _layerCache = new();
+
+        private static readonly ConcurrentDictionary<Type, PropertyInfo?> _lengthCache = new();
+
+
+
+        public static PropertyInfo? GetFrame(Type t)
+
+        {
+
+            if (!_frameCache.TryGetValue(t, out var p))
+
+            {
+
+                p = t.GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+
+                _frameCache[t] = p;
+
+            }
+
+            return p;
+
+        }
+
+
+
+        public static PropertyInfo? GetLayer(Type t)
+
+        {
+
+            if (!_layerCache.TryGetValue(t, out var p))
+
+            {
+
+                p = t.GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+
+                _layerCache[t] = p;
+
+            }
+
+            return p;
+
+        }
+
+
+
+        public static PropertyInfo? GetLength(Type t)
+
+        {
+
+            if (!_lengthCache.TryGetValue(t, out var p))
+
+            {
+
+                p = t.GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+
+                _lengthCache[t] = p;
+
+            }
+
+            return p;
+
+        }
+
+    }
+
     public class McpHttpServer
     {
         // GDI/Win32 API（DirectX/OpenGLレンダリングのキャプチャ用）
@@ -291,8 +364,8 @@ namespace YMM4McpPlugin
 
                     try
                     {
-                        var frameProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        var lengthProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        var frameProp = PropertyCache.GetFrame(item.GetType());
+                        var lengthProp = PropertyCache.GetLength(item.GetType());
                         int oldFrame = (int)(frameProp?.GetValue(item) ?? 0);
                         int oldLength = (int)(lengthProp?.GetValue(item) ?? 0);
                         frameProp?.SetValue(item, newFrame);
@@ -595,9 +668,9 @@ namespace YMM4McpPlugin
                         foreach (var iv in rawItems)
                         {
                             var item = GetPropObj(iv, "Item") ?? iv;
-                            var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            var lProp = item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            var lenProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                            var fProp = PropertyCache.GetFrame(item.GetType());
+                            var lProp = PropertyCache.GetLayer(item.GetType());
+                            var lenProp = PropertyCache.GetLength(item.GetType());
                             if (fProp == null || lProp == null) continue;
                             try
                             {
@@ -660,7 +733,7 @@ namespace YMM4McpPlugin
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
                 var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
                 object? targetItem = null;
-                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl) { targetItem = item; break; } } catch { } }
+                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(PropertyCache.GetFrame(item.GetType())?.GetValue(item) ?? -1); int l2 = (int)(PropertyCache.GetLayer(item.GetType())?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl) { targetItem = item; break; } } catch { } }
                 if (targetItem == null) return (object)new { success = false, error = $"アイテム未発見 f={tf} l={tl}" };
                 var eType = AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => { try { return a.GetTypes(); } catch { return System.Array.Empty<Type>(); } }).FirstOrDefault(t => !t.IsAbstract && !t.IsInterface && (t.FullName == eName || t.Name == eName || t.Name.Contains(eName)));
                 if (eType == null) return (object)new { success = false, error = $"エフェクト型未発見: {eName}" };
@@ -694,7 +767,7 @@ namespace YMM4McpPlugin
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
                 var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
                 object? targetItem = null;
-                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl) { targetItem = item; break; } } catch { } }
+                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(PropertyCache.GetFrame(item.GetType())?.GetValue(item) ?? -1); int l2 = (int)(PropertyCache.GetLayer(item.GetType())?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl) { targetItem = item; break; } } catch { } }
                 if (targetItem == null) return (object)new { success = false, error = $"アイテム未発見 f={tf} l={tl}" };
                 var p = targetItem.GetType().GetProperty(pName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (p == null) return (object)new { success = false, error = $"プロパティ'{pName}'なし" };
@@ -737,8 +810,8 @@ namespace YMM4McpPlugin
                     var item = GetPropObj(iv, "Item") ?? iv;
                     try
                     {
-                        int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1);
-                        int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1);
+                        int f2 = (int)(PropertyCache.GetFrame(item.GetType())?.GetValue(item) ?? -1);
+                        int l2 = (int)(PropertyCache.GetLayer(item.GetType())?.GetValue(item) ?? -1);
                         if (layers != null && layers.Contains(l2)) toRemove.Add(item);
                         else if (targetFrame >= 0 && targetLayer >= 0 && f2 == targetFrame && l2 == targetLayer) toRemove.Add(item);
                     }
@@ -794,8 +867,8 @@ namespace YMM4McpPlugin
                 foreach (var iv in rawItems)
                 {
                     var item = GetPropObj(iv, "Item") ?? iv;
-                    var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    var lProp = item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    var fProp = PropertyCache.GetFrame(item.GetType());
+                    var lProp = PropertyCache.GetLayer(item.GetType());
                     try
                     {
                         int f2 = (int)(fProp?.GetValue(item) ?? -1);
@@ -890,7 +963,7 @@ namespace YMM4McpPlugin
                 var mm = GetMainModel(vm);
                 var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
                 var toDelete = new System.Collections.Generic.List<object>();
-                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); bool match = (tf == -1 || f2 == tf) && (tl == -1 || l2 == tl) && (typePat == "" || item.GetType().Name.Contains(typePat)); if (match) toDelete.Add(iv); } catch { } }
+                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(PropertyCache.GetFrame(item.GetType())?.GetValue(item) ?? -1); int l2 = (int)(PropertyCache.GetLayer(item.GetType())?.GetValue(item) ?? -1); bool match = (tf == -1 || f2 == tf) && (tl == -1 || l2 == tl) && (typePat == "" || item.GetType().Name.Contains(typePat)); if (match) toDelete.Add(iv); } catch { } }
                 if (toDelete.Count == 0) return (object)new { success = false, error = "対象アイテムなし" };
                 int deleted = 0;
                 foreach (var iv in toDelete)
@@ -921,7 +994,7 @@ namespace YMM4McpPlugin
                 foreach (var iv in rawItems)
                 {
                     var item = GetPropObj(iv, "Item") ?? iv;
-                    try { int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl && item.GetType().Name.Contains("Face")) { targetItem = item; break; } } catch { }
+                    try { int f2 = (int)(PropertyCache.GetFrame(item.GetType())?.GetValue(item) ?? -1); int l2 = (int)(PropertyCache.GetLayer(item.GetType())?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl && item.GetType().Name.Contains("Face")) { targetItem = item; break; } } catch { }
                 }
                 if (targetItem == null) return (object)new { success = false, error = $"FaceItem未発見 f={tf} l={tl}" };
                 // FaceParameterを探して設定
@@ -1006,8 +1079,8 @@ namespace YMM4McpPlugin
                     var item = GetPropObj(iv, "Item") ?? iv;
                     try
                     {
-                        int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1);
-                        int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1);
+                        int f2 = (int)(PropertyCache.GetFrame(item.GetType())?.GetValue(item) ?? -1);
+                        int l2 = (int)(PropertyCache.GetLayer(item.GetType())?.GetValue(item) ?? -1);
                         if (f2 == frame && l2 == layer) { targetItem = item; break; }
                     }
                     catch { }
@@ -1130,8 +1203,8 @@ namespace YMM4McpPlugin
                     {
                         int length = 300;
                         try { length = (int)(GetPropObj(item, "Length") ?? 300); } catch { }
-                        item.GetType().GetProperty("Layer")?.SetValue(item, targetLayer);
-                        item.GetType().GetProperty("Frame")?.SetValue(item, currentFrame);
+                        PropertyCache.GetLayer(item.GetType())?.SetValue(item, targetLayer);
+                        PropertyCache.GetFrame(item.GetType())?.SetValue(item, currentFrame);
                         results.Add(new { name = key, success = true, layer = targetLayer, frame = currentFrame, length });
                         currentFrame += length;
                     }
