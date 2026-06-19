@@ -134,6 +134,19 @@ namespace YMM4McpPlugin
                     ("POST", "/api/playback/play") => await PlaybackControl("play"),
                     ("POST", "/api/playback/stop") => await PlaybackControl("stop"),
                     ("POST", "/api/project/save") => ExecCommand("SaveProjectCommand"),
+                    // ── 全機能アクセス用 汎用API ──────────────────────
+                    ("POST", "/api/command") => await ExecCommandApi(req),
+                    ("GET",  "/api/commands") => ListCommands(),
+                    ("POST", "/api/reflect/get") => await ReflectGet(req),
+                    ("POST", "/api/reflect/set") => await ReflectSet(req),
+                    ("POST", "/api/reflect/invoke") => await ReflectInvoke(req),
+                    ("GET",  "/api/reflect/inspect") => InspectObject(req),
+                    // ── タイムライン操作・情報取得 ─────────────────────
+                    ("GET",  "/api/selection") => GetSelection(),
+                    ("POST", "/api/items/select") => await SelectItems(req),
+                    ("POST", "/api/timeline/resolve-overlaps") => await ResolveOverlaps(req),
+                    ("POST", "/api/timeline/shift") => await ShiftItems(req),
+                    ("GET",  "/api/items/effects") => GetItemEffects(req),
                     _ => null
                 };
                 if (result == null) { await WriteJson(res, 404, new { error = "Not Found", path }); return; }
@@ -289,6 +302,248 @@ namespace YMM4McpPlugin
                     catch (Exception ex) { return (object)new { success = false, error = ex.Message }; }
                 }
                 return (object)new { success = false, error = $"ファイルが見つかりません: {filename}" };
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // ■ タイムライン高度操作・状態取得
+        // ════════════════════════════════════════════════════════════
+
+        /// <summary>各 TimelineItem の Item から frame/layer/length/type/text を抽出する共通ヘルパー。</summary>
+        private static (int frame, int layer, int length, string type, string? text, object item) ReadItemInfo(object iv)
+        {
+            var item = GetPropObj(iv, "Item") ?? iv;
+            int frame = 0, layer = 0, length = 0;
+            try { frame = Convert.ToInt32(GetPropObj(item, "Frame") ?? GetPropObj(iv, "Frame") ?? 0); } catch { }
+            try { layer = Convert.ToInt32(GetPropObj(item, "Layer") ?? GetPropObj(iv, "Layer") ?? 0); } catch { }
+            try { length = Convert.ToInt32(GetPropObj(item, "Length") ?? GetPropObj(iv, "Length") ?? 0); } catch { }
+            var text = (GetPropObj(item, "Serif") ?? GetPropObj(item, "Text") ?? GetPropObj(item, "FilePath") ?? GetPropObj(item, "Name"))?.ToString();
+            return (frame, layer, length, item.GetType().Name, text, item);
+        }
+
+        /// <summary>現在UI上で「選択中」のアイテムの詳細（座標・レイヤー・フレーム・長さ・型）を返す。</summary>
+        private object GetSelection()
+        {
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { success = false, error = "TimelineVM取得失敗" };
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
+
+                var selected = new List<object>();
+                foreach (var iv in rawItems)
+                {
+                    // TimelineItemViewModel の IsSelected を確認
+                    bool isSel = false;
+                    try
+                    {
+                        var sv = GetPropObj(iv, "IsSelected");
+                        if (sv is bool bsv) isSel = bsv;
+                        else if (sv != null) { var vp = sv.GetType().GetProperty("Value"); if (vp?.GetValue(sv) is bool b2) isSel = b2; }
+                    }
+                    catch { }
+                    if (!isSel) continue;
+                    var (frame, layer, length, type, text, _) = ReadItemInfo(iv);
+                    selected.Add(new { frame, layer, length, endFrame = frame + length, type, text });
+                }
+                // 現在の再生位置も付加
+                object? playhead = null;
+                try { playhead = GetPlaybackPosition(); } catch { }
+                return (object)new { success = true, selectedCount = selected.Count, items = selected, playback = playhead };
+            });
+        }
+
+        /// <summary>frame+layer 指定、または全クリアでアイテムを選択状態にする。</summary>
+        private async Task<object> SelectItems(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            int targetFrame = GetInt(b, "frame", -1);
+            int targetLayer = GetInt(b, "layer", -1);
+            bool clear = b.TryGetValue("clear", out var ce) && ce.ValueKind == JsonValueKind.True;
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { success = false, error = "TimelineVM取得失敗" };
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
+
+                int changed = 0;
+                foreach (var iv in rawItems)
+                {
+                    var (frame, layer, _, _, _, _) = ReadItemInfo(iv);
+                    bool shouldSelect;
+                    if (clear) shouldSelect = false;
+                    else shouldSelect = (targetFrame < 0 || frame == targetFrame) && (targetLayer < 0 || layer == targetLayer);
+                    // clear時は全解除、それ以外は一致するものを選択
+                    if (clear || shouldSelect)
+                    {
+                        var sProp = iv.GetType().GetProperty("IsSelected", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (sProp == null) continue;
+                        try
+                        {
+                            var sv = sProp.GetValue(iv);
+                            var vp = sv?.GetType().GetProperty("Value");
+                            if (vp != null && vp.CanWrite) { vp.SetValue(sv, shouldSelect); changed++; }
+                            else if (sProp.CanWrite) { sProp.SetValue(iv, shouldSelect); changed++; }
+                        }
+                        catch { }
+                    }
+                }
+                return (object)new { success = true, changed, clear };
+            });
+        }
+
+        /// <summary>
+        /// レイヤー単位でアイテムの重なりを解消する。
+        /// 各レイヤーをframe昇順に並べ、後続アイテムが前のアイテムのend(frame+length)に重なる場合、後ろへシフトする。
+        /// gap で各アイテム間に最小すき間（フレーム）を確保できる。
+        /// </summary>
+        private async Task<object> ResolveOverlaps(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            int gap = GetInt(b, "gap", 0);
+            int[]? onlyLayers = null;
+            if (b.TryGetValue("layers", out var le) && le.ValueKind == JsonValueKind.Array)
+                onlyLayers = le.EnumerateArray().Select(x => x.GetInt32()).ToArray();
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { success = false, error = "TimelineVM取得失敗" };
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
+
+                // レイヤーごとにアイテムを収集
+                var byLayer = new Dictionary<int, List<(int frame, int length, object item)>>();
+                foreach (var iv in rawItems)
+                {
+                    var (frame, layer, length, _, _, item) = ReadItemInfo(iv);
+                    if (onlyLayers != null && !onlyLayers.Contains(layer)) continue;
+                    if (!byLayer.ContainsKey(layer)) byLayer[layer] = new();
+                    byLayer[layer].Add((frame, length, item));
+                }
+
+                var moved = new List<object>();
+                foreach (var kv in byLayer)
+                {
+                    var sorted = kv.Value.OrderBy(x => x.frame).ToList();
+                    int cursor = int.MinValue;
+                    foreach (var (frame, length, item) in sorted)
+                    {
+                        int newFrame = frame;
+                        if (cursor != int.MinValue && frame < cursor)
+                            newFrame = cursor;
+                        if (newFrame != frame)
+                        {
+                            try
+                            {
+                                var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                                fProp?.SetValue(item, newFrame);
+                                moved.Add(new { layer = kv.Key, oldFrame = frame, newFrame, length });
+                            }
+                            catch (Exception ex) { moved.Add(new { layer = kv.Key, oldFrame = frame, error = ex.Message }); }
+                        }
+                        cursor = newFrame + length + gap;
+                    }
+                }
+                return (object)new { success = true, movedCount = moved.Count, moved };
+            });
+        }
+
+        /// <summary>
+        /// 指定フレーム以降のアイテムを一括で前後にシフトする（挿入・詰めに使う）。
+        /// fromFrame 以上のアイテムの Frame に delta を加算する。layers 指定でレイヤーを絞れる。
+        /// </summary>
+        private async Task<object> ShiftItems(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            int fromFrame = GetInt(b, "fromFrame", 0);
+            int delta = GetInt(b, "delta", 0);
+            int[]? onlyLayers = null;
+            if (b.TryGetValue("layers", out var le) && le.ValueKind == JsonValueKind.Array)
+                onlyLayers = le.EnumerateArray().Select(x => x.GetInt32()).ToArray();
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { success = false, error = "TimelineVM取得失敗" };
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
+
+                var moved = new List<object>();
+                foreach (var iv in rawItems)
+                {
+                    var (frame, layer, length, _, _, item) = ReadItemInfo(iv);
+                    if (frame < fromFrame) continue;
+                    if (onlyLayers != null && !onlyLayers.Contains(layer)) continue;
+                    int newFrame = Math.Max(0, frame + delta);
+                    try
+                    {
+                        var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        fProp?.SetValue(item, newFrame);
+                        moved.Add(new { layer, oldFrame = frame, newFrame });
+                    }
+                    catch (Exception ex) { moved.Add(new { layer, oldFrame = frame, error = ex.Message }); }
+                }
+                return (object)new { success = true, movedCount = moved.Count, fromFrame, delta, moved };
+            });
+        }
+
+        /// <summary>指定アイテム(frame+layer)に適用されている全エフェクトとそのパラメータ現在値を取得する。</summary>
+        private object GetItemEffects(HttpListenerRequest req)
+        {
+            int tf = -1, tl = -1;
+            int.TryParse(req.QueryString["frame"], out tf);
+            int.TryParse(req.QueryString["layer"], out tl);
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { success = false, error = "TimelineVM取得失敗" };
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
+
+                object? targetItem = null;
+                foreach (var iv in rawItems)
+                {
+                    var (frame, layer, _, _, _, item) = ReadItemInfo(iv);
+                    if ((tf < 0 || frame == tf) && (tl < 0 || layer == tl)) { targetItem = item; break; }
+                }
+                if (targetItem == null) return (object)new { success = false, error = $"アイテム未発見 frame={tf} layer={tl}" };
+
+                var result = new Dictionary<string, object>();
+                foreach (var collName in new[] { "VideoEffects", "AudioEffects", "Effects" })
+                {
+                    var coll = GetPropObj(targetItem, collName) as System.Collections.IEnumerable;
+                    if (coll == null) continue;
+                    var effects = new List<object>();
+                    foreach (var eff in coll)
+                    {
+                        if (eff == null) continue;
+                        var et = eff.GetType();
+                        var pvals = new List<object>();
+                        foreach (var p in et.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                        {
+                            if (p.GetIndexParameters().Length > 0) continue;
+                            object? v = null; try { v = p.GetValue(eff); } catch { }
+                            pvals.Add(new { name = p.Name, type = p.PropertyType.Name, value = ToJsonSafe(v) });
+                        }
+                        effects.Add(new { type = et.Name, fullType = et.FullName, properties = pvals });
+                    }
+                    if (effects.Count > 0) result[collName] = effects;
+                }
+                return (object)new { success = true, frame = tf, layer = tl, itemType = targetItem.GetType().Name, effects = result };
             });
         }
 
@@ -1030,7 +1285,39 @@ namespace YMM4McpPlugin
                     addMethod.Invoke(mainModel, new object?[] { frame, layer, targetChar, text, emptyDecos }) as System.Threading.Tasks.Task);
                 if (task != null) await task;
 
-                return new { success = true, character = ch, text, frame, layer };
+                // ── 追加された VoiceItem の実際の Length を取得する ──
+                // 音声合成完了を待ち、タイムラインを走査して frame+layer が一致するアイテムの長さを得る。
+                int actualLength = -1;
+                int? actualFrame = null;
+                for (int attempt = 0; attempt < 10 && actualLength < 0; attempt++)
+                {
+                    Start_SleepMs(100);
+                    actualLength = Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        var vm2 = GetMainViewModel();
+                        var tvm2 = vm2 != null ? GetPropObj(vm2, "ActiveTimelineViewModel") : null;
+                        var items2 = tvm2 != null ? GetPropEnum(tvm2, "Items") : null;
+                        if (items2 == null) return -1;
+                        foreach (var iv in items2)
+                        {
+                            var (f2, l2, len2, _, _, _) = ReadItemInfo(iv);
+                            if (f2 == frame && l2 == layer && len2 > 0) { actualFrame = f2; return len2; }
+                        }
+                        return -1;
+                    });
+                }
+
+                return new
+                {
+                    success = true,
+                    character = ch,
+                    text,
+                    frame,
+                    layer,
+                    // 実測した長さ（フレーム数）。取得できなければ -1。次のアイテム配置に利用する。
+                    length = actualLength,
+                    endFrame = actualLength > 0 ? frame + actualLength : (int?)null
+                };
             }
             catch (Exception ex)
             {
@@ -1046,6 +1333,363 @@ namespace YMM4McpPlugin
                 if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
                 return TryCmd(vm, name) ? (object)new { success = true } : new { success = false, error = $"'{name}' が見つかりません" };
             });
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // ■ 全機能アクセス用 汎用API
+        //   YMM4内部の任意のコマンド・プロパティ・メソッドにアクセスする。
+        //   個別ハンドラで未対応の機能でも、これらの汎用APIで操作できる。
+        // ════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 対象オブジェクト(Main/ActiveTimeline/Player/Project/Selection)を解決する共通ヘルパー。
+        /// path で "ActiveTimeline.Items[0].Item" のようなドット/インデックス指定の深掘りも可能。
+        /// </summary>
+        private static object? ResolveTarget(string target)
+        {
+            var vm = GetMainViewModel();
+            if (vm == null) return null;
+
+            // ベースオブジェクトの解決
+            string baseName = target;
+            string rest = "";
+            int dot = target.IndexOf('.');
+            if (dot >= 0) { baseName = target.Substring(0, dot); rest = target.Substring(dot + 1); }
+
+            object? obj = baseName switch
+            {
+                "Main" or "MainViewModel" or "" => vm,
+                "ActiveTimeline" or "ActiveTimelineViewModel" or "Timeline" => GetPropObj(vm, "ActiveTimelineViewModel"),
+                "Player" or "PlayerViewModel" => GetPreviewViewModel()
+                    ?? GetPropObj(vm, "PlayerViewModel") ?? GetPropObj(vm, "Player") ?? GetPropObj(vm, "player") ?? GetPropObj(vm, "_player"),
+                "Preview" or "PreviewViewModel" => GetPreviewViewModel(),
+                "Project" => GetPropObj(vm, "Project") ?? GetPropObj(vm, "project") ?? GetPropObj(vm, "_project"),
+                _ => GetPropObj(vm, baseName)
+            };
+
+            if (obj == null || string.IsNullOrEmpty(rest)) return obj;
+            return ResolvePath(obj, rest);
+        }
+
+        /// <summary>"A.B[2].C" のようなパスを辿って値を取得する（ReactivePropertyの.Valueも自動展開）。</summary>
+        private static object? ResolvePath(object? obj, string path)
+        {
+            if (obj == null || string.IsNullOrEmpty(path)) return obj;
+            foreach (var rawSeg in path.Split('.'))
+            {
+                if (obj == null) return null;
+                var seg = rawSeg;
+                int idx = -1;
+                int br = seg.IndexOf('[');
+                if (br >= 0 && seg.EndsWith("]"))
+                {
+                    int.TryParse(seg.Substring(br + 1, seg.Length - br - 2), out idx);
+                    seg = seg.Substring(0, br);
+                }
+                if (!string.IsNullOrEmpty(seg))
+                {
+                    obj = GetPropObj(obj, seg);
+                    // ReactiveProperty の .Value を自動展開
+                    if (obj != null)
+                    {
+                        var vProp = obj.GetType().GetProperty("Value");
+                        if (vProp != null && obj.GetType().Name.Contains("ReactiveProperty"))
+                            obj = vProp.GetValue(obj);
+                    }
+                }
+                if (idx >= 0 && obj is System.Collections.IEnumerable en)
+                {
+                    int i = 0; object? found = null;
+                    foreach (var e in en) { if (i == idx) { found = e; break; } i++; }
+                    obj = found;
+                }
+            }
+            return obj;
+        }
+
+        /// <summary>任意の ICommand をターゲット上で実行する。UI からしか押せないコマンドを直接トリガーできる。</summary>
+        private async Task<object> ExecCommandApi(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            string name = GetStr(b, "name", "");
+            string target = GetStr(b, "target", "Main");
+            // param は文字列/数値/null のいずれか
+            object? param = null;
+            if (b.TryGetValue("param", out var pe))
+            {
+                param = pe.ValueKind switch
+                {
+                    JsonValueKind.String => pe.GetString(),
+                    JsonValueKind.Number => pe.TryGetInt32(out var iv) ? iv : pe.GetDouble(),
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    _ => null
+                };
+            }
+            if (string.IsNullOrEmpty(name)) return new { success = false, error = "name パラメータが必要です" };
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var obj = ResolveTarget(target);
+                if (obj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+
+                // プロパティ・フィールド両方から ICommand を探す
+                var t = obj.GetType();
+                var cmdProp = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                object? cmdObj = null;
+                try { cmdObj = cmdProp?.GetValue(obj); } catch { }
+                if (cmdObj == null)
+                {
+                    var cmdField = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    try { cmdObj = cmdField?.GetValue(obj); } catch { }
+                }
+                if (cmdObj is not ICommand cmd)
+                    return (object)new { success = false, error = $"'{name}' は ICommand ではありません（target={target}）" };
+
+                try
+                {
+                    bool canExec = cmd.CanExecute(param);
+                    if (!canExec) return (object)new { success = false, error = $"'{name}'.CanExecute=false（現在実行不可）", canExecute = false };
+                    cmd.Execute(param);
+                    return (object)new { success = true, command = name, target };
+                }
+                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+            });
+        }
+
+        /// <summary>ターゲット上の ICommand 一覧を返す（どんなコマンドが使えるか発見するため）。</summary>
+        private object ListCommands(string target = "")
+        {
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var result = new Dictionary<string, object>();
+                foreach (var tgt in new[] { "Main", "ActiveTimeline", "Player", "Project" })
+                {
+                    var obj = ResolveTarget(tgt);
+                    if (obj == null) continue;
+                    var t = obj.GetType();
+                    var cmds = new List<(string name, bool can)>();
+                    foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                    {
+                        if (!typeof(ICommand).IsAssignableFrom(p.PropertyType)) continue;
+                        bool can = false;
+                        try { if (p.GetValue(obj) is ICommand c) can = c.CanExecute(null); } catch { }
+                        cmds.Add((p.Name, can));
+                    }
+                    result[tgt] = new
+                    {
+                        type = t.Name,
+                        commands = cmds.OrderBy(c => c.name).Select(c => new { name = c.name, canExecuteNow = c.can }).ToList()
+                    };
+                }
+                return (object)result;
+            });
+        }
+
+        /// <summary>任意のオブジェクトの任意プロパティ/フィールドを取得（ReactivePropertyは.Value展開）。</summary>
+        private async Task<object> ReflectGet(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            string target = GetStr(b, "target", "Main");
+            string path = GetStr(b, "path", "");
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var baseObj = ResolveTarget(target);
+                if (baseObj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+                var val = string.IsNullOrEmpty(path) ? baseObj : ResolvePath(baseObj, path);
+                return (object)new { success = true, target, path, type = val?.GetType().FullName, value = ToJsonSafe(val) };
+            });
+        }
+
+        /// <summary>任意のオブジェクトの任意プロパティ/フィールドを設定（ReactivePropertyの.Valueも対応）。</summary>
+        private async Task<object> ReflectSet(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            string target = GetStr(b, "target", "Main");
+            string path = GetStr(b, "path", "");
+            if (string.IsNullOrEmpty(path)) return new { success = false, error = "path パラメータが必要です" };
+            if (!b.TryGetValue("value", out var valElem)) return new { success = false, error = "value パラメータが必要です" };
+
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var baseObj = ResolveTarget(target);
+                if (baseObj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+
+                // 最後のセグメントの親オブジェクトを取得
+                object? parent = baseObj;
+                string lastSeg = path;
+                int lastDot = path.LastIndexOf('.');
+                if (lastDot >= 0)
+                {
+                    parent = ResolvePath(baseObj, path.Substring(0, lastDot));
+                    lastSeg = path.Substring(lastDot + 1);
+                }
+                if (parent == null) return (object)new { success = false, error = "親オブジェクト取得失敗" };
+
+                var prop = parent.GetType().GetProperty(lastSeg, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                var field = prop == null ? parent.GetType().GetField(lastSeg, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) : null;
+                if (prop == null && field == null) return (object)new { success = false, error = $"'{lastSeg}' が見つかりません" };
+
+                try
+                {
+                    var member = (object?)prop ?? field;
+                    var memberType = prop?.PropertyType ?? field!.FieldType;
+                    var current = prop != null ? prop.GetValue(parent) : field!.GetValue(parent);
+
+                    // ReactiveProperty<T> なら .Value に設定
+                    var vProp = current?.GetType().GetProperty("Value");
+                    if (current != null && current.GetType().Name.Contains("ReactiveProperty") && vProp != null && vProp.CanWrite)
+                    {
+                        var converted = ConvertJson(valElem, vProp.PropertyType);
+                        vProp.SetValue(current, converted);
+                        return (object)new { success = true, target, path, valueType = vProp.PropertyType.Name };
+                    }
+
+                    var conv = ConvertJson(valElem, memberType);
+                    if (prop != null && prop.CanWrite) prop.SetValue(parent, conv);
+                    else if (field != null) field.SetValue(parent, conv);
+                    else return (object)new { success = false, error = $"'{lastSeg}' は書き込み不可" };
+                    return (object)new { success = true, target, path, valueType = memberType.Name };
+                }
+                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+            });
+        }
+
+        /// <summary>任意のオブジェクトの任意メソッドを引数付きで呼び出す（戻り値がTaskならawait）。</summary>
+        private async Task<object> ReflectInvoke(HttpListenerRequest req)
+        {
+            var b = await ReadBody(req);
+            string target = GetStr(b, "target", "Main");
+            string method = GetStr(b, "method", "");
+            if (string.IsNullOrEmpty(method)) return new { success = false, error = "method パラメータが必要です" };
+
+            JsonElement[] argElems = System.Array.Empty<JsonElement>();
+            if (b.TryGetValue("args", out var ae) && ae.ValueKind == JsonValueKind.Array)
+                argElems = ae.EnumerateArray().ToArray();
+
+            // UIスレッドでメソッドを解決して呼び出し（Taskなら後でawait）
+            var (task, immediate, err) = Application.Current.Dispatcher.Invoke(() =>
+            {
+                var obj = ResolveTarget(target);
+                if (obj == null) return ((Task?)null, (object?)null, $"target '{target}' 取得失敗");
+
+                var candidates = obj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Where(m => m.Name == method && m.GetParameters().Length == argElems.Length).ToArray();
+                if (candidates.Length == 0)
+                {
+                    var avail = obj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                        .Where(m => m.Name == method).Select(m => m.Name + "(" + string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name)) + ")").ToArray();
+                    return ((Task?)null, (object?)null, $"メソッド '{method}'({argElems.Length}引数) 見つからず。候補: {string.Join("; ", avail)}");
+                }
+
+                var m2 = candidates[0];
+                var ps = m2.GetParameters();
+                var args = new object?[ps.Length];
+                for (int i = 0; i < ps.Length; i++) args[i] = ConvertJson(argElems[i], ps[i].ParameterType);
+
+                try
+                {
+                    var ret = m2.Invoke(obj, args);
+                    if (ret is Task t) return (t, (object?)null, "");
+                    return ((Task?)null, (object?)ToJsonSafe(ret), "");
+                }
+                catch (Exception ex) { return ((Task?)null, (object?)null, ex.InnerException?.Message ?? ex.Message); }
+            });
+
+            if (!string.IsNullOrEmpty(err)) return new { success = false, error = err };
+            if (task != null)
+            {
+                await task;
+                // Task<T> なら結果を取得
+                var resultProp = task.GetType().GetProperty("Result");
+                object? r = null;
+                try { if (resultProp != null && task.GetType().IsGenericType) r = ToJsonSafe(resultProp.GetValue(task)); } catch { }
+                return new { success = true, target, method, result = r };
+            }
+            return new { success = true, target, method, result = immediate };
+        }
+
+        /// <summary>オブジェクトの型・プロパティ・メソッド・コマンドを一覧する（機能の発見用）。</summary>
+        private object InspectObject(HttpListenerRequest req)
+        {
+            string target = req.QueryString["target"] ?? "Main";
+            string path = req.QueryString["path"] ?? "";
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var baseObj = ResolveTarget(target);
+                if (baseObj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+                var obj = string.IsNullOrEmpty(path) ? baseObj : ResolvePath(baseObj, path);
+                if (obj == null) return (object)new { success = false, error = $"path '{path}' 取得失敗" };
+
+                var t = obj.GetType();
+                var props = t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Where(p => p.GetIndexParameters().Length == 0)
+                    .OrderBy(p => p.Name)
+                    .Select(p =>
+                    {
+                        object? v = null; try { v = p.GetValue(obj); } catch { }
+                        return new
+                        {
+                            name = p.Name,
+                            type = p.PropertyType.Name,
+                            canWrite = p.CanWrite,
+                            isCommand = typeof(ICommand).IsAssignableFrom(p.PropertyType),
+                            value = ToJsonSafe(v)
+                        };
+                    }).ToList();
+                var methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Where(m => !m.IsSpecialName)
+                    .Select(m => new { name = m.Name, sig = "(" + string.Join(",", m.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}")) + ")", returns = m.ReturnType.Name })
+                    .GroupBy(m => m.name).Select(g => g.First()).OrderBy(m => m.name).ToList();
+                return (object)new { success = true, target, path, type = t.FullName, properties = props, methods };
+            });
+        }
+
+        /// <summary>値をJSONシリアライズ可能な形に安全に変換する（複雑なオブジェクトは型名と文字列表現）。</summary>
+        private static object? ToJsonSafe(object? val)
+        {
+            if (val == null) return null;
+            var t = val.GetType();
+            if (t.IsPrimitive || val is string || val is decimal) return val;
+            if (val is Enum) return val.ToString();
+            // ReactiveProperty の .Value を展開
+            if (t.Name.Contains("ReactiveProperty"))
+            {
+                var vProp = t.GetProperty("Value");
+                if (vProp != null) return ToJsonSafe(vProp.GetValue(val));
+            }
+            // コレクションは件数と最初の数件
+            if (val is System.Collections.IEnumerable en && val is not string)
+            {
+                var list = new List<object?>();
+                int n = 0;
+                foreach (var e in en) { if (n++ >= 20) break; list.Add(e?.GetType().Name == null ? null : (e.GetType().IsPrimitive || e is string ? e : e.ToString())); }
+                return new { count = n, items = list };
+            }
+            return val.ToString();
+        }
+
+        /// <summary>JsonElement を指定の .NET 型に変換する。</summary>
+        private static object? ConvertJson(JsonElement el, Type targetType)
+        {
+            var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
+            try
+            {
+                if (underlying.IsEnum)
+                {
+                    if (el.ValueKind == JsonValueKind.String) return Enum.Parse(underlying, el.GetString()!, true);
+                    if (el.ValueKind == JsonValueKind.Number) return Enum.ToObject(underlying, el.GetInt32());
+                }
+                return el.ValueKind switch
+                {
+                    JsonValueKind.String => underlying == typeof(string) ? el.GetString() : Convert.ChangeType(el.GetString(), underlying),
+                    JsonValueKind.Number => Convert.ChangeType(el.GetDouble(), underlying),
+                    JsonValueKind.True or JsonValueKind.False => el.GetBoolean(),
+                    JsonValueKind.Null => null,
+                    _ => el.ToString()
+                };
+            }
+            catch { return el.ToString(); }
         }
 
         // ── デバッグ ──────────────────────────────────────────

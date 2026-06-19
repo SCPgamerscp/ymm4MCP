@@ -63,7 +63,14 @@ async def ymm4_post(path: str, body: dict = {}) -> dict:
 TOOLS = [
     Tool(
         name="ymm4_interact",
-        description="YMM4を操作・情報取得するための単一ツール。action='get_info', 'control', 'add_item', 'edit_item', 'add_script'を指定して各種操作を行う。",
+        description=(
+            "YMM4を操作・情報取得するための単一ツール。"
+            "action='get_info'(status/project/items/effects_list/selection/commands/effects), "
+            "'control'(play/stop/save/undo/redo/split/align), "
+            "'add_item'(text/voice/tachie/face), "
+            "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift), "
+            "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避)を指定する。"
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -74,8 +81,18 @@ TOOLS = [
                 },
                 "sub_action": {
                     "type": "string",
-                    "description": "情報取得(status,project,items,effects_list)、操作(play,stop,save)、アイテム追加(text,voice,tachie,face)、編集(face_param,property,effect,delete,duration)のいずれか"
+                    "description": (
+                        "情報取得(status,project,items,effects_list,selection,commands,effects)、"
+                        "操作(play,stop,save,undo,redo,split,align)、"
+                        "アイテム追加(text,voice,tachie,face)、"
+                        "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift)のいずれか"
+                    )
                 },
+                "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
+                "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
+                "gap": {"type": "integer", "description": "resolve_overlaps: アイテム間の最小すき間フレーム"},
+                "filename": {"type": "string", "description": "move: 対象アイテムのファイル名(部分一致)"},
+                "clear": {"type": "boolean", "description": "select: trueで全選択解除"},
                 "text": {"type": "string", "description": "表示または発話テキスト"},
                 "character": {"type": "string", "description": "キャラクター名"},
                 "frame": {"type": "integer"},
@@ -116,6 +133,47 @@ TOOLS = [
             },
             "required": ["action"]
         }
+    ),
+    Tool(
+        name="ymm4_advanced",
+        description=(
+            "【YMM4全機能アクセス】個別ツールで未対応のYMM4内部機能に、リフレクション経由で直接アクセスする上級ツール。"
+            "YMM4内部の任意のViewModel/Model/Projectのプロパティ取得・設定、任意メソッド呼び出し、任意コマンド実行、"
+            "オブジェクト構造の調査(inspect)ができる。"
+            "\n\naction一覧:\n"
+            "- inspect: 対象オブジェクトのプロパティ・メソッド・コマンド一覧を取得（まず構造を調べる時に使う）\n"
+            "- get: 任意プロパティ/フィールドの現在値を取得（path指定で深掘り可: 'ActiveTimeline.Items[0].Item.Length'）\n"
+            "- set: 任意プロパティ/フィールドに値を設定\n"
+            "- invoke: 任意メソッドを引数付きで呼び出す（戻り値がTaskなら自動await）\n"
+            "- command: 任意のICommandを実行（UndoCommand等UIメニュー限定機能を直接トリガー）\n"
+            "- list_commands: 利用可能な全コマンドと現在実行可能かを一覧\n"
+            "\ntarget一覧: 'Main'(MainViewModel) / 'ActiveTimeline' / 'Player' / 'Project'。"
+            "pathで 'A.B[2].C' のようにドット・インデックスで深掘りできる。ReactivePropertyの.Valueは自動展開される。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["inspect", "get", "set", "invoke", "command", "list_commands"],
+                    "description": "inspect:構造調査 / get:値取得 / set:値設定 / invoke:メソッド呼出 / command:コマンド実行 / list_commands:コマンド一覧"
+                },
+                "target": {
+                    "type": "string",
+                    "description": "対象オブジェクト: Main / ActiveTimeline / Player / Project（省略時Main）。任意のプロパティ名も可。"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "get/set/inspectでの深掘りパス。例: 'Items[0].Item.Length' や 'Project.Name'（省略可）"
+                },
+                "name": {"type": "string", "description": "command/list_commandsでのコマンド名（例: UndoCommand）"},
+                "method": {"type": "string", "description": "invokeで呼び出すメソッド名"},
+                "args": {"type": "array", "description": "invokeのメソッド引数（順序通り）", "items": {}},
+                "param": {"description": "commandの実行パラメータ（省略可）"},
+                "value": {"description": "setで設定する値"}
+            },
+            "required": ["action"]
+        }
     )
 ]
 
@@ -134,6 +192,9 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
         if name == "ymm4_preview":
             result = await dispatch_preview(arguments)
             return result
+        if name == "ymm4_advanced":
+            result = await dispatch_advanced(arguments)
+            return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
         if name != "ymm4_interact":
             raise ValueError(f"Unknown tool: {name}")
         result = await dispatch(arguments)
@@ -162,6 +223,15 @@ async def dispatch(args: dict) -> Any:
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
                 case "effects_list": return await ymm4_get("/effects/list")
+                case "selection": return await ymm4_get("/selection")
+                case "commands": return await ymm4_get("/commands")
+                case "position": return await ymm4_get("/preview/position")
+                case "effects":
+                    q = []
+                    if "frame" in args: q.append(f"frame={args['frame']}")
+                    if "layer" in args: q.append(f"layer={args['layer']}")
+                    qs = ("?" + "&".join(q)) if q else ""
+                    return await ymm4_get(f"/items/effects{qs}")
                 case _: raise ValueError(f"Unknown sub_action for get_info: {sub_action}")
 
         case "control":
@@ -169,6 +239,11 @@ async def dispatch(args: dict) -> Any:
                 case "play": return await ymm4_post("/playback/play")
                 case "stop": return await ymm4_post("/playback/stop")
                 case "save": return await ymm4_post("/project/save")
+                # YMM4内部コマンドをトリガー（UIメニュー限定機能を直接実行）
+                case "undo": return await ymm4_post("/command", {"name": "UndoCommand"})
+                case "redo": return await ymm4_post("/command", {"name": "RedoCommand"})
+                case "split": return await ymm4_post("/command", {"name": "SplitItemCommand", "target": "ActiveTimeline"})
+                case "align": return await ymm4_post("/command", {"name": "AlignItemsCommand", "target": "ActiveTimeline"})
                 case _: raise ValueError(f"Unknown sub_action for control: {sub_action}")
 
         case "add_item":
@@ -214,6 +289,25 @@ async def dispatch(args: dict) -> Any:
                     return await ymm4_post("/items/delete", payload)
                 case "duration":
                     return await ymm4_post("/timeline/duration", {"frames": args.get("frames", 0)})
+                case "move":
+                    payload = {"filename": args.get("filename", ""), "frame": args.get("frame", 0)}
+                    if "length" in args: payload["length"] = args["length"]
+                    return await ymm4_post("/items/move", payload)
+                case "select":
+                    payload = {}
+                    if "frame" in args: payload["frame"] = args["frame"]
+                    if "layer" in args: payload["layer"] = args["layer"]
+                    if args.get("clear"): payload["clear"] = True
+                    return await ymm4_post("/items/select", payload)
+                case "resolve_overlaps":
+                    payload = {}
+                    if "gap" in args: payload["gap"] = args["gap"]
+                    if "layers" in args: payload["layers"] = args["layers"]
+                    return await ymm4_post("/timeline/resolve-overlaps", payload)
+                case "shift":
+                    payload = {"fromFrame": args.get("from_frame", 0), "delta": args.get("delta", 0)}
+                    if "layers" in args: payload["layers"] = args["layers"]
+                    return await ymm4_post("/timeline/shift", payload)
                 case _: raise ValueError(f"Unknown sub_action for edit_item: {sub_action}")
 
         case "add_script":
@@ -225,13 +319,21 @@ async def dispatch(args: dict) -> Any:
 
 async def add_script(args: dict) -> dict:
     """
-    台本をまとめてタイムラインに追加する
-    キャラクターのセリフ数に応じて自動でフレームを割り当てる
+    台本をまとめてタイムラインに追加する。
+
+    重なり防止の核心:
+      各セリフを1件追加するごとに、C#側が返す「実際の音声長(length/フレーム数)」を使って
+      次のセリフの開始フレームを動的に決定する。これにより文字数推定のズレによる
+      アイテムの重なりを根本的に防止する。
+      C#が実長を取得できなかった場合(length<=0)のみ、文字数からの推定値にフォールバックする。
+
+    gap(フレーム)を指定すると各セリフ間にすき間を空ける。
     """
     lines = args.get("lines", [])
     fps = args.get("fps", 30)
     chars_per_sec = args.get("chars_per_sec", 5)
     current_frame = args.get("start_frame", 0)
+    gap = args.get("gap", 0)
 
     # キャラクターごとのデフォルトレイヤー
     char_layer_map: dict[str, int] = {}
@@ -250,9 +352,9 @@ async def add_script(args: dict) -> dict:
                 next_layer += 1
             layer = char_layer_map[character]
 
-        # 尺を文字数から自動計算 (最低1秒)
+        # 文字数からの推定尺 (最低1秒) — 実長が取れない場合のフォールバック
         estimated_secs = max(1.0, len(text) / chars_per_sec)
-        length = int(estimated_secs * fps)
+        estimated_length = int(estimated_secs * fps)
 
         res = await ymm4_post("/items/voice", {
             "text":      text,
@@ -260,10 +362,73 @@ async def add_script(args: dict) -> dict:
             "frame":     current_frame,
             "layer":     layer,
         })
-        results.append({"character": character, "text": text[:20] + "...", "frame": current_frame, **res})
-        current_frame += length
 
-    return {"success": True, "added": len(results), "total_frames": current_frame, "details": results}
+        # C#が返した実音声長を優先。取れなければ推定値を使う。
+        actual_length = res.get("length", -1) if isinstance(res, dict) else -1
+        used_length = actual_length if isinstance(actual_length, int) and actual_length > 0 else estimated_length
+        length_source = "actual" if used_length == actual_length and actual_length > 0 else "estimated"
+
+        results.append({
+            "character": character,
+            "text": (text[:20] + "...") if len(text) > 20 else text,
+            "frame": current_frame,
+            "length": used_length,
+            "length_source": length_source,
+            **(res if isinstance(res, dict) else {"raw": res}),
+        })
+        current_frame += used_length + gap
+
+    return {
+        "success": True,
+        "added": len(results),
+        "total_frames": current_frame,   # 次シーンのstart_frameの目安
+        "details": results,
+    }
+
+
+async def dispatch_advanced(args: dict) -> Any:
+    """
+    全機能アクセス用の上級ツール。
+    YMM4内部の任意のオブジェクトに対してリフレクション経由でアクセスする。
+    """
+    action = args.get("action")
+    target = args.get("target", "Main")
+
+    match action:
+        case "inspect":
+            q = [f"target={target}"]
+            if args.get("path"):
+                q.append(f"path={args['path']}")
+            return await ymm4_get("/reflect/inspect?" + "&".join(q))
+
+        case "get":
+            return await ymm4_post("/reflect/get", {
+                "target": target,
+                "path": args.get("path", ""),
+            })
+
+        case "set":
+            payload = {"target": target, "path": args.get("path", ""), "value": args.get("value")}
+            return await ymm4_post("/reflect/set", payload)
+
+        case "invoke":
+            return await ymm4_post("/reflect/invoke", {
+                "target": target,
+                "method": args.get("method", ""),
+                "args": args.get("args", []),
+            })
+
+        case "command":
+            payload = {"name": args.get("name", ""), "target": target}
+            if "param" in args:
+                payload["param"] = args["param"]
+            return await ymm4_post("/command", payload)
+
+        case "list_commands":
+            return await ymm4_get("/commands")
+
+        case _:
+            raise ValueError(f"Unknown action for ymm4_advanced: {action}")
 
 
 def format_result(data: Any) -> str:
