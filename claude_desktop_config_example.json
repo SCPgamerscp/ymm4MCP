@@ -3,7 +3,9 @@
     "ymm4": {
       "command": "python",
       "args": ["C:/Users/ecrea/OneDrive/デスクトップ/ymm4プラグイン/mcp-server/server.py"],
-      "env": {}
+      "env": {
+        "GEMINI_API_KEY": "ここにGoogle AI StudioのAPIキーを入れる(動画解析機能を使う場合)"
+      }
     }
   }
 }

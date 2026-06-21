@@ -118,6 +118,8 @@ pip install -r requirements.txt
 | `GET  /api/preview/capture` | 現在フレームをPNG取得 |
 | `POST /api/preview/seek` | 指定フレームへシーク＋PNG取得 |
 | `GET  /api/preview/position` | 現在の再生位置取得 |
+| `POST /api/preview/export-clip` | ★区間を連番PNG＋音声WAVで書き出す（Gemini解析用） |
+| `GET  /api/project/fps` | ★プロジェクトのFPS・解像度を取得（時刻→フレーム変換用） |
 | `POST /api/playback/play` | 再生開始 |
 | `POST /api/playback/stop` | 再生停止 |
 
@@ -259,6 +261,72 @@ action="list_commands"
 > **設計思想**: `SplitItemCommand`/`AlignItemsCommand` 等の正確なコマンド名はYMM4バージョンで
 > 異なる場合があります。`list_commands`/`inspect`で実際の名前を発見してから`command`で実行する
 > ワークフローにより、バージョン差異を吸収できます。
+
+---
+
+### `ymm4_analyze_video`（Gemini動画解析系）★NEW
+
+動画を時系列で精密に解析し、「いつ・何が起きたか」（シーン変化／キャラ登場／効果音／テロップ／
+動き等）を**タイムスタンプ + YMM4フレーム番号付き**で検出します。
+プレビュー画像の単発取得では難しかった「イベント発生フレームの特定」と「音声・映像の同期」を、
+Gemini のネイティブ動画理解で実現します。
+
+#### 仕組み（役割分担）
+```
+[YMM4プレビュー or 元動画]
+   ↓ C#: 区間を連番PNG+音声WAVに書き出す / もしくは動画ファイルをそのまま渡す
+[Gemini API] 映像+音声を時系列解析 → タイムスタンプ付きイベントJSON
+   ↓ Python: time_sec を FPS でフレーム番号に変換
+[Claude] イベントに合わせてセリフ生成・add_scriptで配置
+```
+全フレームをClaudeに投げるのではなく、**重い解析はGeminiに集約**し、Claudeは構造化済みの
+イベントリストを受け取って意味づけ・台本化に専念します。
+
+#### 2つのモード
+| source | 解析対象 | 主なパラメータ |
+|---|---|---|
+| `preview` | YMM4プレビューの指定フレーム区間（配置済み素材） | `start_frame` / `end_frame` / `step_frames` / `record_audio` |
+| `file` | 取り込み前の元動画ファイル(mp4等) | `video_path` / `base_frame` / `fps` |
+
+#### 検出イベントのカスタマイズ
+`event_instruction` で検出したいイベントを自由に指定できます（**未指定なら全イベント検出**）。
+```python
+# 全部検出（デフォルト）
+action source="preview", start_frame=0, end_frame=600
+
+# 効果音とキャラ登場だけに絞る
+event_instruction="効果音が鳴った瞬間と、新しいキャラが画面に出た瞬間だけ検出して"
+
+# 元動画ファイルを解析し、フレーム300以降に対応づける
+source="file", video_path="C:/movie/boss.mp4", base_frame=300
+```
+
+#### 戻り値（例）
+```json
+{
+  "success": true,
+  "summary": "ボス戦の動画。中盤で敵が出現し、終盤に撃破される。",
+  "events": [
+    {
+      "time_sec": 12.3, "end_sec": 14.0,
+      "frame": 369, "end_frame": 420,          // ← FPSから自動変換されたYMM4フレーム
+      "type": "character", "label": "ボス出現",
+      "description": "画面中央に大型の敵が出現", "audio": "重低音のSE",
+      "importance": 5
+    }
+  ],
+  "fps_used": 30, "base_frame": 0
+}
+```
+`frame` がそのまま `add_script` の `start_frame` 等に使えるため、**映像イベントに同期したセリフ配置**が可能です。
+
+#### セットアップ
+1. `pip install google-genai`（`requirements.txt` に追加済み）
+2. [Google AI Studio](https://aistudio.google.com/) でAPIキーを発行
+3. `claude_desktop_config.json` の `env` に `GEMINI_API_KEY` を設定（`claude_desktop_config_example.json` 参照）
+
+> モデルは既定 `gemini-2.5-flash`。高精度が必要なら `model="gemini-2.5-pro"` を指定。
+> APIキー未設定/SDK未導入でもサーバーは起動し、解析ツール呼び出し時に案内メッセージを返します。
 
 ---
 
