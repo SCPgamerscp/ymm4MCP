@@ -20,6 +20,7 @@ YMM4(ゆっくりMovieMaker4)をMCP経由でClaudeから操作するサーバー
 
 import asyncio
 import json
+import os
 import sys
 from typing import Any
 import httpx
@@ -32,6 +33,14 @@ from mcp.types import (
     CallToolResult,
     ListToolsResult,
 )
+
+# Gemini 動画解析モジュール(同フォルダ)
+try:
+    import gemini_video
+except Exception:
+    # server.py が別CWDから起動された場合に備えてパスを通す
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import gemini_video  # type: ignore
 
 # YMM4プラグインのHTTP API URL
 YMM4_API_BASE = "http://localhost:8765/api"
@@ -174,6 +183,44 @@ TOOLS = [
             },
             "required": ["action"]
         }
+    ),
+    Tool(
+        name="ymm4_analyze_video",
+        description=(
+            "【Gemini動画解析】動画を時系列で精密に解析し、何が起きているか(シーン変化/キャラ登場/効果音/"
+            "テロップ/動き等)をタイムスタンプ付きで検出する。検出したいイベントは event_instruction で自由にカスタマイズ可能"
+            "(未指定なら全イベントを検出)。\n\n"
+            "2つのモードがある:\n"
+            "- source='preview': YMM4プレビューの指定フレーム区間を連番画像+音声として書き出し、Geminiで解析する。"
+            "タイムラインに配置済みの素材の内容を解析したい時に使う。start_frame/end_frame/step_frames を指定。\n"
+            "- source='file': 取り込み前の元動画ファイル(mp4等)をGeminiに直接渡して解析する。video_path を指定。\n\n"
+            "結果のイベントには time_sec(動画先頭からの秒) と、それを変換した frame(YMM4フレーム番号) が含まれるため、"
+            "そのまま add_script のセリフ配置やイベント同期に使える。\n"
+            "※ 環境変数 GEMINI_API_KEY が必要。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["preview", "file"],
+                    "description": "preview:YMM4プレビュー区間を解析 / file:元動画ファイルを解析"
+                },
+                "event_instruction": {
+                    "type": "string",
+                    "description": "検出したいイベントの指示(日本語可)。例:'効果音とキャラの登場だけ検出して'。省略時は全イベント検出。"
+                },
+                "video_path": {"type": "string", "description": "source='file'時: 解析する動画ファイルの絶対パス"},
+                "start_frame": {"type": "integer", "description": "source='preview'時: 解析開始フレーム(既定0)"},
+                "end_frame": {"type": "integer", "description": "source='preview'時: 解析終了フレーム"},
+                "step_frames": {"type": "integer", "description": "source='preview'時: 何フレームおきにキャプチャするか(既定3。細かくするほど精密だが遅い)"},
+                "record_audio": {"type": "boolean", "description": "source='preview'時: 区間音声も録音して音響イベント解析に使うか(既定true)"},
+                "base_frame": {"type": "integer", "description": "file解析時に time_sec→frame 変換の基準にする開始フレーム(既定0)。検出結果をこのフレーム以降に配置したい時に使う。"},
+                "fps": {"type": "integer", "description": "file解析時のFPS(省略時はYMM4から取得、取得不可なら30)"},
+                "model": {"type": "string", "description": "使用するGeminiモデル(既定 gemini-2.5-flash。高精度には gemini-2.5-pro)"}
+            },
+            "required": ["source"]
+        }
     )
 ]
 
@@ -194,6 +241,9 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
             return result
         if name == "ymm4_advanced":
             result = await dispatch_advanced(arguments)
+            return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
+        if name == "ymm4_analyze_video":
+            result = await analyze_video(arguments)
             return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
         if name != "ymm4_interact":
             raise ValueError(f"Unknown tool: {name}")
@@ -429,6 +479,140 @@ async def dispatch_advanced(args: dict) -> Any:
 
         case _:
             raise ValueError(f"Unknown action for ymm4_advanced: {action}")
+
+
+# ============================================================
+# Gemini 動画解析
+# ============================================================
+
+async def ymm4_post_long(path: str, body: dict, timeout: float = 600.0) -> dict:
+    """長時間処理(クリップ書き出し等)用のPOST。タイムアウトを長めに取る。"""
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
+        res.raise_for_status()
+        return res.json()
+
+
+def _sec_to_frame(time_sec: Any, fps: int, base_frame: int) -> Any:
+    """秒 → YMM4フレーム番号に変換する。"""
+    try:
+        return base_frame + int(round(float(time_sec) * fps))
+    except (TypeError, ValueError):
+        return None
+
+
+def _attach_frames(result: dict, fps: int, base_frame: int) -> dict:
+    """Geminiが返したeventsの time_sec/end_sec をフレーム番号に変換して付加する。"""
+    events = result.get("events")
+    if isinstance(events, list):
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            if "time_sec" in ev:
+                ev["frame"] = _sec_to_frame(ev.get("time_sec"), fps, base_frame)
+            if "end_sec" in ev and ev.get("end_sec") is not None:
+                ev["end_frame"] = _sec_to_frame(ev.get("end_sec"), fps, base_frame)
+    result["fps_used"] = fps
+    result["base_frame"] = base_frame
+    return result
+
+
+async def _get_fps_from_ymm4(default: int = 30) -> int:
+    """YMM4プラグインからFPSを取得する。取れなければdefault。"""
+    try:
+        data = await ymm4_get("/project/fps")
+        fps = data.get("fps")
+        if isinstance(fps, int) and fps > 0:
+            return fps
+    except Exception:
+        pass
+    return default
+
+
+async def analyze_video(args: dict) -> dict:
+    """
+    動画をGeminiで解析し、タイムスタンプ+YMM4フレーム番号付きのイベントを返す。
+
+    source='preview': C#の /api/preview/export-clip で区間を連番PNG+WAVに書き出し、
+                      gemini_video.analyze_frames_dir で解析する。
+    source='file'   : gemini_video.analyze_video_file で元動画を直接解析する。
+    """
+    # Geminiが使えるか先にチェック
+    ok, msg = gemini_video.is_available()
+    if not ok:
+        return {
+            "success": False,
+            "error": msg,
+            "hint": "Google AI Studioでキーを発行し、Claude Desktop設定のenvで GEMINI_API_KEY を渡すか、"
+                    "サーバー起動環境で環境変数を設定してください。`pip install google-genai` も必要です。",
+        }
+
+    source = args.get("source")
+    instruction = args.get("event_instruction")  # Noneなら全イベント
+    model = args.get("model") or gemini_video.DEFAULT_MODEL
+
+    if source == "file":
+        video_path = args.get("video_path", "")
+        if not video_path:
+            return {"success": False, "error": "source='file'にはvideo_pathが必要です"}
+        base_frame = int(args.get("base_frame", 0))
+        fps = args.get("fps")
+        if not isinstance(fps, int) or fps <= 0:
+            fps = await _get_fps_from_ymm4(30)
+
+        # Gemini呼び出しはブロッキングなので別スレッドで
+        result = await asyncio.to_thread(
+            gemini_video.analyze_video_file, video_path, instruction, model
+        )
+        if result.get("success"):
+            result = _attach_frames(result, fps, base_frame)
+        return result
+
+    elif source == "preview":
+        start_frame = int(args.get("start_frame", 0))
+        end_frame = int(args.get("end_frame", start_frame + 300))
+        step_frames = int(args.get("step_frames", 3))
+        record_audio = args.get("record_audio", True)
+
+        # 1) C#でプレビュー区間を連番PNG+WAVに書き出す(長時間)
+        try:
+            clip = await ymm4_post_long("/preview/export-clip", {
+                "startFrame": start_frame,
+                "endFrame": end_frame,
+                "stepFrames": step_frames,
+                "recordAudio": record_audio,
+            })
+        except httpx.ConnectError:
+            raise
+        except Exception as e:
+            return {"success": False, "error": f"クリップ書き出し失敗: {e}"}
+
+        if not clip.get("success"):
+            return {"success": False, "error": clip.get("error", "export-clip失敗"), "detail": clip}
+
+        frames_dir = clip.get("outputDir")
+        frames_meta = clip.get("frames", [])
+        audio_path = clip.get("audioFile")
+        fps = clip.get("fps", 30)
+
+        # 2) GeminiでフレームフォルダをN解析(ブロッキング→別スレッド)
+        result = await asyncio.to_thread(
+            gemini_video.analyze_frames_dir,
+            frames_dir, frames_meta, audio_path, instruction, model,
+        )
+        if result.get("success"):
+            # time_sec はクリップ先頭=0 基準なので、base_frame=start_frame で実フレームに戻す
+            result = _attach_frames(result, fps, start_frame)
+            result["clip"] = {
+                "outputDir": frames_dir,
+                "frameCount": clip.get("frameCount"),
+                "audioFile": audio_path,
+                "hasAudio": clip.get("hasAudio"),
+            }
+        return result
+
+    else:
+        return {"success": False, "error": f"不明なsource: {source} (preview または file)"}
 
 
 def format_result(data: Any) -> str:
