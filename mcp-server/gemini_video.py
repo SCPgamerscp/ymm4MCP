@@ -35,7 +35,17 @@ except Exception as e:  # pragma: no cover
     _GENAI_IMPORT_ERROR = str(e)
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+def _get_default_model() -> str:
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        if os.path.isfile(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f).get("default_model", "gemini-2.5-flash")
+    except Exception:
+        pass
+    return "gemini-2.5-flash"
+
+DEFAULT_MODEL = _get_default_model()
 
 # デフォルトの検出指示(イベント全種類)。AIがカスタムプロンプトを渡せば上書きされる。
 DEFAULT_EVENT_INSTRUCTION = (
