@@ -325,7 +325,14 @@ source="file", video_path="C:/movie/boss.mp4", base_frame=300
 2. [Google AI Studio](https://aistudio.google.com/) でAPIキーを発行
 3. `claude_desktop_config.json` の `env` に `GEMINI_API_KEY` を設定（`claude_desktop_config_example.json` 参照）
 
-> モデルは既定 `gemini-2.5-flash`。高精度が必要なら `model="gemini-2.5-pro"` を指定。
+> **モデルの指定について**:
+> 既定のモデルは `gemini-2.5-flash` です。高精度が必要な場合は、ツール呼び出し時に `model="gemini-2.5-pro"` を指定できます。
+> また、`mcp-server` フォルダ内に `config.json` を作成し、以下のように記述することでデフォルトのモデルを変更することも可能です。
+> ```json
+> {
+>   "default_model": "gemini-2.5-pro"
+> }
+> ```
 > APIキー未設定/SDK未導入でもサーバーは起動し、解析ツール呼び出し時に案内メッセージを返します。
 
 ---
