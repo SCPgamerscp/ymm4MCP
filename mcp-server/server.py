@@ -51,19 +51,53 @@ app = Server("ymm4-mcp")
 # HTTPクライアント
 # ============================================================
 
+HTTP_TIMEOUT_SECONDS = 10.0
+PREVIEW_OVERHEAD_SECONDS = 15.0
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """同じイベントループ上でHTTP接続プールを再利用する。"""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS)
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """MCPサーバー終了時（別イベントループで再利用する前も）に接続を解放する。"""
+    global _http_client
+    client, _http_client = _http_client, None
+    if client is not None:
+        await client.aclose()
+
+
 async def ymm4_get(path: str) -> dict:
     """YMM4 API GETリクエスト"""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.get(f"{YMM4_API_BASE}{path}")
-        res.raise_for_status()
-        return res.json()
+    res = await _get_http_client().get(f"{YMM4_API_BASE}{path}")
+    res.raise_for_status()
+    return res.json()
 
-async def ymm4_post(path: str, body: dict = {}) -> dict:
-    """YMM4 API POSTリクエスト"""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
-        res.raise_for_status()
-        return res.json()
+
+async def ymm4_post(
+    path: str, body: dict | None = None, *, timeout: float = HTTP_TIMEOUT_SECONDS
+) -> dict:
+    """応答待ち時間だけをリクエスト単位で変更し、接続待ちは10秒に保つ。"""
+    res = await _get_http_client().post(
+        f"{YMM4_API_BASE}{path}",
+        json=body if body is not None else {},
+        timeout=httpx.Timeout(HTTP_TIMEOUT_SECONDS, read=timeout),
+    )
+    res.raise_for_status()
+    return res.json()
+
+
+def _preview_timeout(duration_ms: int, minimum_ms: int) -> float:
+    """C#側の録音時間クランプに合わせ、シーク・画像処理用の余裕を加える。"""
+    if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):
+        raise ValueError("duration_ms は整数で指定してください")
+    effective_ms = max(minimum_ms, min(duration_ms, 30000))
+    return effective_ms / 1000.0 + PREVIEW_OVERHEAD_SECONDS
 
 # ============================================================
 # ツール定義
@@ -249,10 +283,17 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
             raise ValueError(f"Unknown tool: {name}")
         result = await dispatch(arguments)
         return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
-    except httpx.ConnectError:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         msg = (
             "❌ YMM4プラグインサーバーに接続できません。\n"
             "YMM4を起動し、ツールメニューから「MCP連携サーバー」を開いて「▶ 起動」ボタンを押してください。"
+        )
+        return CallToolResult(content=[TextContent(type="text", text=msg)], isError=True)
+    except httpx.TimeoutException:
+        msg = (
+            "YMM4プラグインサーバーの処理待ちがタイムアウトしました。\n"
+            "録音時間を短くするか、YMM4の処理完了を待って状態を確認してください。"
+            "タイムアウト後も処理が続いている可能性があるため、自動再試行はしていません。"
         )
         return CallToolResult(content=[TextContent(type="text", text=msg)], isError=True)
     except Exception as e:
@@ -487,10 +528,7 @@ async def dispatch_advanced(args: dict) -> Any:
 
 async def ymm4_post_long(path: str, body: dict, timeout: float = 600.0) -> dict:
     """長時間処理(クリップ書き出し等)用のPOST。タイムアウトを長めに取る。"""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
-        res.raise_for_status()
-        return res.json()
+    return await ymm4_post(path, body, timeout=timeout)
 
 
 def _sec_to_frame(time_sec: Any, fps: int, base_frame: int) -> Any:
@@ -582,7 +620,7 @@ async def analyze_video(args: dict) -> dict:
                 "stepFrames": step_frames,
                 "recordAudio": record_audio,
             })
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.TimeoutException):
             raise
         except Exception as e:
             return {"success": False, "error": f"クリップ書き出し失敗: {e}"}
@@ -633,7 +671,9 @@ async def dispatch_preview(args: dict) -> CallToolResult:
 
         case "seek_capture":
             frame = args.get("frame", 0)
-            data = await ymm4_post("/preview/seek", {"frame": frame})
+            data = await ymm4_post(
+                "/preview/seek", {"frame": frame}, timeout=PREVIEW_OVERHEAD_SECONDS
+            )
             return _preview_result(data)
 
         case "position":
@@ -642,7 +682,10 @@ async def dispatch_preview(args: dict) -> CallToolResult:
 
         case "record":
             duration_ms = args.get("duration_ms", 3000)
-            data = await ymm4_post("/preview/record", {"duration_ms": duration_ms})
+            data = await ymm4_post(
+                "/preview/record", {"duration_ms": duration_ms},
+                timeout=_preview_timeout(duration_ms, 500),
+            )
             audio_b64 = data.pop("audio", None)
             summary = format_result(data)
             contents: list = [TextContent(type="text", text=summary)]
@@ -676,7 +719,7 @@ async def dispatch_preview(args: dict) -> CallToolResult:
                 "frame": frame,
                 "duration_ms": duration_ms,
                 "capture_interval_ms": interval_ms
-            })
+            }, timeout=_preview_timeout(duration_ms, 1000))
             if not data.get("success"):
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"❌ {data.get('error', 'unknown error')}")],
@@ -743,8 +786,11 @@ def _preview_result(data: dict) -> CallToolResult:
 # ============================================================
 
 async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
+    finally:
+        await close_http_client()
 
 
 if __name__ == "__main__":
