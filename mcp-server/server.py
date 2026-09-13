@@ -25,6 +25,7 @@ import sys
 from typing import Any
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
+from editing import integer, plan_script, validate_timeline
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -113,7 +114,7 @@ TOOLS = [
     Tool(
         name="ymm4_interact",
         description=(
-            "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
+            "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
             "action='get_info'(status/project/items/effects_list/selection/commands/effects), "
             "'control'(play/stop/save/undo/redo/split/align), "
             "'add_item'(text/voice/tachie/face), "
@@ -125,7 +126,7 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script"],
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -137,6 +138,10 @@ TOOLS = [
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift)のいずれか"
                     )
                 },
+                "dry_run": {"type": "boolean", "description": "add_script: 検証と推定配置のみ。編集・音声合成なし"},
+                "expected": {"type": "array", "items": {"type": "object"}, "description": "validate: 配置後に期待するframe/layer/length/type/text"},
+                "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
+                "path": {"type": "string", "description": "video/audio/image: 素材ファイルの絶対パス"},
                 "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
                 "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
                 "gap": {"type": "integer", "description": "resolve_overlaps: アイテム間の最小すき間フレーム"},
@@ -326,6 +331,7 @@ async def dispatch(args: dict) -> Any:
         case "get_info":
             match sub_action:
                 case "status": return await ymm4_get("/status")
+                case "characters": return await ymm4_get("/characters")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
                 case "effects_list": return await ymm4_get("/effects/list")
@@ -416,6 +422,12 @@ async def dispatch(args: dict) -> Any:
                     return await ymm4_post("/timeline/shift", payload)
                 case _: raise ValueError(f"Unknown sub_action for edit_item: {sub_action}")
 
+        case "validate":
+            snapshot = await ymm4_get("/items")
+            if snapshot.get("success") is False or "error" in snapshot:
+                return snapshot
+            return validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"))
+
         case "add_script":
             return await add_script(args)
 
@@ -424,72 +436,47 @@ async def dispatch(args: dict) -> Any:
 
 
 async def add_script(args: dict) -> dict:
-    """
-    台本をまとめてタイムラインに追加する。
-
-    重なり防止の核心:
-      各セリフを1件追加するごとに、C#側が返す「実際の音声長(length/フレーム数)」を使って
-      次のセリフの開始フレームを動的に決定する。これにより文字数推定のズレによる
-      アイテムの重なりを根本的に防止する。
-      C#が実長を取得できなかった場合(length<=0)のみ、文字数からの推定値にフォールバックする。
-
-    gap(フレーム)を指定すると各セリフ間にすき間を空ける。
-    """
-    lines = args.get("lines", [])
-    fps = args.get("fps", 30)
-    chars_per_sec = args.get("chars_per_sec", 5)
-    current_frame = args.get("start_frame", 0)
+    """Validate the entire script first; never continue after failed/unknown synthesis."""
+    plan = plan_script(args)
+    if args.get("dry_run", False):
+        return plan
+    characters = await ymm4_get("/characters")
+    if characters.get("success") is False or "error" in characters:
+        return characters
+    names = [c["name"] for c in characters.get("characters", [])]
+    for line in plan["details"]:
+        if names.count(line["character"]) != 1:
+            raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {line['character']}")
+    frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
-
-    # キャラクターごとのデフォルトレイヤー
-    char_layer_map: dict[str, int] = {}
-    next_layer = 0
-
     results = []
-    for line in lines:
-        character = line.get("character", "ゆっくり霊夢")
-        text = line.get("text", "")
-        layer = line.get("layer")
-
-        # レイヤーが未指定ならキャラクターに自動割り当て
-        if layer is None:
-            if character not in char_layer_map:
-                char_layer_map[character] = next_layer
-                next_layer += 1
-            layer = char_layer_map[character]
-
-        # 文字数からの推定尺 (最低1秒) — 実長が取れない場合のフォールバック
-        estimated_secs = max(1.0, len(text) / chars_per_sec)
-        estimated_length = int(estimated_secs * fps)
-
-        res = await ymm4_post("/items/voice", {
-            "text":      text,
-            "character": character,
-            "frame":     current_frame,
-            "layer":     layer,
-        })
-
-        # C#が返した実音声長を優先。取れなければ推定値を使う。
-        actual_length = res.get("length", -1) if isinstance(res, dict) else -1
-        used_length = actual_length if isinstance(actual_length, int) and actual_length > 0 else estimated_length
-        length_source = "actual" if used_length == actual_length and actual_length > 0 else "estimated"
-
-        results.append({
-            "character": character,
-            "text": (text[:20] + "...") if len(text) > 20 else text,
-            "frame": current_frame,
-            "length": used_length,
-            "length_source": length_source,
-            **(res if isinstance(res, dict) else {"raw": res}),
-        })
-        current_frame += used_length + gap
-
-    return {
-        "success": True,
-        "added": len(results),
-        "total_frames": current_frame,   # 次シーンのstart_frameの目安
-        "details": results,
-    }
+    for index, line in enumerate(plan["details"]):
+        try:
+            res = await ymm4_post("/items/voice", {
+                "text": line["text"], "character": line["character"],
+                "frame": frame, "layer": line["layer"],
+            }, timeout=120.0)
+        except httpx.HTTPError:
+            return {"success": False, "error_code": "SCRIPT_REQUEST_FAILED",
+                    "error": "通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
+                    "outcome_unknown": True, "added": len(results), "failed_line": index,
+                    "details": results, "rolled_back": False}
+        if not isinstance(res, dict) or res.get("success") is not True:
+            return {"success": False, "error_code": "SCRIPT_PARTIAL_FAILURE",
+                    "error": "セリフ追加に失敗したため停止しました", "failed_line": index,
+                    "added": len(results), "details": results, "failure": res, "rolled_back": False}
+        results.append(res)
+        try:
+            length = integer(res.get("length"), "actual voice length", 1)
+            actual_frame = integer(res.get("frame"), "actual frame")
+            frame = integer(actual_frame + length + gap, "next frame")
+        except ValueError:
+            return {"success": False, "error_code": "VOICE_LENGTH_UNKNOWN",
+                    "error": "追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
+                    "added": len(results), "failed_line": index, "details": results,
+                    "rolled_back": False}
+    return {"success": True, "added": len(results), "total_frames": frame,
+            "details": results, "dry_run": False}
 
 
 async def dispatch_advanced(args: dict) -> Any:
