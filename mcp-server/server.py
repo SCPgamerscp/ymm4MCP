@@ -115,9 +115,9 @@ TOOLS = [
         name="ymm4_interact",
         description=(
             "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/effects_list/selection/commands/effects), "
+            "action='get_info'(status/project/items/characters/effects_list/selection/commands/effects), "
             "'control'(play/stop/save/undo/redo/split/align), "
-            "'add_item'(text/voice/tachie/face), "
+            "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避)を指定する。"
         ),
@@ -132,9 +132,9 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,effects_list,selection,commands,effects)、"
+                        "情報取得(status,project,items,characters,effects_list,selection,commands,effects)、"
                         "操作(play,stop,save,undo,redo,split,align)、"
-                        "アイテム追加(text,voice,tachie,face)、"
+                        "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift)のいずれか"
                     )
                 },
@@ -307,6 +307,12 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
         return CallToolResult(content=[TextContent(type="text", text=msg)], isError=True)
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
+        try:
+            error = exc.response.json()
+        except ValueError:
+            error = {}
+        if isinstance(error, dict) and error.get("error_code"):
+            return CallToolResult(content=[TextContent(type="text", text=format_result(error))], isError=True)
         message = {401: "認証失敗。プラグインを再起動し接続情報を確認してください", 403: "APIの利用が許可されていません"}.get(status, f"YMM4 HTTPエラー: {status}")
         return CallToolResult(content=[TextContent(type="text", text=message)], isError=True)
     except httpx.TimeoutException:
@@ -365,10 +371,19 @@ async def dispatch(args: dict) -> Any:
             if "frame" in args: payload["frame"] = args["frame"]
             if "layer" in args: payload["layer"] = args["layer"]
             if "length" in args: payload["length"] = args["length"]
-            
+            if "path" in args: payload["path"] = args["path"]
+            for key in ("frame", "layer"):
+                if key in payload: integer(payload[key], key)
+            if "length" in payload: integer(payload["length"], "length", 1)
+            if sub_action == "image" and "length" not in payload:
+                raise ValueError("image requires length")
+            if sub_action in ("video", "audio", "image") and not isinstance(payload.get("path"), str):
+                raise ValueError("media requires path")
+
             match sub_action:
+                case "video" | "audio" | "image": return await ymm4_post(f"/items/{sub_action}", payload, timeout=120.0)
                 case "text": return await ymm4_post("/items/text", payload)
-                case "voice": return await ymm4_post("/items/voice", payload)
+                case "voice": return await ymm4_post("/items/voice", payload, timeout=120.0)
                 case "tachie": return await ymm4_post("/items/tachie", payload)
                 case "face": return await ymm4_post("/items/face", payload)
                 case _: raise ValueError(f"Unknown sub_action for add_item: {sub_action}")
@@ -688,6 +703,8 @@ async def dispatch_preview(args: dict) -> CallToolResult:
                 "/preview/record", {"duration_ms": duration_ms},
                 timeout=_preview_timeout(duration_ms, 500),
             )
+            if data.get("success") is False or "error" in data:
+                return CallToolResult(content=[TextContent(type="text", text=format_result(data))], isError=True)
             audio_b64 = data.pop("audio", None)
             summary = format_result(data)
             contents: list = [TextContent(type="text", text=summary)]
@@ -761,6 +778,9 @@ async def dispatch_preview(args: dict) -> CallToolResult:
                         mimeType="image/png"
                     ))
             return CallToolResult(content=contents)
+
+        case _:
+            raise ValueError(f"Unknown preview action: {action}")
 
 
 def _preview_result(data: dict) -> CallToolResult:
