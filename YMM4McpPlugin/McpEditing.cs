@@ -45,8 +45,9 @@ namespace YMM4McpPlugin
             {
                 name = GetPropObj(c, "Name")?.ToString(),
                 layer = GetPropObj(c, "Layer"),
-                voice_plugin = GetPropObj(c, "Voice")?.GetType().FullName,
-                style = GetPropObj(GetPropObj(c, "Voice") ?? c, "Style")?.ToString(),
+                voice_plugin = GetPropObj(GetPropObj(c, "Voice") ?? c, "API")?.ToString(),
+                voice_name = GetPropObj(GetPropObj(c, "Voice") ?? c, "Display")?.ToString(),
+                style = GetPropObj(GetPropObj(c, "VoiceParameter") ?? c, "Style")?.ToString(),
                 note = "Voice settings are inherited from the registered character. Missing metadata is null."
             }).ToArray() };
         });

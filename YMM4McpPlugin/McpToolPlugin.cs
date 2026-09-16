@@ -7,6 +7,7 @@ namespace YMM4McpPlugin
     /// YMM4 MCP連携ツールプラグイン
     /// AIがMCP経由でYMM4を操作できるようにするHTTPサーバーを起動します
     /// </summary>
+    [PluginDetails(AuthorName = "SCPgamerscp")]
     public class McpToolPlugin : IToolPlugin
     {
         public McpToolPlugin() => McpViewModel.InitializePlugin();
