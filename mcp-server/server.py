@@ -275,7 +275,7 @@ TOOLS = [
 
 @app.list_tools()
 async def list_tools() -> ListToolsResult:
-    return ListToolsResult(tools=TOOLS)
+    return ListToolsResult(tools=[tool for tool in TOOLS if tool.name != "ymm4_advanced" or advanced_enabled()])
 
 
 @app.call_tool()
