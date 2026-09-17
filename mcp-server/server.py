@@ -115,7 +115,7 @@ TOOLS = [
         name="ymm4_interact",
         description=(
             "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/characters/effects_list/selection/commands/effects), "
+            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects), "
             "'control'(play/stop/save/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift), "
@@ -132,7 +132,7 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,characters,effects_list,selection,commands,effects)、"
+                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects)、"
                         "操作(play,stop,save,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift)のいずれか"
@@ -338,6 +338,7 @@ async def dispatch(args: dict) -> Any:
             match sub_action:
                 case "status": return await ymm4_get("/status")
                 case "characters": return await ymm4_get("/characters")
+                case "capabilities": return await ymm4_get("/capabilities")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
                 case "effects_list": return await ymm4_get("/effects/list")

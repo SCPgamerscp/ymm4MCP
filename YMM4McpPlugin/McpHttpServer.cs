@@ -153,6 +153,7 @@ namespace YMM4McpPlugin
                 object? result = (req.HttpMethod, path) switch
                 {
                     ("GET", "/api/status") => GetStatus(),
+                    ("GET", "/api/capabilities") => GetCapabilities(),
                     ("GET", "/api/project") => GetProjectInfo(),
                     ("GET", "/api/items") => GetTimelineItems(),
                     ("GET", "/api/characters") => GetCharacters(),
@@ -253,13 +254,37 @@ namespace YMM4McpPlugin
 
         private object GetStatus() => new { status = "running", version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3), port = Port, timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") };
 
+        private object GetCapabilities() => new
+        {
+            success = true,
+            api_schema_version = 1,
+            plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
+            authentication = "X-Ymm4-Token",
+            advanced_enabled = _allowAdvanced,
+            item_types = new[] { "video", "audio", "image", "text", "voice", "tachie", "face" },
+            features = new
+            {
+                media_import = true, character_discovery = true, script_dry_run_in_mcp = true,
+                timeline_validation_in_mcp = true, final_video_export = false,
+                persistent_item_ids = false, resumable_jobs = false, transactions = false,
+                keyframe_api = false, automatic_visual_audio_qa = false
+            },
+            limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
+                "Serialized API writes do not lock manual UI edits.", "A timed-out operation may continue; inspect state before retrying.",
+                "Voice parameters are inherited from registered characters; per-request engine/style overrides are not implemented." }
+        };
+
         private object GetProjectInfo()
         {
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
                 if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
-                return new { vmType = vm.GetType().FullName, projectName = GetPropStr(vm, "ProjectName"), projectPath = GetPropStr(vm, "ProjectPath") };
+                var model = GetMainModel(vm);
+                string? path = GetPropValue(vm, "ProjectFilePath")?.ToString() ?? (model == null ? null : GetPropObj(model, "ProjectFilePath")?.ToString());
+                return new { success = true, vmType = vm.GetType().FullName,
+                    projectName = string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path),
+                    projectPath = path, isSaved = GetPropValue(vm, "IsSaved") };
             });
         }
 
