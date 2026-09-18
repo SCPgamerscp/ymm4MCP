@@ -135,7 +135,7 @@ namespace YMM4McpPlugin
                     await WriteJson(res, 403, new { success = false, error_code = "BROWSER_REQUEST_DENIED", error = "Browser requests are not supported" });
                     return;
                 }
-                if (!_allowAdvanced && (path.StartsWith("/api/reflect/", StringComparison.Ordinal) || path.StartsWith("/api/debug/", StringComparison.Ordinal) || path == "/api/commands"))
+                if (!_allowAdvanced && (path.StartsWith("/api/reflect/", StringComparison.Ordinal) || path.StartsWith("/api/debug/", StringComparison.Ordinal)))
                 {
                     await WriteJson(res, 403, new { success = false, error_code = "ADVANCED_DISABLED", error = "Enable advanced APIs in the plugin settings and restart" });
                     return;
@@ -2148,6 +2148,18 @@ namespace YMM4McpPlugin
             if (result is Task t) await t;
         }
 
+        /// <summary>
+        /// UIスレッド上で非同期メソッドを実行し、内側の Task 完了まで待つ。
+        /// Dispatcher.InvokeAsync(async () => ...) だと Operation 完了と内側 Task 完了が別になる。
+        /// </summary>
+        private static Task RunOnUi(Func<Task> action)
+        {
+            var dispatcher = Application.Current?.Dispatcher
+                ?? throw new InvalidOperationException("WPF Dispatcher unavailable");
+            if (dispatcher.CheckAccess()) return action();
+            return dispatcher.InvokeAsync(action).Task.Unwrap();
+        }
+
         private static async Task<Dictionary<string, JsonElement>> ReadBody(HttpListenerRequest req)
         {
             const int maxBytes = 1024 * 1024;
@@ -2167,7 +2179,12 @@ namespace YMM4McpPlugin
         }
 
         private static string GetStr(Dictionary<string, JsonElement> d, string k, string def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? def : def;
-        private static int GetInt(Dictionary<string, JsonElement> d, string k, int def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : def;
+        private static int GetInt(Dictionary<string, JsonElement> d, string k, int def)
+        {
+            if (!d.TryGetValue(k, out var v) || v.ValueKind != JsonValueKind.Number) return def;
+            if (v.TryGetInt32(out int result)) return result;
+            throw new ArgumentException(k + " must be a 32-bit integer");
+        }
         private void Log(string msg) => LogMessage?.Invoke($"[{DateTime.Now:HH:mm:ss}] {msg}");
 
         // ================================================================
@@ -2282,7 +2299,7 @@ namespace YMM4McpPlugin
                 await Task.Delay(300);
                 return CapturePreview(req);
             }
-            catch (Exception ex) { return (object)new { success = false, error = ex.Message }; }
+            catch (Exception ex) { if (ex is ArgumentException or JsonException) throw; return (object)new { success = false, error = ex.Message }; }
         }
 
         /// <summary>現在の再生位置(フレーム)を返す</summary>
@@ -2333,39 +2350,46 @@ namespace YMM4McpPlugin
                 };
                 capture.RecordingStopped += (s, e) => tcs.TrySetResult(true);
 
-                capture.StartRecording();
-                await Task.Delay(durationMs);
-                capture.StopRecording();
-
-                // RecordingStopped が発火するまで最大2秒待つ
-                await Task.WhenAny(tcs.Task, Task.Delay(2000));
-
-                // バッファを結合
-                var allBytes = buffer.SelectMany(b => b).ToArray();
-
-                // WAVヘッダーを付けてbase64化
-                using var ms = new MemoryStream();
-                using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
-                    writer.Write(allBytes, 0, allBytes.Length);
-
-                var b64 = Convert.ToBase64String(ms.ToArray());
-                double rms = CalcRms(allBytes, waveFormat.BitsPerSample);
-
-                return (object)new
+                try
                 {
-                    success = true,
-                    duration_ms = durationMs,
-                    sample_rate = waveFormat.SampleRate,
-                    channels = waveFormat.Channels,
-                    bits = waveFormat.BitsPerSample,
-                    bytes_recorded = allBytes.Length,
-                    rms_level = Math.Round(rms, 4),
-                    has_audio = rms > 0.0005,
-                    format = "wav",
-                    audio = b64
-                };
+                    capture.StartRecording();
+                    await Task.Delay(durationMs);
+                    try { capture.StopRecording(); } catch { }
+
+                    // RecordingStopped が発火するまで最大2秒待つ
+                    await Task.WhenAny(tcs.Task, Task.Delay(2000));
+
+                    // バッファを結合
+                    var allBytes = buffer.SelectMany(b => b).ToArray();
+
+                    // WAVヘッダーを付けてbase64化
+                    using var ms = new MemoryStream();
+                    using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
+                        writer.Write(allBytes, 0, allBytes.Length);
+
+                    var b64 = Convert.ToBase64String(ms.ToArray());
+                    double rms = CalcRms(allBytes, waveFormat.BitsPerSample);
+
+                    return (object)new
+                    {
+                        success = true,
+                        duration_ms = durationMs,
+                        sample_rate = waveFormat.SampleRate,
+                        channels = waveFormat.Channels,
+                        bits = waveFormat.BitsPerSample,
+                        bytes_recorded = allBytes.Length,
+                        rms_level = Math.Round(rms, 4),
+                        has_audio = rms > 0.0005,
+                        format = "wav",
+                        audio = b64
+                    };
+                }
+                finally
+                {
+                    try { capture.StopRecording(); } catch { }
+                }
             }
-            catch (Exception ex) { return (object)new { success = false, error = ex.Message }; }
+            catch (Exception ex) { if (ex is ArgumentException or JsonException) throw; return (object)new { success = false, error = ex.Message }; }
         }
 
         /// <summary>
@@ -2384,15 +2408,14 @@ namespace YMM4McpPlugin
                 // 1) シーク
                 var preview = Application.Current.Dispatcher.Invoke(() => GetPreviewViewModel());
                 if (preview == null) return new { success = false, error = "PreviewViewModel not found" };
-                await Application.Current.Dispatcher.InvokeAsync(async () =>
-                    await InvokeAsyncMethod(preview, "SeekAsync", startFrame));
+                await RunOnUi(() => InvokeAsyncMethod(preview, "SeekAsync", startFrame));
                 await Task.Delay(300);
 
                 // 2) 録音・再生・キャプチャを並行実行
                 using var capture = new NAudio.Wave.WasapiLoopbackCapture();
                 var waveFormat = capture.WaveFormat;
                 var audioBuffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
-                var recordTcs = new TaskCompletionSource<bool>();
+                var recordTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 capture.DataAvailable += (s, e) =>
                 {
                     if (e.BytesRecorded > 0)
@@ -2403,58 +2426,66 @@ namespace YMM4McpPlugin
                     }
                 };
                 capture.RecordingStopped += (s, e) => recordTcs.TrySetResult(true);
-                capture.StartRecording();
-
-                await InvokeAsyncMethod(preview, "TogglePlayAsync");
-
-                var frames = new System.Collections.Generic.List<object>();
-                var captureTask = Task.Run(async () =>
+                try
                 {
-                    int elapsed = 0;
-                    while (elapsed < durationMs)
+                    capture.StartRecording();
+
+                    await InvokeAsyncMethod(preview, "TogglePlayAsync");
+
+                    var frames = new System.Collections.Generic.List<object>();
+                    var captureTask = Task.Run(async () =>
                     {
-                        await Task.Delay(intervalMs);
-                        elapsed += intervalMs;
-                        string? b64 = null; int fw = 0, fh = 0;
-                        Application.Current.Dispatcher.Invoke(() =>
-                        { var r = CaptureCurrentFrame(); b64 = r.b64; fw = r.w; fh = r.h; });
-                        if (b64 != null)
-                            frames.Add(new { time_ms = elapsed, width = fw, height = fh, image = b64 });
-                    }
-                });
+                        int elapsed = 0;
+                        while (elapsed < durationMs)
+                        {
+                            await Task.Delay(intervalMs);
+                            elapsed += intervalMs;
+                            string? b64 = null; int fw = 0, fh = 0;
+                            Application.Current.Dispatcher.Invoke(() =>
+                            { var r = CaptureCurrentFrame(); b64 = r.b64; fw = r.w; fh = r.h; });
+                            if (b64 != null)
+                                frames.Add(new { time_ms = elapsed, width = fw, height = fh, image = b64 });
+                        }
+                    });
 
-                await Task.Delay(durationMs);
-                await InvokeAsyncMethod(preview, "StopAsync");
-                capture.StopRecording();
-                await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
-                await captureTask;
+                    await Task.Delay(durationMs);
+                    try { await InvokeAsyncMethod(preview, "StopAsync"); } catch { }
+                    try { capture.StopRecording(); } catch { }
+                    await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
+                    await captureTask;
 
-                var allBytes = audioBuffer.SelectMany(b => b).ToArray();
-                using var ms = new MemoryStream();
-                using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
-                    writer.Write(allBytes, 0, allBytes.Length);
-                var audioB64 = Convert.ToBase64String(ms.ToArray());
-                double rms = CalcRms(allBytes, waveFormat.BitsPerSample);
+                    var allBytes = audioBuffer.SelectMany(b => b).ToArray();
+                    using var ms = new MemoryStream();
+                    using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
+                        writer.Write(allBytes, 0, allBytes.Length);
+                    var audioB64 = Convert.ToBase64String(ms.ToArray());
+                    double rms = CalcRms(allBytes, waveFormat.BitsPerSample);
 
-                return (object)new
+                    return (object)new
+                    {
+                        success = true,
+                        start_frame = startFrame,
+                        duration_ms = durationMs,
+                        audio = new
+                        {
+                            format = "wav",
+                            sample_rate = waveFormat.SampleRate,
+                            channels = waveFormat.Channels,
+                            bits = waveFormat.BitsPerSample,
+                            rms_level = Math.Round(rms, 4),
+                            has_audio = rms > 0.0005,
+                            data = audioB64
+                        },
+                        frames
+                    };
+                }
+                finally
                 {
-                    success = true,
-                    start_frame = startFrame,
-                    duration_ms = durationMs,
-                    audio = new
-                    {
-                        format = "wav",
-                        sample_rate = waveFormat.SampleRate,
-                        channels = waveFormat.Channels,
-                        bits = waveFormat.BitsPerSample,
-                        rms_level = Math.Round(rms, 4),
-                        has_audio = rms > 0.0005,
-                        data = audioB64
-                    },
-                    frames
-                };
+                    try { await InvokeAsyncMethod(preview, "StopAsync"); } catch { }
+                    try { capture.StopRecording(); } catch { }
+                }
             }
-            catch (Exception ex) { return (object)new { success = false, error = ex.Message }; }
+            catch (Exception ex) { if (ex is ArgumentException or JsonException) throw; return (object)new { success = false, error = ex.Message }; }
         }
 
         /// <summary>プロジェクトのFPS(と解像度)を取得する。タイムスタンプ→フレーム変換の基準として使う。</summary>
@@ -2529,6 +2560,9 @@ namespace YMM4McpPlugin
         /// </summary>
         private async Task<object> ExportClip(HttpListenerRequest req)
         {
+            NAudio.Wave.WasapiLoopbackCapture? capture = null;
+            TaskCompletionSource<bool>? recordTcs = null;
+            object? preview = null;
             try
             {
                 var body = await ReadBody(req);
@@ -2539,15 +2573,15 @@ namespace YMM4McpPlugin
                 string outputDir = GetStr(body, "outputDir", "");
 
                 if (endFrame < startFrame) return new { success = false, error = "endFrame は startFrame 以上である必要があります" };
-                // 無制限のフレーム数で固まらないよう上限を設ける
-                int totalShots = (endFrame - startFrame) / stepFrames + 1;
+                // 無制限のフレーム数で固まらないよう上限を設ける。int 加算だと MaxValue 近辺でオーバーフローして無限ループになる。
+                long totalShots = ((long)endFrame - startFrame) / stepFrames + 1;
                 if (totalShots > 2000) return new { success = false, error = $"フレーム数が多すぎます({totalShots})。stepFramesを大きくするか範囲を狭めてください" };
 
                 if (string.IsNullOrEmpty(outputDir))
                     outputDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ymm4_clip_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
                 System.IO.Directory.CreateDirectory(outputDir);
 
-                var preview = Application.Current.Dispatcher.Invoke(() => GetPreviewViewModel());
+                preview = Application.Current.Dispatcher.Invoke(() => GetPreviewViewModel());
                 if (preview == null) return new { success = false, error = "PreviewViewModel not found" };
 
                 // FPS取得(タイムスタンプ計算用)
@@ -2555,26 +2589,21 @@ namespace YMM4McpPlugin
                 try { var f = GetProjectFps(); var fp = f.GetType().GetProperty("fps")?.GetValue(f); if (fp != null) int.TryParse(fp.ToString(), out fps); } catch { }
                 if (fps <= 0) fps = 30;
 
-                // ── 音声録音をバックグラウンドで開始（オプション） ──
-                NAudio.Wave.WasapiLoopbackCapture? capture = null;
                 System.Collections.Concurrent.ConcurrentBag<byte[]>? audioBuffer = null;
                 NAudio.Wave.WaveFormat? waveFormat = null;
-                TaskCompletionSource<bool>? recordTcs = null;
                 string? wavPath = null;
 
-                // ── フレームを順にシーク＆キャプチャ ──
                 var savedFrames = new List<object>();
                 var swTotal = System.Diagnostics.Stopwatch.StartNew();
 
                 if (recordAudio)
                 {
-                    // 区間先頭にシークしてから再生＆録音
                     await InvokeAsyncMethod(preview, "SeekAsync", startFrame);
                     await Task.Delay(200);
                     capture = new NAudio.Wave.WasapiLoopbackCapture();
                     waveFormat = capture.WaveFormat;
                     audioBuffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
-                    recordTcs = new TaskCompletionSource<bool>();
+                    recordTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     capture.DataAvailable += (s, e) =>
                     {
                         if (e.BytesRecorded > 0)
@@ -2590,8 +2619,9 @@ namespace YMM4McpPlugin
                 }
 
                 int index = 0;
-                for (int frame = startFrame; frame <= endFrame; frame += stepFrames)
+                for (long frame64 = startFrame; frame64 <= endFrame; frame64 += stepFrames)
                 {
+                    int frame = (int)frame64;
                     // 再生中(録音中)はSeekせず再生位置のキャプチャを行うとズレるため、
                     // 録音時は実時間ベースで待機しながらキャプチャ、非録音時はSeekしてキャプチャ
                     if (recordAudio)
@@ -2606,7 +2636,7 @@ namespace YMM4McpPlugin
                         await Task.Delay(120); // 描画待ち
                     }
 
-                    string? b64 = null; int w = 0, h = 0;
+                    string? b64 = null; int w = 0, int h = 0;
                     Application.Current.Dispatcher.Invoke(() => { var r = CaptureCurrentFrame(); b64 = r.b64; w = r.w; h = r.h; });
                     if (b64 == null) continue;
 
@@ -2620,12 +2650,11 @@ namespace YMM4McpPlugin
                     index++;
                 }
 
-                // ── 音声停止＆保存 ──
                 double rms = 0; bool hasAudio = false;
                 if (recordAudio && capture != null && waveFormat != null && audioBuffer != null && recordTcs != null)
                 {
                     try { await InvokeAsyncMethod(preview, "StopAsync"); } catch { }
-                    capture.StopRecording();
+                    try { capture.StopRecording(); } catch { }
                     await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
                     var allBytes = audioBuffer.SelectMany(b => b).ToArray();
                     wavPath = System.IO.Path.Combine(outputDir, "audio.wav");
@@ -2634,7 +2663,6 @@ namespace YMM4McpPlugin
                         writer.Write(allBytes, 0, allBytes.Length);
                     rms = CalcRms(allBytes, waveFormat.BitsPerSample);
                     hasAudio = rms > 0.0005;
-                    capture.Dispose();
                 }
 
                 return new
@@ -2653,7 +2681,23 @@ namespace YMM4McpPlugin
                     frames = savedFrames
                 };
             }
-            catch (Exception ex) { return new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+            catch (Exception ex) { if (ex is ArgumentException or JsonException) throw; return new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+            finally
+            {
+                if (capture != null)
+                {
+                    if (preview != null)
+                    {
+                        try { await InvokeAsyncMethod(preview, "StopAsync"); } catch { }
+                    }
+                    try { capture.StopRecording(); } catch { }
+                    if (recordTcs != null)
+                    {
+                        try { await Task.WhenAny(recordTcs.Task, Task.Delay(2000)); } catch { }
+                    }
+                    try { capture.Dispose(); } catch { }
+                }
+            }
         }
 
         /// <summary>現在フレームをキャプチャしてbase64を返す（Dispatcher内から呼ぶ）</summary>
