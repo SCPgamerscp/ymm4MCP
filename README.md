@@ -131,6 +131,7 @@ pip install -r requirements.txt
 | `POST /api/timeline/resolve-overlaps` | レイヤー単位で重なりを解消（gapで最小すき間指定） |
 | `POST /api/timeline/shift` | fromFrame以降のアイテムをdeltaフレーム一括シフト |
 | `GET  /api/items/effects` | 指定アイテムの全エフェクトとパラメータ現在値を取得 |
+| `GET  /api/commands` | 利用可能なコマンド一覧と実行可否（読み取り専用。高度APIを有効にしなくても利用可） |
 
 > **重なり防止の核心**: `POST /api/items/voice`（およびadd_script）は、`AddVoiceItemAsync`完了後に
 > タイムラインを走査して**実際の音声長(`length`/フレーム数)と`endFrame`を取得して返す**ようになりました。
@@ -142,7 +143,6 @@ pip install -r requirements.txt
 | エンドポイント | 説明 |
 |---|---|
 | `POST /api/command` | 任意のICommandを実行（`name`,`target`,`param`）。UndoCommand等をAPI経由でトリガー |
-| `GET  /api/commands` | Main/ActiveTimeline/Player/Projectで利用可能なコマンド一覧と実行可否 |
 | `POST /api/reflect/get` | 任意オブジェクトの任意プロパティ/フィールドを取得（`target`,`path`） |
 | `POST /api/reflect/set` | 任意プロパティ/フィールドに値を設定（ReactivePropertyの.Valueも対応） |
 | `POST /api/reflect/invoke` | 任意メソッドを引数付き呼び出し（戻り値がTaskなら自動await） |

@@ -60,20 +60,117 @@ namespace YMM4McpPlugin
             return result;
         }
 
-        private static MethodInfo RequireAddMethod(object model, string name, bool voice, bool character)
+        private static bool MatchesItemType(object item, string typeName)
         {
-            var methods = model.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Where(m => m.Name == name).Where(m =>
-                {
-                    var p = m.GetParameters();
-                    return p.Length == (voice ? 5 : 3) && p[0].ParameterType == typeof(int) &&
-                        p[1].ParameterType == typeof(int) && (character || p[2].ParameterType == typeof(string));
-                }).ToArray();
-            return methods.Length == 1 ? methods[0] : throw new NotSupportedException(name + " signature unavailable");
+            var name = item.GetType().Name;
+            return name.Equals(typeName, StringComparison.Ordinal)
+                || name.EndsWith(typeName, StringComparison.OrdinalIgnoreCase)
+                || name.Contains(typeName, StringComparison.OrdinalIgnoreCase);
         }
 
-        // Uses the known MainModel methods rather than falling back to unrelated UI commands.
-        // Compare object identity before/after to avoid mistaking an existing item for the new one.
+        private static MethodInfo? FindAddMethod(object model, string name, bool voice, bool character)
+        {
+            var methods = model.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where(m => m.Name == name)
+                .ToArray();
+            if (methods.Length == 0) return null;
+
+            int want = voice ? 5 : 3;
+            MethodInfo? Unique(Func<MethodInfo, bool> pred)
+            {
+                var hits = methods.Where(pred).ToArray();
+                return hits.Length == 1 ? hits[0] : hits.FirstOrDefault(m => m.IsPublic) ?? (hits.Length > 0 ? hits[0] : null);
+            }
+
+            return Unique(m =>
+            {
+                var p = m.GetParameters();
+                return p.Length == want && p[0].ParameterType == typeof(int) && p[1].ParameterType == typeof(int)
+                    && (character || p[2].ParameterType == typeof(string));
+            }) ?? Unique(m =>
+            {
+                var p = m.GetParameters();
+                return p.Length >= 3 && p[0].ParameterType == typeof(int) && p[1].ParameterType == typeof(int);
+            }) ?? (methods.Length == 1 ? methods[0] : methods.FirstOrDefault(m => m.IsPublic) ?? methods[0]);
+        }
+
+        private static object? EmptyDecorations(ParameterInfo parameter)
+        {
+            var type = parameter.ParameterType;
+            Type? element = type.IsArray ? type.GetElementType()
+                : type.IsGenericType ? type.GetGenericArguments().FirstOrDefault()
+                : null;
+            return element != null ? Array.CreateInstance(element, 0) : null;
+        }
+
+        private static object?[] BuildAddParameters(MethodInfo method, int frame, int layer, object third, string? text, bool voice)
+        {
+            var parameters = method.GetParameters();
+            var args = new object?[parameters.Length];
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                var t = parameters[i].ParameterType;
+                if (i == 0 && t == typeof(int)) args[i] = frame;
+                else if (i == 1 && t == typeof(int)) args[i] = layer;
+                else if (t == typeof(string)) args[i] = text ?? third as string ?? "";
+                else if (voice && i >= 4) args[i] = EmptyDecorations(parameters[i]);
+                else if (i == 2) args[i] = third;
+                else if (i == 3 && text != null) args[i] = text;
+                else if (parameters[i].HasDefaultValue) args[i] = parameters[i].DefaultValue;
+                else args[i] = t.IsValueType ? Activator.CreateInstance(t) : null;
+            }
+            return args;
+        }
+
+        private static bool TryAddViaViewModel(object vm, string kind, string typeName, int frame, int layer, string value, object? character)
+        {
+            string method = kind == "face" ? "AddFaceItem" : "Add" + typeName;
+            object payload = character ?? value;
+            if (TryMethod(vm, method, frame, layer, payload)) return true;
+            if (TryMethod(vm, method, payload, frame, layer)) return true;
+            if (TryMethod(vm, method, value, frame, layer)) return true;
+            return TryCmd(vm, method + "Command") || TryCmd(vm, "Add" + typeName + "Command");
+        }
+
+        private static void TryRecordHistory(object model)
+        {
+            try
+            {
+                var history = GetPropObj(model, "UndoRedoManager");
+                history?.GetType().GetMethod("Record", Type.EmptyTypes)?.Invoke(history, null);
+            }
+            catch { }
+        }
+
+        private object DescribeAddedItem(object item, string? warning, bool verified, int requestedFrame, int requestedLayer, string? character)
+        {
+            var info = ReadItemInfo(item);
+            long end = (long)info.frame + Math.Max(info.length, 0);
+            if (end > int.MaxValue) warning = JoinWarning(warning, "endFrame が Int32 範囲を超えています");
+            if (info.length <= 0) warning = JoinWarning(warning, "追加アイテムの実長が未確定です。再追加せず items で確認してください");
+            return new
+            {
+                success = true,
+                verified,
+                warning,
+                type = info.type,
+                frame = info.frame,
+                layer = info.layer,
+                length = info.length,
+                endFrame = end <= int.MaxValue ? (int)end : info.frame,
+                text = info.text,
+                character,
+                requestedFrame,
+                requestedLayer
+            };
+        }
+
+        private static string? JoinWarning(string? current, string extra)
+            => string.IsNullOrEmpty(current) ? extra : current + " / " + extra;
+
+        // Compare object identity before/after. Post-add helpers (history, length, type name)
+        // must not turn a successful edit into success=false — that causes AI retries and duplicates.
         private async Task<object> AddNativeItem(HttpListenerRequest request, string kind)
         {
             var body = await ReadBody(request);
@@ -97,61 +194,148 @@ namespace YMM4McpPlugin
                 if (!File.Exists(value)) return Failure("FILE_NOT_FOUND", "素材ファイルがありません: " + value);
             }
             if (characterItem && string.IsNullOrWhiteSpace(character)) throw new ArgumentException("character is required");
+
+            string typeName = kind switch
+            {
+                "voice" => "VoiceItem",
+                "text" => "TextItem",
+                "video" => "VideoItem",
+                "audio" => "AudioItem",
+                "image" => "ImageItem",
+                "tachie" => "TachieItem",
+                "face" => "TachieFaceItem",
+                _ => throw new ArgumentException("Unknown item kind")
+            };
+
+            object? vm = null, timeline = null, model = null;
+            HashSet<object>? before = null;
             bool invoked = false;
             try
             {
-                string typeName = kind switch { "voice" => "VoiceItem", "text" => "TextItem", "video" => "VideoItem", "audio" => "AudioItem", "image" => "ImageItem", "tachie" => "TachieItem", "face" => "TachieFaceItem", _ => throw new ArgumentException("Unknown item kind") };
-                var setup = Application.Current.Dispatcher.Invoke(() =>
+                object? pending = Application.Current.Dispatcher.Invoke(() =>
                 {
-                    var vm = GetMainViewModel() ?? throw new InvalidOperationException("MainViewModel unavailable");
-                    var timeline = GetPropObj(vm, "ActiveTimelineViewModel") ?? throw new InvalidOperationException("No timeline");
-                    var model = GetMainModel(vm) ?? throw new InvalidOperationException("MainModel unavailable");
-                    string methodName = kind == "face" ? "AddFaceItem" : "Add" + typeName + (voice ? "Async" : "");
-                    var method = RequireAddMethod(model, methodName, voice, characterItem);
-                    var before = new HashSet<object>(TimelineObjects(timeline), ReferenceEqualityComparer.Instance);
+                    vm = GetMainViewModel() ?? throw new InvalidOperationException("MainViewModel unavailable");
+                    timeline = GetPropObj(vm, "ActiveTimelineViewModel") ?? throw new InvalidOperationException("No timeline");
+                    model = GetMainModel(vm) ?? throw new InvalidOperationException("MainModel unavailable");
+                    before = new HashSet<object>(TimelineObjects(timeline), ReferenceEqualityComparer.Instance);
                     object third = characterItem ? FindCharacter(timeline, character) : value;
-                    object?[] parameters;
-                    if (voice)
+                    var methodNames = kind == "face"
+                        ? new[] { "AddFaceItem", "AddTachieFaceItem" }
+                        : new[] { "Add" + typeName + (voice ? "Async" : ""), "Add" + typeName, "Add" + typeName + "Async" };
+                    MethodInfo? method = null;
+                    foreach (var name in methodNames)
                     {
-                        var decorationType = method.GetParameters()[4].ParameterType.GetGenericArguments().Single();
-                        parameters = new object?[] { frame, layer, third, value, Array.CreateInstance(decorationType, 0) };
+                        method = FindAddMethod(model, name, voice, characterItem);
+                        if (method != null) break;
                     }
-                    else parameters = new object?[] { frame, layer, third };
                     invoked = true;
-                    object? pending = method.Invoke(model, parameters);
-                    return (vm, timeline, model, before, pending);
+                    if (method != null)
+                        return method.Invoke(model, BuildAddParameters(method, frame, layer, third, voice || kind == "text" ? value : null, voice));
+                    if (!TryAddViaViewModel(vm, kind, typeName, frame, layer, value, characterItem ? third : null))
+                        throw new NotSupportedException("Add method signature unavailable for " + typeName);
+                    return null;
                 });
-                if (setup.pending is Task task) await task;
-                return Application.Current.Dispatcher.Invoke(() =>
-                {
-                    if (!ReferenceEquals(GetPropObj(setup.vm, "ActiveTimelineViewModel"), setup.timeline))
-                        return Failure("TIMELINE_CHANGED", "処理中にタイムラインが変更されました。結果を確認してください", true);
-                    var added = TimelineObjects(setup.timeline).Where(i => !setup.before.Contains(i) && i.GetType().Name == typeName).ToArray();
-                    if (added.Length != 1) return Failure("ADD_NOT_VERIFIED", "追加結果を一意に特定できません。itemsで確認してください", true);
-                    var item = added[0];
-                    if (length.HasValue)
-                    {
-                        var lengthProperty = item.GetType().GetProperty("Length");
-                        if (lengthProperty?.CanWrite != true) return Failure("LENGTH_UNSUPPORTED", "追加されましたが長さを設定できません", true);
-                        lengthProperty.SetValue(item, length.Value);
-                    }
-                    // Property setters participate in the host's edit history; record the boundary.
-                    var history = GetPropObj(setup.model, "UndoRedoManager");
-                    history?.GetType().GetMethod("Record", Type.EmptyTypes)?.Invoke(history, null);
-                    var info = ReadItemInfo(item);
-                    if (info.length <= 0 || (long)info.frame + info.length > int.MaxValue)
-                        return Failure("INVALID_ADDED_RANGE", "追加アイテムの実長を確認できません", true);
-                    return (object)new { success = true, verified = true, type = info.type, frame = info.frame,
-                        layer = info.layer, length = info.length, endFrame = info.frame + info.length,
-                        text = info.text, character = characterItem ? character : null,
-                        requestedFrame = frame, requestedLayer = layer };
-                });
+                if (pending is Task task) await task;
+                return Application.Current.Dispatcher.Invoke(() => FinishAdd(vm!, timeline!, model!, before!, typeName, length, frame, layer, characterItem ? character : null));
             }
             catch (Exception ex)
             {
+                if (invoked)
+                {
+                    try
+                    {
+                        return Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            if (vm == null || timeline == null || before == null)
+                                return Failure("ADD_OUTCOME_UNKNOWN",
+                                    "追加処理の途中で失敗しました。再試行せず items で確認してください: " + (ex.InnerException?.Message ?? ex.Message), true);
+                            return FinishAdd(vm, timeline, model ?? vm, before, typeName, length, frame, layer, characterItem ? character : null, ex);
+                        });
+                    }
+                    catch (Exception inspectEx)
+                    {
+                        return Failure("ADD_OUTCOME_UNKNOWN",
+                            "追加処理の途中で失敗しました。再試行せず items で確認してください: " + (inspectEx.InnerException?.Message ?? inspectEx.Message), true);
+                    }
+                }
                 return Failure(ex is ArgumentException ? "INVALID_ARGUMENT" : "ADD_FAILED",
-                    ex.InnerException?.Message ?? ex.Message, invoked);
+                    ex.InnerException?.Message ?? ex.Message);
             }
+        }
+
+        private object FinishAdd(object vm, object timeline, object model, HashSet<object> before, string typeName,
+            int? length, int requestedFrame, int requestedLayer, string? character, Exception? postAddError = null)
+        {
+            if (!ReferenceEquals(GetPropObj(vm, "ActiveTimelineViewModel"), timeline))
+            {
+                var moved = TryDescribeNewcomers(timeline, before, typeName, length, requestedFrame, requestedLayer, character, model,
+                    JoinWarning("処理中にタイムラインが変更されました", postAddError?.InnerException?.Message ?? postAddError?.Message));
+                if (moved != null) return moved;
+                return Failure("TIMELINE_CHANGED", "処理中にタイムラインが変更されました。再試行せず結果を確認してください", true);
+            }
+
+            var described = TryDescribeNewcomers(timeline, before, typeName, length, requestedFrame, requestedLayer, character, model,
+                postAddError == null ? null : "追加後の後処理で例外: " + (postAddError.InnerException?.Message ?? postAddError.Message));
+            if (described != null) return described;
+            if (postAddError != null)
+                return Failure("ADD_OUTCOME_UNKNOWN",
+                    "追加処理は実行されましたが結果を確認できません。再試行せず items で確認してください: " + (postAddError.InnerException?.Message ?? postAddError.Message), true);
+            return Failure("ADD_NOT_VERIFIED", "追加メソッドは実行されましたが新しいアイテムが見つかりません。再試行せず items で確認してください", true);
+        }
+
+        private object? TryDescribeNewcomers(object timeline, HashSet<object> before, string typeName, int? length,
+            int requestedFrame, int requestedLayer, string? character, object model, string? warning)
+        {
+            object[] newcomers;
+            try { newcomers = TimelineObjects(timeline).Where(i => !before.Contains(i)).ToArray(); }
+            catch { return null; }
+            if (newcomers.Length == 0) return null;
+
+            var typed = newcomers.Where(i => MatchesItemType(i, typeName)).ToArray();
+            object item;
+            bool verified;
+            if (typed.Length == 1)
+            {
+                item = typed[0];
+                verified = true;
+            }
+            else if (newcomers.Length == 1)
+            {
+                item = newcomers[0];
+                verified = false;
+                warning = JoinWarning(warning, "型名が想定と異なるため検証を緩和しました: " + item.GetType().Name);
+            }
+            else if (typed.Length > 1)
+            {
+                item = typed[0];
+                verified = false;
+                warning = JoinWarning(warning, $"新規アイテムが{typed.Length}件あります。再追加せず items で確認してください");
+            }
+            else
+            {
+                item = newcomers[0];
+                verified = false;
+                warning = JoinWarning(warning, $"新規アイテムが{newcomers.Length}件あります。再追加せず items で確認してください");
+            }
+
+            if (length.HasValue)
+            {
+                try
+                {
+                    var lengthProperty = item.GetType().GetProperty("Length");
+                    if (lengthProperty?.CanWrite != true)
+                        warning = JoinWarning(warning, "追加されましたが長さを設定できません");
+                    else
+                        lengthProperty.SetValue(item, length.Value);
+                }
+                catch (Exception ex)
+                {
+                    warning = JoinWarning(warning, "追加されましたが長さの設定に失敗: " + (ex.InnerException?.Message ?? ex.Message));
+                }
+            }
+
+            TryRecordHistory(model);
+            return DescribeAddedItem(item, warning, verified, requestedFrame, requestedLayer, character);
         }
     }
 }
