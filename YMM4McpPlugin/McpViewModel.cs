@@ -1,73 +1,113 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using System.Windows;
 using System.Windows.Input;
 
 namespace YMM4McpPlugin
 {
     public class McpViewModel : INotifyPropertyChanged
     {
-        private readonly McpHttpServer _server = new();
-        private string _log = "サーバー停止中\n";
-        private string _statusText = "● 停止";
-        private bool _isRunning = false;
+        // A tool view may be opened more than once. All views observe one listener.
+        internal static readonly McpHttpServer Server = new();
+        private static string _startupError = "";
+        private bool _attached;
+        private string _log = "";
+        private int _port = Server.Settings.Port;
+        private bool _autoStart = Server.Settings.AutoStart;
+        private bool _allowAdvanced = Server.Settings.AllowAdvanced;
 
-        public string Log
+        static McpViewModel()
         {
-            get => _log;
-            set { _log = value; OnPropertyChanged(); }
+            if (Application.Current != null)
+                Application.Current.Exit += (_, _) => Server.Stop();
+            var context = AssemblyLoadContext.GetLoadContext(typeof(McpViewModel).Assembly);
+            if (context != null) context.Unloading += _ => Server.Stop();
+            if (Server.Settings.AutoStart)
+                try { Server.Start(); } catch (Exception ex) { _startupError = ex.Message; }
         }
 
-        public string StatusText
+        internal static void InitializePlugin() { _ = Server; }
+        public string Log { get => _log; private set { _log = value; OnPropertyChanged(); } }
+        public bool IsRunning => Server.IsRunning;
+        public bool CanConfigure => !IsRunning;
+        public string StatusText => IsRunning ? "起動中" : "停止";
+        public string BaseUrl => Server.BaseUrl;
+        public string ConnectionPath => McpSettings.ConnectionPath;
+        public int Port { get => _port; set { _port = value; OnPropertyChanged(); } }
+        public bool AutoStart { get => _autoStart; set { _autoStart = value; OnPropertyChanged(); } }
+        public bool AllowAdvanced { get => _allowAdvanced; set { _allowAdvanced = value; OnPropertyChanged(); } }
+
+        public ICommand StartCommand => new RelayCommand(_ => RunSafely(() =>
         {
-            get => _statusText;
-            set { _statusText = value; OnPropertyChanged(); }
+            SaveSettings();
+            Server.Start();
+        }), _ => !IsRunning);
+        public ICommand StopCommand => new RelayCommand(_ => RunSafely(Server.Stop), _ => IsRunning);
+        public ICommand SaveSettingsCommand => new RelayCommand(_ => RunSafely(SaveSettings), _ => !IsRunning);
+        public ICommand ClearLogCommand => new RelayCommand(_ => Log = "");
+
+        private void SaveSettings()
+        {
+            if (IsRunning) throw new InvalidOperationException("設定変更前にサーバーを停止してください");
+            var candidate = new McpSettings { Port = Port, AutoStart = AutoStart, AllowAdvanced = AllowAdvanced };
+            candidate.Save();
+            Server.Settings.Port = candidate.Port;
+            Server.Settings.AutoStart = candidate.AutoStart;
+            Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
+            Refresh();
         }
 
-        public bool IsRunning
+        private void RunSafely(Action action)
         {
-            get => _isRunning;
-            set { _isRunning = value; OnPropertyChanged(); }
+            try { action(); } catch (Exception ex) { AddLog(ex.Message); }
+            finally { Refresh(); }
         }
 
-        public string BaseUrl => _server.BaseUrl;
-
-        public ICommand StartCommand => new RelayCommand(_ =>
+        public void Attach()
         {
-            _server.Start();
-            IsRunning = true;
-            StatusText = "● 起動中";
-            AddLog($"MCPサーバー起動: {_server.BaseUrl}");
-        }, _ => !_isRunning);
+            if (_attached) return;
+            _attached = true;
+            Server.LogMessage += AddLog;
+            Server.StateChanged += Refresh;
+            Port = Server.Settings.Port;
+            AutoStart = Server.Settings.AutoStart;
+            AllowAdvanced = Server.Settings.AllowAdvanced;
+            if (_startupError.Length > 0) AddLog(_startupError);
+            Refresh();
+        }
 
-        public ICommand StopCommand => new RelayCommand(_ =>
+        public void Detach()
         {
-            _server.Stop();
-            IsRunning = false;
-            StatusText = "● 停止";
-            AddLog("MCPサーバー停止");
-        }, _ => _isRunning);
+            if (!_attached) return;
+            _attached = false;
+            Server.LogMessage -= AddLog;
+            Server.StateChanged -= Refresh;
+            // Closing the tool window does not interrupt an in-flight MCP task.
+        }
 
-        public ICommand ClearLogCommand => new RelayCommand(_ =>
+        private void Refresh() => OnUI(() =>
         {
-            Log = "";
+            OnPropertyChanged(nameof(IsRunning));
+            OnPropertyChanged(nameof(CanConfigure));
+            OnPropertyChanged(nameof(StatusText));
+            OnPropertyChanged(nameof(BaseUrl));
+            CommandManager.InvalidateRequerySuggested();
         });
 
-        public McpViewModel()
+        private void AddLog(string message) => OnUI(() =>
         {
-            _server.LogMessage += msg => AddLog(msg);
-        }
+            Log += message + "\n";
+            if (Log.Length > 5000) Log = Log[^4000..];
+        });
 
-        private void AddLog(string msg)
+        private static void OnUI(Action action)
         {
-            // UIスレッドで更新
-            System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-            {
-                Log += msg + "\n";
-                // 最大5000文字に制限
-                if (Log.Length > 5000)
-                    Log = "...(省略)...\n" + Log[^4000..];
-            });
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted) return;
+            if (dispatcher.CheckAccess()) action();
+            else dispatcher.InvokeAsync(action);
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -79,13 +119,8 @@ namespace YMM4McpPlugin
     {
         private readonly Action<object?> _execute;
         private readonly Func<object?, bool>? _canExecute;
-
         public RelayCommand(Action<object?> execute, Func<object?, bool>? canExecute = null)
-        {
-            _execute = execute;
-            _canExecute = canExecute;
-        }
-
+        { _execute = execute; _canExecute = canExecute; }
         public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
         public void Execute(object? parameter) => _execute(parameter);
         public event EventHandler? CanExecuteChanged

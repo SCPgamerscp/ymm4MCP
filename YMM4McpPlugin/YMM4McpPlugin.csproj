@@ -1,51 +1,47 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <AssemblyName>YMM4McpPlugin</AssemblyName>
     <RootNamespace>YMM4McpPlugin</RootNamespace>
+    <Version>1.1.0</Version>
+    <YMM4LibPath Condition="'$(YMM4LibPath)' == ''">$(YMM4_PATH)</YMM4LibPath>
+    <YMM4InstallPath Condition="'$(YMM4InstallPath)' == ''">$(YMM4_PATH)</YMM4InstallPath>
   </PropertyGroup>
-
-  <!-- YMM4のDLLが入っているフォルダのパス -->
-  <!-- YMM4本体インストール先か、他プラグインのlibフォルダを指定 -->
-  <PropertyGroup>
-    <!-- 環境変数 YMM4_PATH が設定されていればそちらを優先し、
-         なければ C:\Temp\YmmPluginBuild\AdvancedDanmaku\lib を使う -->
-    <YMM4LibPath Condition="'$(YMM4_PATH)' != '' AND '$(YMM4_PATH)' != 'C:\...\YukkuriMovieMaker4'">$(YMM4_PATH)</YMM4LibPath>
-    <YMM4LibPath Condition="'$(YMM4LibPath)' == ''">C:\Temp\YmmPluginBuild\AdvancedDanmaku\lib</YMM4LibPath>
-  </PropertyGroup>
-
   <ItemGroup>
-    <PackageReference Include="NAudio" Version="2.2.1" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <!-- Use the host audio ABI; never bundle conflicting NAudio assemblies. -->
+    <Reference Include="$(YMM4LibPath)/NAudio*.dll"><Private>false</Private></Reference>
     <Reference Include="YukkuriMovieMaker.Plugin">
-      <HintPath>$(YMM4LibPath)\YukkuriMovieMaker.Plugin.dll</HintPath>
+      <HintPath>$(YMM4LibPath)/YukkuriMovieMaker.Plugin.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="YukkuriMovieMaker.Controls">
-      <HintPath>$(YMM4LibPath)\YukkuriMovieMaker.Controls.dll</HintPath>
+      <HintPath>$(YMM4LibPath)/YukkuriMovieMaker.Controls.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
-
-  <!-- ビルド後に YMM4 本体の plugin フォルダへ自動コピー -->
-  <PropertyGroup>
-    <YMM4InstallPath>C:\YukkuriMovieMaker4-20231229T073048Z-001\YukkuriMovieMaker4</YMM4InstallPath>
-  </PropertyGroup>
-
-  <Target Name="CopyToYMM4" AfterTargets="Build">
-    <MakeDir Directories="$(YMM4InstallPath)\user\plugin\YMM4McpPlugin" Condition="!Exists('$(YMM4InstallPath)\user\plugin\YMM4McpPlugin')"/>
-    <Copy
-      SourceFiles="$(OutputPath)$(AssemblyName).dll"
-      DestinationFolder="$(YMM4InstallPath)\user\plugin\YMM4McpPlugin\"
-      SkipUnchangedFiles="true"
-    />
+  <Target Name="ValidateYmmReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(YMM4LibPath)/YukkuriMovieMaker.Plugin.dll')"
+           Text="Set YMM4_PATH or -p:YMM4LibPath to your YMM4 installation directory." />
   </Target>
-
+  <Target Name="CopyToYMM4" AfterTargets="Build" Condition="'$(DeployToYMM4)' == 'true'">
+    <Error Condition="'$(YMM4InstallPath)' == ''" Text="Set YMM4_PATH before deploying." />
+    <ItemGroup><DeployFiles Include="$(TargetPath);$(TargetDir)$(AssemblyName).deps.json" /></ItemGroup>
+    <Copy SourceFiles="@(DeployFiles)" DestinationFolder="$(YMM4InstallPath)/user/plugin/YMM4McpPlugin/" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PackageYmme" AfterTargets="Build" Condition="'$(CreateYmme)' == 'true'">
+    <PropertyGroup>
+      <PackageStage>$(IntermediateOutputPath)ymme/YMM4McpPlugin</PackageStage>
+      <PackageDirectory>$(MSBuildProjectDirectory)/../artifacts</PackageDirectory>
+    </PropertyGroup>
+    <RemoveDir Directories="$(IntermediateOutputPath)ymme" />
+    <MakeDir Directories="$(PackageStage);$(PackageDirectory)" />
+    <ItemGroup><PackageFiles Include="$(TargetPath);$(TargetDir)$(AssemblyName).deps.json" /></ItemGroup>
+    <Copy SourceFiles="@(PackageFiles)" DestinationFolder="$(PackageStage)" />
+    <ZipDirectory SourceDirectory="$(IntermediateOutputPath)ymme" DestinationFile="$(PackageDirectory)/YMM4McpPlugin-$(Version).ymme" Overwrite="true" />
+  </Target>
 </Project>

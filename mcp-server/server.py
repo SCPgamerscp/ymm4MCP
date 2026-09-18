@@ -24,6 +24,8 @@ import os
 import sys
 from typing import Any
 import httpx
+from ymm4_connection import connection_settings, advanced_enabled
+from editing import integer, plan_script, validate_timeline
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -43,27 +45,66 @@ except Exception:
     import gemini_video  # type: ignore
 
 # YMM4プラグインのHTTP API URL
-YMM4_API_BASE = "http://localhost:8765/api"
+YMM4_API_BASE = "http://127.0.0.1:8765/api"
+
+from mcp_skills import register_skills
 
 app = Server("ymm4-mcp")
+register_skills(app)
 
 # ============================================================
 # HTTPクライアント
 # ============================================================
 
+HTTP_TIMEOUT_SECONDS = 10.0
+PREVIEW_OVERHEAD_SECONDS = 15.0
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """同じイベントループ上でHTTP接続プールを再利用する。"""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS, trust_env=False)
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """MCPサーバー終了時（別イベントループで再利用する前も）に接続を解放する。"""
+    global _http_client
+    client, _http_client = _http_client, None
+    if client is not None:
+        await client.aclose()
+
+
 async def ymm4_get(path: str) -> dict:
     """YMM4 API GETリクエスト"""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.get(f"{YMM4_API_BASE}{path}")
-        res.raise_for_status()
-        return res.json()
+    base, headers = connection_settings()
+    res = await _get_http_client().get(f"{base}{path}", headers=headers)
+    res.raise_for_status()
+    return res.json()
 
-async def ymm4_post(path: str, body: dict = {}) -> dict:
-    """YMM4 API POSTリクエスト"""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
-        res.raise_for_status()
-        return res.json()
+
+async def ymm4_post(
+    path: str, body: dict | None = None, *, timeout: float = HTTP_TIMEOUT_SECONDS
+) -> dict:
+    """応答待ち時間だけをリクエスト単位で変更し、接続待ちは10秒に保つ。"""
+    base, headers = connection_settings()
+    res = await _get_http_client().post(
+        f"{base}{path}", headers=headers,
+        json=body if body is not None else {},
+        timeout=httpx.Timeout(HTTP_TIMEOUT_SECONDS, read=timeout),
+    )
+    res.raise_for_status()
+    return res.json()
+
+
+def _preview_timeout(duration_ms: int, minimum_ms: int) -> float:
+    """C#側の録音時間クランプに合わせ、シーク・画像処理用の余裕を加える。"""
+    if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):
+        raise ValueError("duration_ms は整数で指定してください")
+    effective_ms = max(minimum_ms, min(duration_ms, 30000))
+    return effective_ms / 1000.0 + PREVIEW_OVERHEAD_SECONDS
 
 # ============================================================
 # ツール定義
@@ -73,10 +114,10 @@ TOOLS = [
     Tool(
         name="ymm4_interact",
         description=(
-            "YMM4を操作・情報取得するための単一ツール。"
-            "action='get_info'(status/project/items/effects_list/selection/commands/effects), "
+            "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
+            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects), "
             "'control'(play/stop/save/undo/redo/split/align), "
-            "'add_item'(text/voice/tachie/face), "
+            "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避)を指定する。"
         ),
@@ -85,18 +126,22 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script"],
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,effects_list,selection,commands,effects)、"
+                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects)、"
                         "操作(play,stop,save,undo,redo,split,align)、"
-                        "アイテム追加(text,voice,tachie,face)、"
+                        "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift)のいずれか"
                     )
                 },
+                "dry_run": {"type": "boolean", "description": "add_script: 検証と推定配置のみ。編集・音声合成なし"},
+                "expected": {"type": "array", "items": {"type": "object"}, "description": "validate: 配置後に期待するframe/layer/length/type/text"},
+                "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
+                "path": {"type": "string", "description": "video/audio/image: 素材ファイルの絶対パス"},
                 "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
                 "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
                 "gap": {"type": "integer", "description": "resolve_overlaps: アイテム間の最小すき間フレーム"},
@@ -230,7 +275,7 @@ TOOLS = [
 
 @app.list_tools()
 async def list_tools() -> ListToolsResult:
-    return ListToolsResult(tools=TOOLS)
+    return ListToolsResult(tools=[tool for tool in TOOLS if tool.name != "ymm4_advanced" or advanced_enabled()])
 
 
 @app.call_tool()
@@ -240,19 +285,41 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
             result = await dispatch_preview(arguments)
             return result
         if name == "ymm4_advanced":
+            if not advanced_enabled():
+                raise ValueError("高度APIは無効です。YMM4_ENABLE_ADVANCED=1とプラグイン側の許可が必要です")
             result = await dispatch_advanced(arguments)
-            return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
+            return CallToolResult(content=[TextContent(type="text", text=format_result(result))],
+                                  isError=isinstance(result, dict) and (result.get("success") is False or "error" in result))
         if name == "ymm4_analyze_video":
             result = await analyze_video(arguments)
-            return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
+            return CallToolResult(content=[TextContent(type="text", text=format_result(result))],
+                                  isError=isinstance(result, dict) and (result.get("success") is False or "error" in result))
         if name != "ymm4_interact":
             raise ValueError(f"Unknown tool: {name}")
         result = await dispatch(arguments)
-        return CallToolResult(content=[TextContent(type="text", text=format_result(result))])
-    except httpx.ConnectError:
+        return CallToolResult(content=[TextContent(type="text", text=format_result(result))],
+                                  isError=isinstance(result, dict) and (result.get("success") is False or "error" in result))
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         msg = (
             "❌ YMM4プラグインサーバーに接続できません。\n"
             "YMM4を起動し、ツールメニューから「MCP連携サーバー」を開いて「▶ 起動」ボタンを押してください。"
+        )
+        return CallToolResult(content=[TextContent(type="text", text=msg)], isError=True)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        try:
+            error = exc.response.json()
+        except ValueError:
+            error = {}
+        if isinstance(error, dict) and error.get("error_code"):
+            return CallToolResult(content=[TextContent(type="text", text=format_result(error))], isError=True)
+        message = {401: "認証失敗。プラグインを再起動し接続情報を確認してください", 403: "APIの利用が許可されていません"}.get(status, f"YMM4 HTTPエラー: {status}")
+        return CallToolResult(content=[TextContent(type="text", text=message)], isError=True)
+    except httpx.TimeoutException:
+        msg = (
+            "YMM4プラグインサーバーの処理待ちがタイムアウトしました。\n"
+            "録音時間を短くするか、YMM4の処理完了を待って状態を確認してください。"
+            "タイムアウト後も処理が続いている可能性があるため、自動再試行はしていません。"
         )
         return CallToolResult(content=[TextContent(type="text", text=msg)], isError=True)
     except Exception as e:
@@ -270,6 +337,8 @@ async def dispatch(args: dict) -> Any:
         case "get_info":
             match sub_action:
                 case "status": return await ymm4_get("/status")
+                case "characters": return await ymm4_get("/characters")
+                case "capabilities": return await ymm4_get("/capabilities")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
                 case "effects_list": return await ymm4_get("/effects/list")
@@ -303,10 +372,19 @@ async def dispatch(args: dict) -> Any:
             if "frame" in args: payload["frame"] = args["frame"]
             if "layer" in args: payload["layer"] = args["layer"]
             if "length" in args: payload["length"] = args["length"]
-            
+            if "path" in args: payload["path"] = args["path"]
+            for key in ("frame", "layer"):
+                if key in payload: integer(payload[key], key)
+            if "length" in payload: integer(payload["length"], "length", 1)
+            if sub_action == "image" and "length" not in payload:
+                raise ValueError("image requires length")
+            if sub_action in ("video", "audio", "image") and not isinstance(payload.get("path"), str):
+                raise ValueError("media requires path")
+
             match sub_action:
+                case "video" | "audio" | "image": return await ymm4_post(f"/items/{sub_action}", payload, timeout=120.0)
                 case "text": return await ymm4_post("/items/text", payload)
-                case "voice": return await ymm4_post("/items/voice", payload)
+                case "voice": return await ymm4_post("/items/voice", payload, timeout=120.0)
                 case "tachie": return await ymm4_post("/items/tachie", payload)
                 case "face": return await ymm4_post("/items/face", payload)
                 case _: raise ValueError(f"Unknown sub_action for add_item: {sub_action}")
@@ -360,6 +438,12 @@ async def dispatch(args: dict) -> Any:
                     return await ymm4_post("/timeline/shift", payload)
                 case _: raise ValueError(f"Unknown sub_action for edit_item: {sub_action}")
 
+        case "validate":
+            snapshot = await ymm4_get("/items")
+            if snapshot.get("success") is False or "error" in snapshot:
+                return snapshot
+            return validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"))
+
         case "add_script":
             return await add_script(args)
 
@@ -368,72 +452,47 @@ async def dispatch(args: dict) -> Any:
 
 
 async def add_script(args: dict) -> dict:
-    """
-    台本をまとめてタイムラインに追加する。
-
-    重なり防止の核心:
-      各セリフを1件追加するごとに、C#側が返す「実際の音声長(length/フレーム数)」を使って
-      次のセリフの開始フレームを動的に決定する。これにより文字数推定のズレによる
-      アイテムの重なりを根本的に防止する。
-      C#が実長を取得できなかった場合(length<=0)のみ、文字数からの推定値にフォールバックする。
-
-    gap(フレーム)を指定すると各セリフ間にすき間を空ける。
-    """
-    lines = args.get("lines", [])
-    fps = args.get("fps", 30)
-    chars_per_sec = args.get("chars_per_sec", 5)
-    current_frame = args.get("start_frame", 0)
+    """Validate the entire script first; never continue after failed/unknown synthesis."""
+    plan = plan_script(args)
+    if args.get("dry_run", False):
+        return plan
+    characters = await ymm4_get("/characters")
+    if characters.get("success") is False or "error" in characters:
+        return characters
+    names = [c["name"] for c in characters.get("characters", [])]
+    for line in plan["details"]:
+        if names.count(line["character"]) != 1:
+            raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {line['character']}")
+    frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
-
-    # キャラクターごとのデフォルトレイヤー
-    char_layer_map: dict[str, int] = {}
-    next_layer = 0
-
     results = []
-    for line in lines:
-        character = line.get("character", "ゆっくり霊夢")
-        text = line.get("text", "")
-        layer = line.get("layer")
-
-        # レイヤーが未指定ならキャラクターに自動割り当て
-        if layer is None:
-            if character not in char_layer_map:
-                char_layer_map[character] = next_layer
-                next_layer += 1
-            layer = char_layer_map[character]
-
-        # 文字数からの推定尺 (最低1秒) — 実長が取れない場合のフォールバック
-        estimated_secs = max(1.0, len(text) / chars_per_sec)
-        estimated_length = int(estimated_secs * fps)
-
-        res = await ymm4_post("/items/voice", {
-            "text":      text,
-            "character": character,
-            "frame":     current_frame,
-            "layer":     layer,
-        })
-
-        # C#が返した実音声長を優先。取れなければ推定値を使う。
-        actual_length = res.get("length", -1) if isinstance(res, dict) else -1
-        used_length = actual_length if isinstance(actual_length, int) and actual_length > 0 else estimated_length
-        length_source = "actual" if used_length == actual_length and actual_length > 0 else "estimated"
-
-        results.append({
-            "character": character,
-            "text": (text[:20] + "...") if len(text) > 20 else text,
-            "frame": current_frame,
-            "length": used_length,
-            "length_source": length_source,
-            **(res if isinstance(res, dict) else {"raw": res}),
-        })
-        current_frame += used_length + gap
-
-    return {
-        "success": True,
-        "added": len(results),
-        "total_frames": current_frame,   # 次シーンのstart_frameの目安
-        "details": results,
-    }
+    for index, line in enumerate(plan["details"]):
+        try:
+            res = await ymm4_post("/items/voice", {
+                "text": line["text"], "character": line["character"],
+                "frame": frame, "layer": line["layer"],
+            }, timeout=120.0)
+        except httpx.HTTPError:
+            return {"success": False, "error_code": "SCRIPT_REQUEST_FAILED",
+                    "error": "通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
+                    "outcome_unknown": True, "added": len(results), "failed_line": index,
+                    "details": results, "rolled_back": False}
+        if not isinstance(res, dict) or res.get("success") is not True:
+            return {"success": False, "error_code": "SCRIPT_PARTIAL_FAILURE",
+                    "error": "セリフ追加に失敗したため停止しました", "failed_line": index,
+                    "added": len(results), "details": results, "failure": res, "rolled_back": False}
+        results.append(res)
+        try:
+            length = integer(res.get("length"), "actual voice length", 1)
+            actual_frame = integer(res.get("frame"), "actual frame")
+            frame = integer(actual_frame + length + gap, "next frame")
+        except ValueError:
+            return {"success": False, "error_code": "VOICE_LENGTH_UNKNOWN",
+                    "error": "追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
+                    "added": len(results), "failed_line": index, "details": results,
+                    "rolled_back": False}
+    return {"success": True, "added": len(results), "total_frames": frame,
+            "details": results, "dry_run": False}
 
 
 async def dispatch_advanced(args: dict) -> Any:
@@ -487,10 +546,7 @@ async def dispatch_advanced(args: dict) -> Any:
 
 async def ymm4_post_long(path: str, body: dict, timeout: float = 600.0) -> dict:
     """長時間処理(クリップ書き出し等)用のPOST。タイムアウトを長めに取る。"""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        res = await client.post(f"{YMM4_API_BASE}{path}", json=body)
-        res.raise_for_status()
-        return res.json()
+    return await ymm4_post(path, body, timeout=timeout)
 
 
 def _sec_to_frame(time_sec: Any, fps: int, base_frame: int) -> Any:
@@ -582,7 +638,7 @@ async def analyze_video(args: dict) -> dict:
                 "stepFrames": step_frames,
                 "recordAudio": record_audio,
             })
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.TimeoutException):
             raise
         except Exception as e:
             return {"success": False, "error": f"クリップ書き出し失敗: {e}"}
@@ -633,7 +689,9 @@ async def dispatch_preview(args: dict) -> CallToolResult:
 
         case "seek_capture":
             frame = args.get("frame", 0)
-            data = await ymm4_post("/preview/seek", {"frame": frame})
+            data = await ymm4_post(
+                "/preview/seek", {"frame": frame}, timeout=PREVIEW_OVERHEAD_SECONDS
+            )
             return _preview_result(data)
 
         case "position":
@@ -642,7 +700,12 @@ async def dispatch_preview(args: dict) -> CallToolResult:
 
         case "record":
             duration_ms = args.get("duration_ms", 3000)
-            data = await ymm4_post("/preview/record", {"duration_ms": duration_ms})
+            data = await ymm4_post(
+                "/preview/record", {"duration_ms": duration_ms},
+                timeout=_preview_timeout(duration_ms, 500),
+            )
+            if data.get("success") is False or "error" in data:
+                return CallToolResult(content=[TextContent(type="text", text=format_result(data))], isError=True)
             audio_b64 = data.pop("audio", None)
             summary = format_result(data)
             contents: list = [TextContent(type="text", text=summary)]
@@ -676,7 +739,7 @@ async def dispatch_preview(args: dict) -> CallToolResult:
                 "frame": frame,
                 "duration_ms": duration_ms,
                 "capture_interval_ms": interval_ms
-            })
+            }, timeout=_preview_timeout(duration_ms, 1000))
             if not data.get("success"):
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"❌ {data.get('error', 'unknown error')}")],
@@ -717,6 +780,9 @@ async def dispatch_preview(args: dict) -> CallToolResult:
                     ))
             return CallToolResult(content=contents)
 
+        case _:
+            raise ValueError(f"Unknown preview action: {action}")
+
 
 def _preview_result(data: dict) -> CallToolResult:
     """C#から返った {success, image(base64 PNG), ...} をImageContentに変換"""
@@ -743,9 +809,24 @@ def _preview_result(data: dict) -> CallToolResult:
 # ============================================================
 
 async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
+    finally:
+        await close_http_client()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse
+    parser = argparse.ArgumentParser(description="YMM4 MCP server")
+    parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--tls-cert")
+    parser.add_argument("--tls-key")
+    options = parser.parse_args()
+    if options.transport == "stdio":
+        asyncio.run(main())
+    else:
+        from http_transport import run_http
+        asyncio.run(run_http(app, close_http_client, options))

@@ -1,2 +1,16 @@
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+.coverage
+bin/
+obj/
+artifacts/
+*.dll
+*.pdb
+*.wav
+*.user
+*.ymme
+build_error.txt
+connection.json
+settings.local.json

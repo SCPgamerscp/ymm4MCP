@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -18,7 +19,7 @@ using System.Windows.Media.Imaging;
 
 namespace YMM4McpPlugin
 {
-    public class McpHttpServer
+    public partial class McpHttpServer
     {
         // GDI/Win32 API（DirectX/OpenGLレンダリングのキャプチャ用）
         [DllImport("user32.dll")] static extern IntPtr GetWindowDC(IntPtr hWnd);
@@ -31,66 +32,135 @@ namespace YMM4McpPlugin
         struct RECT { public int Left, Top, Right, Bottom; }
         const uint PW_RENDERFULLCONTENT = 2; // DirectX/OpenGL対応フラグ
 
+        private readonly object _lifecycle = new();
         private HttpListener? _listener;
-        private CancellationTokenSource? _cts;
-        private bool _isRunning = false;
-
-        public const int Port = 8765;
-        public string BaseUrl => $"http://localhost:{Port}/";
-        public bool IsRunning => _isRunning;
+        private string _token = "";
+        private bool _allowAdvanced;
+        public McpSettings Settings { get; } = McpSettings.Load();
+        public int Port => Settings.Port;
+        public string BaseUrl => $"http://127.0.0.1:{Port}/";
+        public bool IsRunning => _listener?.IsListening == true;
         public event Action<string>? LogMessage;
+        public event Action? StateChanged;
 
         public void Start()
         {
-            if (_isRunning) return;
-            _cts = new CancellationTokenSource();
-            _listener = new HttpListener();
-            _listener.Prefixes.Add(BaseUrl);
-            _listener.Start();
-            _isRunning = true;
-            Task.Run(() => ListenLoop(_cts.Token));
+            lock (_lifecycle)
+            {
+                if (IsRunning) return;
+                Settings.Validate();
+                McpSettings.PrepareDirectory();
+                var listener = new HttpListener();
+                listener.Prefixes.Add(BaseUrl);
+                try
+                {
+                    listener.Start();
+                    string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                    string temp = McpSettings.ConnectionPath + ".tmp";
+                    File.WriteAllText(temp, JsonSerializer.Serialize(new { api_base = BaseUrl + "api", token }));
+                    File.Move(temp, McpSettings.ConnectionPath, true);
+                    _token = token;
+                    _allowAdvanced = Settings.AllowAdvanced;
+                    _listener = listener;
+                    _ = ListenLoop(listener);
+                }
+                catch { listener.Close(); throw; }
+            }
+            StateChanged?.Invoke();
             Log($"MCPサーバー起動: {BaseUrl}");
         }
 
         public void Stop()
         {
-            if (!_isRunning) return;
-            _cts?.Cancel();
-            _listener?.Stop();
-            _listener = null;
-            _isRunning = false;
+            lock (_lifecycle)
+            {
+                var listener = _listener;
+                _listener = null;
+                listener?.Close();
+                _token = "";
+                // Keep the protected discovery file: clients can distinguish connection
+                // refusal after shutdown; the token is rotated on the next start.
+            }
+            StateChanged?.Invoke();
             Log("MCPサーバー停止");
         }
 
-        private async Task ListenLoop(CancellationToken ct)
+        private async Task ListenLoop(HttpListener listener)
         {
-            while (!ct.IsCancellationRequested && _listener != null)
+            try
             {
-                try { var ctx = await _listener.GetContextAsync(); _ = Task.Run(() => HandleRequest(ctx), ct); }
-                catch (HttpListenerException) { break; }
-                catch (ObjectDisposedException) { break; }
-                catch (Exception ex) { Log($"エラー: {ex.Message}"); }
+                while (listener.IsListening)
+                {
+                    var ctx = await listener.GetContextAsync();
+                    _ = HandleRequest(ctx);
+                }
             }
+            catch (HttpListenerException) { }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex) { Log($"HTTP listener error: {ex.Message}"); }
+            finally
+            {
+                lock (_lifecycle)
+                {
+                    listener.Close();
+                    if (ReferenceEquals(_listener, listener)) _listener = null;
+                }
+                StateChanged?.Invoke();
+            }
+        }
+
+        private bool IsAuthenticated(HttpListenerRequest request)
+        {
+            string expected = _token;
+            string supplied = request.Headers["X-Ymm4-Token"] ?? "";
+            return expected.Length > 0 && supplied.Length == expected.Length &&
+                CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(supplied));
         }
 
         private async Task HandleRequest(HttpListenerContext context)
         {
             var req = context.Request;
             var res = context.Response;
-            res.AddHeader("Access-Control-Allow-Origin", "*");
-            res.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.AddHeader("Access-Control-Allow-Headers", "Content-Type");
-            if (req.HttpMethod == "OPTIONS") { res.StatusCode = 204; res.Close(); return; }
-
+            bool editLock = false;
             try
             {
                 string path = req.Url?.AbsolutePath ?? "/";
+                if (!IsAuthenticated(req))
+                {
+                    await WriteJson(res, 401, new { success = false, error_code = "UNAUTHORIZED", error = "X-Ymm4-Token is required" });
+                    return;
+                }
+                if (req.Headers["Origin"] != null || req.Headers["Sec-Fetch-Site"] != null)
+                {
+                    await WriteJson(res, 403, new { success = false, error_code = "BROWSER_REQUEST_DENIED", error = "Browser requests are not supported" });
+                    return;
+                }
+                if (!_allowAdvanced && (path.StartsWith("/api/reflect/", StringComparison.Ordinal) || path.StartsWith("/api/debug/", StringComparison.Ordinal) || path == "/api/commands"))
+                {
+                    await WriteJson(res, 403, new { success = false, error_code = "ADVANCED_DISABLED", error = "Enable advanced APIs in the plugin settings and restart" });
+                    return;
+                }
+                if (req.HttpMethod == "POST")
+                {
+                    editLock = await _editGate.WaitAsync(0);
+                    if (!editLock)
+                    {
+                        await WriteJson(res, 409, Failure("EDIT_BUSY", "別の操作が進行中です。完了後に状態を確認してください"));
+                        return;
+                    }
+                }
                 Log($"{req.HttpMethod} {path}");
                 object? result = (req.HttpMethod, path) switch
                 {
                     ("GET", "/api/status") => GetStatus(),
+                    ("GET", "/api/capabilities") => GetCapabilities(),
                     ("GET", "/api/project") => GetProjectInfo(),
                     ("GET", "/api/items") => GetTimelineItems(),
+                    ("GET", "/api/characters") => GetCharacters(),
+                    ("POST", "/api/items/video") => await AddNativeItem(req, "video"),
+                    ("POST", "/api/items/audio") => await AddNativeItem(req, "audio"),
+                    ("POST", "/api/items/image") => await AddNativeItem(req, "image"),
+#if DEBUG
                     ("GET", "/api/debug/vm") => DebugViewModel(),
                     ("GET", "/api/debug/timeline") => DebugTimeline(),
                     ("GET", "/api/debug/items") => DebugItems(),
@@ -105,26 +175,31 @@ namespace YMM4McpPlugin
                     ("GET", "/api/debug/type") => GetTypeInfo(req),
                     ("GET", "/api/debug/timelinemethods") => DebugTimelineMethods(),
                     ("GET", "/api/debug/voicetypes") => DebugVoiceTypes(),
-                    ("POST", "/api/items/text") => await AddTextItem(req),
-                    ("POST", "/api/items/voice") => await AddVoiceItem(req),
+#endif
+                    ("POST", "/api/items/text") => await AddNativeItem(req, "text"),
+                    ("POST", "/api/items/voice") => await AddNativeItem(req, "voice"),
                     ("POST", "/api/items/reorder") => await ReorderItems(req),
                     ("POST", "/api/items/arrange") => await ArrangeItems(req),
                     ("POST", "/api/items/move") => await MoveItem(req),
-                    ("POST", "/api/items/tachie") => await AddTachieItem(req),
-                    ("POST", "/api/items/face") => await AddFaceItem(req),
+                    ("POST", "/api/items/tachie") => await AddNativeItem(req, "tachie"),
+                    ("POST", "/api/items/face") => await AddNativeItem(req, "face"),
                     ("POST", "/api/items/face/param") => await SetFaceParam(req),
                     ("POST", "/api/items/effect/video") => await AddVideoEffect(req),
                     ("POST", "/api/items/effect") => await AddEffectToItem(req),
                     ("POST", "/api/items/prop") => await SetItemProp(req),
                     ("GET", "/api/effects/list") => ListEffects(),
                     ("POST", "/api/items/delete") => await DeleteItems(req),
+#if DEBUG
                     ("GET", "/api/debug/tachie") => DebugTachie(),
                     ("GET", "/api/debug/tachie/props") => DebugTachieItemProps(),
                     ("GET", "/api/debug/facetypes") => DebugFaceTypes(),
                     ("GET", "/api/debug/voiceitem/props") => DebugVoiceItemProps(),
+#endif
                     ("POST", "/api/items/effect/audio") => await AddAudioEffect(req),
+#if DEBUG
                     ("GET", "/api/debug/visualtree") => DebugVisualTree(req),
                     ("GET", "/api/debug/player") => DebugPlayer(),
+#endif
                     ("GET", "/api/preview/capture") => CapturePreview(req),
                     ("POST", "/api/preview/seek") => await SeekAndCapture(req),
                     ("GET", "/api/preview/position") => GetPlaybackPosition(),
@@ -154,7 +229,14 @@ namespace YMM4McpPlugin
                 if (result == null) { await WriteJson(res, 404, new { error = "Not Found", path }); return; }
                 await WriteJson(res, 200, result);
             }
-            catch (Exception ex) { Log($"エラー: {ex.Message}"); await WriteJson(res, 500, new { error = ex.Message }); }
+            catch (Exception ex)
+            {
+                Log($"エラー: {ex.Message}");
+                try { await WriteJson(res, ex is ArgumentException || ex is JsonException ? 400 : 500,
+                    new { success = false, error_code = ex is ArgumentException || ex is JsonException ? "INVALID_ARGUMENT" : "INTERNAL_ERROR", error = ex.Message, retryable = false }); }
+                catch { res.Abort(); }
+            }
+            finally { if (editLock) _editGate.Release(); }
         }
 
         private static async Task WriteJson(HttpListenerResponse res, int status, object data)
@@ -170,7 +252,27 @@ namespace YMM4McpPlugin
 
         // ── API ──────────────────────────────────────────────
 
-        private object GetStatus() => new { status = "running", version = "1.0.0", port = Port, timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") };
+        private object GetStatus() => new { status = "running", version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3), port = Port, timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") };
+
+        private object GetCapabilities() => new
+        {
+            success = true,
+            api_schema_version = 1,
+            plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
+            authentication = "X-Ymm4-Token",
+            advanced_enabled = _allowAdvanced,
+            item_types = new[] { "video", "audio", "image", "text", "voice", "tachie", "face" },
+            features = new
+            {
+                media_import = true, character_discovery = true, script_dry_run_in_mcp = true,
+                timeline_validation_in_mcp = true, final_video_export = false,
+                persistent_item_ids = false, resumable_jobs = false, transactions = false,
+                keyframe_api = false, automatic_visual_audio_qa = false
+            },
+            limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
+                "Serialized API writes do not lock manual UI edits.", "A timed-out operation may continue; inspect state before retrying.",
+                "Voice parameters are inherited from registered characters; per-request engine/style overrides are not implemented." }
+        };
 
         private object GetProjectInfo()
         {
@@ -178,7 +280,11 @@ namespace YMM4McpPlugin
             {
                 var vm = GetMainViewModel();
                 if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
-                return new { vmType = vm.GetType().FullName, projectName = GetPropStr(vm, "ProjectName"), projectPath = GetPropStr(vm, "ProjectPath") };
+                var model = GetMainModel(vm);
+                string? path = GetPropValue(vm, "ProjectFilePath")?.ToString() ?? (model == null ? null : GetPropObj(model, "ProjectFilePath")?.ToString());
+                return new { success = true, vmType = vm.GetType().FullName,
+                    projectName = string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path),
+                    projectPath = path, isSaved = GetPropValue(vm, "IsSaved") };
             });
         }
 
@@ -549,74 +655,6 @@ namespace YMM4McpPlugin
             });
         }
 
-        private async Task<object> AddTachieItem(HttpListenerRequest req)
-        {
-            var b = await ReadBody(req);
-            string ch = GetStr(b, "character", "ゆっくり霊夢");
-            int frame = GetInt(b, "frame", 0);
-            int layer = GetInt(b, "layer", 3);
-            int length = GetInt(b, "length", 300);
-
-            return Application.Current.Dispatcher.Invoke(() =>
-            {
-                var vm = GetMainViewModel();
-                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
-                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
-                if (tvm == null) return (object)new { success = false, error = "TimelineVM取得失敗" };
-
-                // キャラ検索
-                var charsEnum = GetPropEnum(tvm, "Characters");
-                object? targetChar = null;
-                string searchName = ch.Replace("ゆっくり", "").Trim();
-                if (charsEnum != null)
-                    foreach (var c in charsEnum)
-                    { string? n = null; try { n = c.GetType().GetProperty("Name")?.GetValue(c)?.ToString(); } catch { } if (n != null && n.Contains(searchName)) { targetChar = c; break; } }
-                if (targetChar == null) return (object)new { success = false, error = "キャラが見つかりません: " + ch };
-
-                // MainModel.AddTachieItem(int frame, int layer, Character character)
-                object? mainModel = GetMainModel(vm);
-                if (mainModel == null) return (object)new { success = false, error = "MainModel取得失敗" };
-
-                try
-                {
-                    var addMethod = mainModel.GetType().GetMethod("AddTachieItem", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (addMethod == null)
-                    {
-                        var methods = mainModel.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                            .Where(m => m.Name.Contains("Tachie") || m.Name.Contains("Face"))
-                            .Select(m => m.Name + "(" + string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name)) + ")")
-                            .ToArray();
-                        return (object)new { success = false, error = "AddTachieItem見つからず", methods };
-                    }
-                    addMethod.Invoke(mainModel, new object?[] { frame, layer, targetChar });
-
-                    // 追加されたアイテムのlengthを調整
-                    Start_SleepMs(300);
-                    var rawItems = GetPropEnum(tvm, "Items");
-                    if (rawItems != null)
-                        foreach (var iv in rawItems)
-                        {
-                            var item = GetPropObj(iv, "Item") ?? iv;
-                            var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            var lProp = item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            var lenProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                            if (fProp == null || lProp == null) continue;
-                            try
-                            {
-                                int f2 = (int)(fProp.GetValue(item) ?? -1);
-                                int l2 = (int)(lProp.GetValue(item) ?? -1);
-                                if (f2 == frame && l2 == layer && lenProp != null)
-                                { lenProp.SetValue(item, length); break; }
-                            }
-                            catch { }
-                        }
-
-                    return (object)new { success = true, character = ch, frame, layer, length };
-                }
-                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
-            });
-        }
-
         private static void Start_SleepMs(int ms) => System.Threading.Thread.Sleep(ms);
 
         private object? GetMainModel(object vm)
@@ -626,28 +664,6 @@ namespace YMM4McpPlugin
             foreach (var p in vm.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
                 if (p.PropertyType.Name.Contains("MainModel")) { try { var v = p.GetValue(vm); if (v != null) return v; } catch { } }
             return null;
-        }
-
-        // 表情アイテム追加
-        private async Task<object> AddFaceItem(HttpListenerRequest req)
-        {
-            var b = await ReadBody(req);
-            string ch = GetStr(b, "character", "ゆっくり霊夢");
-            int frame = GetInt(b, "frame", 0);
-            int layer = GetInt(b, "layer", 4);
-            return Application.Current.Dispatcher.Invoke(() =>
-            {
-                var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
-                var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
-                var charsEnum = GetPropEnum(tvm, "Characters");
-                object? targetChar = null;
-                string sn = ch.Replace("ゆっくり", "").Trim();
-                if (charsEnum != null) foreach (var c in charsEnum) { string? n = null; try { n = c.GetType().GetProperty("Name")?.GetValue(c)?.ToString(); } catch { } if (n != null && n.Contains(sn)) { targetChar = c; break; } }
-                if (targetChar == null) return (object)new { success = false, error = "キャラなし: " + ch };
-                var mm = GetMainModel(vm); if (mm == null) return (object)new { success = false, error = "MainModel失敗" };
-                try { var m = mm.GetType().GetMethod("AddFaceItem", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); if (m == null) return (object)new { success = false, error = "AddFaceItem未発見" }; m.Invoke(mm, new object?[] { frame, layer, targetChar }); return (object)new { success = true, character = ch, frame, layer }; }
-                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
-            });
         }
 
         // アイテムにVideoEffectを追加
@@ -1182,151 +1198,6 @@ namespace YMM4McpPlugin
             });
         }
 
-        private async Task<object> AddTextItem(HttpListenerRequest req)
-        {
-            var b = await ReadBody(req);
-            string text = GetStr(b, "text", "テキスト"); int frame = GetInt(b, "frame", 0); int layer = GetInt(b, "layer", 0);
-            return Application.Current.Dispatcher.Invoke(() =>
-            {
-                var vm = GetMainViewModel();
-                if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
-                bool ok = TryMethod(vm, "AddTextItem", text, frame, layer) || TryCmd(vm, "AddTextItemCommand");
-                return ok ? (object)new { success = true } : new { success = false, error = "コマンドが見つかりません" };
-            });
-        }
-
-        private async Task<object> AddVoiceItem(HttpListenerRequest req)
-        {
-            var b = await ReadBody(req);
-            string text = GetStr(b, "text", "セリフ");
-            int frame = GetInt(b, "frame", 0);
-            int layer = GetInt(b, "layer", 0);
-            string ch = GetStr(b, "character", "ゆっくり霊夢");
-
-            // UIスレッドでキャラ・パラメータ取得
-            var (targetChar, paramType, paramObj, mainModel, errMsg) = Application.Current.Dispatcher.Invoke(() =>
-            {
-                var vm = GetMainViewModel();
-                if (vm == null) return (null, null, null, null, "MainViewModel取得失敗");
-                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
-                if (tvm == null) return (null, null, null, null, "TimelineVM取得失敗");
-
-                // キャラクター検索
-                var charsEnum = GetPropEnum(tvm, "Characters");
-                object? targetChar = null;
-                string searchName = ch.Replace("ゆっくり", "").Trim();
-                if (charsEnum != null)
-                    foreach (var c in charsEnum)
-                    { string? n = null; try { n = c.GetType().GetProperty("Name")?.GetValue(c)?.ToString(); } catch { } if (n != null && n.Contains(searchName)) { targetChar = c; break; } }
-                if (targetChar == null) return (null, null, null, null, "キャラが見つかりません:" + ch);
-
-                // AddVoiceItemCommandParameter 生成
-                var paramType = AppDomain.CurrentDomain.GetAssemblies()
-                    .SelectMany(a => { try { return a.GetTypes(); } catch { return System.Array.Empty<Type>(); } })
-                    .FirstOrDefault(t => t.FullName == "YukkuriMovieMaker.ViewModels.CommandParameter.AddVoiceItemCommandParameter");
-                if (paramType == null) return (null, null, null, null, "AddVoiceItemCommandParameter型が見つかりません");
-
-                // decorations: IEnumerable<TextDecoration> の空配列を作る
-                var decoRP = tvm.GetType().GetProperty("Decorations")?.GetValue(tvm);
-                var decoVal = decoRP?.GetType().GetProperty("Value")?.GetValue(decoRP);
-                if (decoVal == null)
-                {
-                    // TextDecoration 型を探して空配列を生成
-                    var textDecoType = AppDomain.CurrentDomain.GetAssemblies()
-                        .SelectMany(a => { try { return a.GetTypes(); } catch { return System.Array.Empty<Type>(); } })
-                        .FirstOrDefault(t => t.Name == "TextDecoration" && t.Namespace?.Contains("YukkuriMovieMaker") == true);
-                    decoVal = textDecoType != null
-                        ? System.Array.CreateInstance(textDecoType, 0)
-                        : (object)System.Array.Empty<object>();
-                }
-
-                object? paramObj = null;
-                string paramErr = "";
-                try { paramObj = Activator.CreateInstance(paramType, new object?[] { frame, layer, targetChar, text, decoVal }); }
-                catch (Exception ex) { paramErr = ex.InnerException?.Message ?? ex.Message; }
-                if (paramObj == null)
-                {
-                    // コンストラクタ情報とdecoValの型をデバッグ出力
-                    var ctors = paramType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                        .Select(c => string.Join(",", c.GetParameters().Select(p => p.ParameterType.FullName + " " + p.Name))).ToArray();
-                    return (null, null, null, null, $"Param生成失敗: {paramErr} | decoType={decoVal?.GetType().FullName} | ctors={string.Join(";", ctors)}");
-                }
-
-                // MainModel 取得
-                object? mainModel = null;
-                foreach (var f in vm.GetType().GetFields(BindingFlags.NonPublic | BindingFlags.Instance))
-                    if (f.FieldType.Name.Contains("MainModel")) { mainModel = f.GetValue(vm); break; }
-                if (mainModel == null)
-                    foreach (var p in vm.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-                        if (p.PropertyType.Name.Contains("MainModel")) { try { mainModel = p.GetValue(vm); } catch { } if (mainModel != null) break; }
-
-                return (targetChar, paramType, paramObj, mainModel, "");
-            });
-
-            if (errMsg != "") return new { success = false, error = errMsg };
-            if (mainModel == null) return new { success = false, error = "MainModel取得失敗" };
-
-            // MainModel.AddVoiceItemAsync(int frame, int layer, Character character, string serif, IEnumerable<TextDecoration> decorations)
-            try
-            {
-                var addMethod = mainModel.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                    .FirstOrDefault(m => m.Name == "AddVoiceItemAsync" && m.GetParameters().Length == 5);
-
-                if (addMethod == null)
-                    return new { success = false, error = "AddVoiceItemAsync(5args)見つからず" };
-
-                // TextDecoration の空配列
-                var textDecoType = AppDomain.CurrentDomain.GetAssemblies()
-                    .SelectMany(a => { try { return a.GetTypes(); } catch { return System.Array.Empty<Type>(); } })
-                    .FirstOrDefault(t => t.Name == "TextDecoration" && t.Namespace?.Contains("YukkuriMovieMaker") == true);
-                var emptyDecos = textDecoType != null
-                    ? (object)System.Array.CreateInstance(textDecoType, 0)
-                    : System.Array.Empty<object>();
-
-                var task = Application.Current.Dispatcher.Invoke(() =>
-                    addMethod.Invoke(mainModel, new object?[] { frame, layer, targetChar, text, emptyDecos }) as System.Threading.Tasks.Task);
-                if (task != null) await task;
-
-                // ── 追加された VoiceItem の実際の Length を取得する ──
-                // 音声合成完了を待ち、タイムラインを走査して frame+layer が一致するアイテムの長さを得る。
-                int actualLength = -1;
-                int? actualFrame = null;
-                for (int attempt = 0; attempt < 10 && actualLength < 0; attempt++)
-                {
-                    Start_SleepMs(100);
-                    actualLength = Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        var vm2 = GetMainViewModel();
-                        var tvm2 = vm2 != null ? GetPropObj(vm2, "ActiveTimelineViewModel") : null;
-                        var items2 = tvm2 != null ? GetPropEnum(tvm2, "Items") : null;
-                        if (items2 == null) return -1;
-                        foreach (var iv in items2)
-                        {
-                            var (f2, l2, len2, _, _, _) = ReadItemInfo(iv);
-                            if (f2 == frame && l2 == layer && len2 > 0) { actualFrame = f2; return len2; }
-                        }
-                        return -1;
-                    });
-                }
-
-                return new
-                {
-                    success = true,
-                    character = ch,
-                    text,
-                    frame,
-                    layer,
-                    // 実測した長さ（フレーム数）。取得できなければ -1。次のアイテム配置に利用する。
-                    length = actualLength,
-                    endFrame = actualLength > 0 ? frame + actualLength : (int?)null
-                };
-            }
-            catch (Exception ex)
-            {
-                return new { success = false, error = ex.InnerException?.Message ?? ex.Message };
-            }
-        }
-
         private object ExecCommand(string name)
         {
             return Application.Current.Dispatcher.Invoke(() =>
@@ -1430,6 +1301,9 @@ namespace YMM4McpPlugin
             }
             if (string.IsNullOrEmpty(name)) return new { success = false, error = "name パラメータが必要です" };
 
+            if (!_allowAdvanced && !((target == "Main" && (name == "UndoCommand" || name == "RedoCommand")) ||
+                (target == "ActiveTimeline" && (name == "SplitItemCommand" || name == "AlignItemsCommand"))))
+                return new { success = false, error_code = "ADVANCED_DISABLED", error = "This command requires advanced APIs" };
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var obj = ResolveTarget(target);
@@ -2276,10 +2150,20 @@ namespace YMM4McpPlugin
 
         private static async Task<Dictionary<string, JsonElement>> ReadBody(HttpListenerRequest req)
         {
-            if (req.ContentLength64 <= 0) return new();
-            using var r = new System.IO.StreamReader(req.InputStream, Encoding.UTF8);
-            var body = await r.ReadToEndAsync();
-            return string.IsNullOrWhiteSpace(body) ? new() : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body) ?? new();
+            const int maxBytes = 1024 * 1024;
+            if (req.ContentLength64 > maxBytes) throw new ArgumentException("Request body exceeds 1 MiB");
+            using var buffer = new MemoryStream();
+            var chunk = new byte[8192];
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            int count;
+            while ((count = await req.InputStream.ReadAsync(chunk.AsMemory(), deadline.Token)) > 0)
+            {
+                if (buffer.Length + count > maxBytes) throw new ArgumentException("Request body exceeds 1 MiB");
+                buffer.Write(chunk, 0, count);
+            }
+            if (buffer.Length == 0) return new();
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(buffer.ToArray())
+                ?? throw new ArgumentException("JSON object required");
         }
 
         private static string GetStr(Dictionary<string, JsonElement> d, string k, string def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? def : def;
