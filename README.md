@@ -127,7 +127,7 @@ pip install -r requirements.txt
 | エンドポイント | 説明 |
 |---|---|
 | `GET  /api/selection` | 現在UIで選択中のアイテム（座標・レイヤー・フレーム・長さ）＋再生位置を取得 |
-| `POST /api/items/select` | frame+layer指定でアイテムを選択（clear=trueで全解除） |
+| `POST /api/items/select` | `item_id`（推奨）またはframe+layer指定でアイテムを選択（clear=trueで全解除） |
 | `POST /api/timeline/resolve-overlaps` | レイヤー単位で重なりを解消（gapで最小すき間指定） |
 | `POST /api/timeline/shift` | fromFrame以降のアイテムをdeltaフレーム一括シフト |
 | `GET  /api/items/effects` | 指定アイテムの全エフェクトとパラメータ現在値を取得 |
@@ -136,6 +136,26 @@ pip install -r requirements.txt
 > **重なり防止の核心**: `POST /api/items/voice`（およびadd_script）は、`AddVoiceItemAsync`完了後に
 > タイムラインを走査して**実際の音声長(`length`/フレーム数)と`endFrame`を取得して返す**ようになりました。
 > add_scriptはこの実長を使って次のセリフ開始位置を決めるため、文字数推定のズレによる重なりが根絶されます。
+
+#### 安定したアイテム参照と競合防止
+
+`GET /api/items` と各追加APIは `item_id`、`revision`、`identity_persistent` を返します。
+`/api/items/prop` と `/api/items/delete` では `item_id` を指定するとframe/layerより優先され、
+さらに `expected_revision` を渡すと、取得後に別操作で変更されたアイテムを誤って上書きしません。
+不一致時は `REVISION_CONFLICT` となるため、最新のitemsを取得してから操作を組み直してください。
+
+```json
+{
+  "item_id": "native:...",
+  "expected_revision": "現在のrevision",
+  "prop": "Length",
+  "value": "120"
+}
+```
+
+YMM4本体がネイティブ識別子を公開するアイテムは再起動後も同じIDになります。
+ネイティブ識別子がない型は実行中のみ安定する `runtime:` IDとなり、`identity_persistent` が `false` になります。
+そのIDは再起動をまたいで保存せず、再接続後に取り直してください。
 
 ### 全機能アクセス用 汎用API ★NEW
 個別エンドポイントで未対応のYMM4内部機能に、リフレクション経由で直接アクセスできます。

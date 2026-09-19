@@ -257,7 +257,7 @@ namespace YMM4McpPlugin
         private object GetCapabilities() => new
         {
             success = true,
-            api_schema_version = 1,
+            api_schema_version = 2,
             plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
             authentication = "X-Ymm4-Token",
             advanced_enabled = _allowAdvanced,
@@ -265,13 +265,15 @@ namespace YMM4McpPlugin
             features = new
             {
                 media_import = true, character_discovery = true, script_dry_run_in_mcp = true,
-                timeline_validation_in_mcp = true, final_video_export = false,
-                persistent_item_ids = false, resumable_jobs = false, transactions = false,
-                keyframe_api = false, automatic_visual_audio_qa = false
+                timeline_validation_in_mcp = true, stable_item_ids = true, optimistic_concurrency = true,
+                persistent_item_ids = "native_when_available", final_video_export = false,
+                resumable_jobs = false, transactions = false, keyframe_api = false,
+                automatic_visual_audio_qa = false
             },
             limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
                 "Serialized API writes do not lock manual UI edits.", "A timed-out operation may continue; inspect state before retrying.",
-                "Voice parameters are inherited from registered characters; per-request engine/style overrides are not implemented." }
+                "Voice parameters are inherited from registered characters; per-request engine/style overrides are not implemented.",
+                "Items without a native YMM4 identifier receive runtime-only IDs; check identity_persistent before storing an ID across restarts." }
         };
 
         private object GetProjectInfo()
@@ -302,16 +304,19 @@ namespace YMM4McpPlugin
                 {
                     foreach (var iv in rawItems)
                     {
-                        var item = GetPropObj(iv, "Item") ?? iv;
+                        var info = ReadItemInfo(iv);
+                        var identity = GetItemIdentity(info.item);
                         items.Add(new
                         {
-                            layer = GetPropObj(item, "Layer") ?? GetPropObj(iv, "Layer"),
-                            frame = GetPropObj(item, "Frame") ?? GetPropObj(iv, "Frame"),
-                            length = GetPropObj(item, "Length") ?? GetPropObj(iv, "Length"),
-                            type = item.GetType().Name,
-                            text = GetPropObj(item, "Serif") ?? GetPropObj(item, "Text")
-                                  ?? GetPropObj(item, "FilePath") ?? GetPropObj(item, "Name")
-                                  ?? GetPropObj(iv, "Serif") ?? GetPropObj(iv, "Text") ?? GetPropObj(iv, "DisplayName"),
+                            item_id = identity.id,
+                            revision = GetItemRevision(info.item),
+                            identity_persistent = identity.persistent,
+                            layer = info.layer,
+                            frame = info.frame,
+                            length = info.length,
+                            endFrame = (long)info.frame + info.length,
+                            type = info.type,
+                            text = info.text,
                         });
                     }
                 }
@@ -454,8 +459,20 @@ namespace YMM4McpPlugin
                     }
                     catch { }
                     if (!isSel) continue;
-                    var (frame, layer, length, type, text, _) = ReadItemInfo(iv);
-                    selected.Add(new { frame, layer, length, endFrame = frame + length, type, text });
+                    var (frame, layer, length, type, text, item) = ReadItemInfo(iv);
+                    var identity = GetItemIdentity(item);
+                    selected.Add(new
+                    {
+                        item_id = identity.id,
+                        revision = GetItemRevision(item),
+                        identity_persistent = identity.persistent,
+                        frame,
+                        layer,
+                        length,
+                        endFrame = (long)frame + length,
+                        type,
+                        text
+                    });
                 }
                 // 現在の再生位置も付加
                 object? playhead = null;
@@ -470,6 +487,7 @@ namespace YMM4McpPlugin
             var b = await ReadBody(req);
             int targetFrame = GetInt(b, "frame", -1);
             int targetLayer = GetInt(b, "layer", -1);
+            string itemId = GetStr(b, "item_id", "");
             bool clear = b.TryGetValue("clear", out var ce) && ce.ValueKind == JsonValueKind.True;
 
             return Application.Current.Dispatcher.Invoke(() =>
@@ -481,12 +499,21 @@ namespace YMM4McpPlugin
                 var rawItems = GetPropEnum(tvm, "Items");
                 if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
 
+                object? idTarget = null;
+                if (!clear && itemId.Length > 0)
+                {
+                    idTarget = FindItemById(rawItems, itemId, out bool ambiguous);
+                    if (ambiguous) return Failure("ITEM_ID_AMBIGUOUS", "item_id が複数のアイテムに一致しました");
+                    if (idTarget == null) return Failure("ITEM_NOT_FOUND", "item_id に一致するアイテムがありません");
+                }
+
                 int changed = 0;
                 foreach (var iv in rawItems)
                 {
-                    var (frame, layer, _, _, _, _) = ReadItemInfo(iv);
+                    var (frame, layer, _, _, _, item) = ReadItemInfo(iv);
                     bool shouldSelect;
                     if (clear) shouldSelect = false;
+                    else if (idTarget != null) shouldSelect = ReferenceEquals(item, idTarget);
                     else shouldSelect = (targetFrame < 0 || frame == targetFrame) && (targetLayer < 0 || layer == targetLayer);
                     // clear時は全解除、それ以外は一致するものを選択
                     if (clear || shouldSelect)
@@ -503,7 +530,7 @@ namespace YMM4McpPlugin
                         catch { }
                     }
                 }
-                return (object)new { success = true, changed, clear };
+                return (object)new { success = true, changed, clear, item_id = itemId.Length > 0 ? itemId : null };
             });
         }
 
@@ -613,6 +640,7 @@ namespace YMM4McpPlugin
             int tf = -1, tl = -1;
             int.TryParse(req.QueryString["frame"], out tf);
             int.TryParse(req.QueryString["layer"], out tl);
+            string itemId = req.QueryString["item_id"] ?? "";
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
@@ -623,12 +651,20 @@ namespace YMM4McpPlugin
                 if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
 
                 object? targetItem = null;
-                foreach (var iv in rawItems)
+                if (itemId.Length > 0)
                 {
-                    var (frame, layer, _, _, _, item) = ReadItemInfo(iv);
-                    if ((tf < 0 || frame == tf) && (tl < 0 || layer == tl)) { targetItem = item; break; }
+                    targetItem = FindItemById(rawItems, itemId, out bool ambiguous);
+                    if (ambiguous) return Failure("ITEM_ID_AMBIGUOUS", "item_id が複数のアイテムに一致しました");
                 }
-                if (targetItem == null) return (object)new { success = false, error = $"アイテム未発見 frame={tf} layer={tl}" };
+                else
+                {
+                    foreach (var iv in rawItems)
+                    {
+                        var (frame, layer, _, _, _, item) = ReadItemInfo(iv);
+                        if ((tf < 0 || frame == tf) && (tl < 0 || layer == tl)) { targetItem = item; break; }
+                    }
+                }
+                if (targetItem == null) return Failure("ITEM_NOT_FOUND", itemId.Length > 0 ? "item_id に一致するアイテムがありません" : $"アイテム未発見 frame={tf} layer={tl}");
 
                 var result = new Dictionary<string, object>();
                 foreach (var collName in new[] { "VideoEffects", "AudioEffects", "Effects" })
@@ -651,7 +687,19 @@ namespace YMM4McpPlugin
                     }
                     if (effects.Count > 0) result[collName] = effects;
                 }
-                return (object)new { success = true, frame = tf, layer = tl, itemType = targetItem.GetType().Name, effects = result };
+                var identity = GetItemIdentity(targetItem);
+                var info = ReadItemInfo(targetItem);
+                return (object)new
+                {
+                    success = true,
+                    item_id = identity.id,
+                    revision = GetItemRevision(targetItem),
+                    identity_persistent = identity.persistent,
+                    frame = info.frame,
+                    layer = info.layer,
+                    itemType = targetItem.GetType().Name,
+                    effects = result
+                };
             });
         }
 
@@ -705,19 +753,41 @@ namespace YMM4McpPlugin
         {
             var b = await ReadBody(req);
             int tf = GetInt(b, "frame", 0); int tl = GetInt(b, "layer", 0);
+            string itemId = GetStr(b, "item_id", "");
+            string expectedRevision = GetStr(b, "expected_revision", "");
             string pName = GetStr(b, "prop", ""); string pVal = GetStr(b, "value", "");
             return Application.Current.Dispatcher.Invoke(() =>
             {
-                var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
-                var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
-                var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
+                var vm = GetMainViewModel(); if (vm == null) return Failure("NO_MAIN_VIEW_MODEL", "VM失敗");
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return Failure("NO_TIMELINE", "TVM失敗");
+                var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return Failure("ITEMS_UNAVAILABLE", "Items失敗");
                 object? targetItem = null;
-                foreach (var iv in rawItems) { var item = GetPropObj(iv, "Item") ?? iv; try { int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl) { targetItem = item; break; } } catch { } }
-                if (targetItem == null) return (object)new { success = false, error = $"アイテム未発見 f={tf} l={tl}" };
+                if (itemId.Length > 0)
+                {
+                    targetItem = FindItemById(rawItems, itemId, out bool ambiguous);
+                    if (ambiguous) return Failure("ITEM_ID_AMBIGUOUS", "item_id が複数のアイテムに一致しました");
+                }
+                else
+                {
+                    foreach (var iv in rawItems)
+                    {
+                        var (frame, layer, _, _, _, item) = ReadItemInfo(iv);
+                        if (frame == tf && layer == tl) { targetItem = item; break; }
+                    }
+                }
+                if (targetItem == null) return Failure("ITEM_NOT_FOUND", itemId.Length > 0 ? "item_id に一致するアイテムがありません" : $"アイテム未発見 f={tf} l={tl}");
+                var conflict = RevisionConflict(targetItem, expectedRevision);
+                if (conflict != null) return conflict;
                 var p = targetItem.GetType().GetProperty(pName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (p == null) return (object)new { success = false, error = $"プロパティ'{pName}'なし" };
-                try { p.SetValue(targetItem, Convert.ChangeType(pVal, p.PropertyType)); return (object)new { success = true, prop = pName, value = pVal }; }
-                catch (Exception ex) { return (object)new { success = false, error = ex.Message }; }
+                if (p == null || !p.CanWrite) return Failure("PROPERTY_NOT_WRITABLE", $"プロパティ'{pName}'を変更できません");
+                try
+                {
+                    p.SetValue(targetItem, Convert.ChangeType(pVal, p.PropertyType));
+                    MarkItemChanged(targetItem);
+                    var identity = GetItemIdentity(targetItem);
+                    return (object)new { success = true, item_id = identity.id, revision = GetItemRevision(targetItem), identity_persistent = identity.persistent, prop = pName, value = pVal };
+                }
+                catch (Exception ex) { return Failure("PROPERTY_SET_FAILED", ex.InnerException?.Message ?? ex.Message); }
             });
         }
 
@@ -741,6 +811,8 @@ namespace YMM4McpPlugin
                 layers = le.EnumerateArray().Select(x => x.GetInt32()).ToArray();
             int targetFrame = GetInt(b, "frame", -1);
             int targetLayer = GetInt(b, "layer", -1);
+            string itemId = GetStr(b, "item_id", "");
+            string expectedRevision = GetStr(b, "expected_revision", "");
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -748,19 +820,25 @@ namespace YMM4McpPlugin
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
                 var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
 
-                // 削除対象のItemオブジェクトを収集
+                // item_id を第一指定として削除対象のItemオブジェクトを収集
                 var toRemove = new List<object>();
-                foreach (var iv in rawItems)
+                if (itemId.Length > 0)
                 {
-                    var item = GetPropObj(iv, "Item") ?? iv;
-                    try
+                    var target = FindItemById(rawItems, itemId, out bool ambiguous);
+                    if (ambiguous) return Failure("ITEM_ID_AMBIGUOUS", "item_id が複数のアイテムに一致しました");
+                    if (target == null) return Failure("ITEM_NOT_FOUND", "item_id に一致するアイテムがありません");
+                    var conflict = RevisionConflict(target, expectedRevision);
+                    if (conflict != null) return conflict;
+                    toRemove.Add(target);
+                }
+                else
+                {
+                    foreach (var iv in rawItems)
                     {
-                        int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1);
-                        int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1);
-                        if (layers != null && layers.Contains(l2)) toRemove.Add(item);
-                        else if (targetFrame >= 0 && targetLayer >= 0 && f2 == targetFrame && l2 == targetLayer) toRemove.Add(item);
+                        var (frame, layer, _, _, _, item) = ReadItemInfo(iv);
+                        if (layers != null && layers.Contains(layer)) toRemove.Add(item);
+                        else if (targetFrame >= 0 && targetLayer >= 0 && frame == targetFrame && layer == targetLayer) toRemove.Add(item);
                     }
-                    catch { }
                 }
                 if (toRemove.Count == 0) return (object)new { success = true, removed = 0, note = "対象アイテムなし" };
 
@@ -783,8 +861,9 @@ namespace YMM4McpPlugin
                         for (int i = 0; i < toRemove.Count; i++) arr.SetValue(toRemove[i], i);
                     }
                     else { arr = toRemove.ToArray(); }
+                    var removedIds = toRemove.Select(item => GetItemIdentity(item).id).ToArray();
                     deleteMethod.Invoke(timelineObj, new object[] { arr });
-                    return (object)new { success = true, removed = toRemove.Count };
+                    return (object)new { success = true, removed = toRemove.Count, item_ids = removedIds };
                 }
                 catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
             });
