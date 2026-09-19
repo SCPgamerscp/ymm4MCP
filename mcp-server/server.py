@@ -140,8 +140,9 @@ TOOLS = [
                     )
                 },
                 "dry_run": {"type": "boolean", "description": "add_script: 検証と推定配置のみ。編集・音声合成なし"},
-                "expected": {"type": "array", "items": {"type": "object"}, "description": "validate: 配置後に期待するframe/layer/length/type/text"},
+                "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
+                "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
                 "path": {"type": "string", "description": "video/audio/image: 素材ファイルの絶対パス"},
                 "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
                 "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
@@ -452,7 +453,8 @@ async def dispatch(args: dict) -> Any:
             snapshot = await ymm4_get("/items")
             if snapshot.get("success") is False or "error" in snapshot:
                 return snapshot
-            return validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"))
+            return validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"),
+                                     args.get("include_gaps", True))
 
         case "add_script":
             return await add_script(args)
