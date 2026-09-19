@@ -60,11 +60,21 @@ def plan_script(args):
             "note": "No edits or voice synthesis performed. Actual voice durations may differ."}
 
 
-def validate_timeline(items, expected=None, duration=None):
+def _item_ids(items, indices):
+    """Return only stable IDs present on the affected items."""
+    return [items[index]["item_id"] for index in indices
+            if isinstance(items[index], dict) and isinstance(items[index].get("item_id"), str)]
+
+
+def validate_timeline(items, expected=None, duration=None, include_gaps=True):
+    """Produce machine-readable structural QA without changing the timeline."""
     if not isinstance(items, list):
         raise ValueError("items must be an array")
     if duration is not None:
         integer(duration, "duration", 1)
+    if not isinstance(include_gaps, bool):
+        raise ValueError("include_gaps must be boolean")
+
     problems = []
     layers = {}
     for index, item in enumerate(items):
@@ -76,32 +86,65 @@ def validate_timeline(items, expected=None, duration=None):
             layer = integer(item.get("layer"), "layer")
             end = integer(frame + length, "end frame")
         except ValueError as exc:
-            problems.append({"code": "INVALID_ITEM", "severity": "error", "index": index, "message": str(exc)})
+            ids = _item_ids(items, [index])
+            problems.append({"code": "INVALID_ITEM", "severity": "error", "index": index,
+                             "item_ids": ids, "message": str(exc)})
             continue
         layers.setdefault(layer, []).append((frame, end, index))
         if duration is not None and end > duration:
-            problems.append({"code": "EXCEEDS_DURATION", "severity": "error", "index": index, "end_frame": end})
+            problems.append({"code": "EXCEEDS_DURATION", "severity": "error", "index": index,
+                             "item_ids": _item_ids(items, [index]), "frame_range": [frame, end],
+                             "project_duration": duration,
+                             "suggested_fix": {"action": "edit_item", "sub_action": "property",
+                                               "item_id": item.get("item_id"),
+                                               "prop": "Frame" if frame >= duration else "Length",
+                                               "value": max(0, duration - 1) if frame >= duration else duration - frame}})
+
     for layer, spans in layers.items():
-        end, previous = 0, None
+        active_end = None
+        active_index = None
         for frame, tail, index in sorted(spans):
-            if previous is not None and frame < end:
+            if active_index is not None and frame < active_end:
+                affected = [active_index, index]
                 problems.append({"code": "OVERLAP", "severity": "error", "layer": layer,
-                                 "indices": [previous, index], "start_frame": frame, "end_frame": min(end, tail)})
-            elif frame > end:
+                                 "indices": affected, "item_ids": _item_ids(items, affected),
+                                 "frame_range": [frame, min(active_end, tail)],
+                                 "suggested_fix": {"action": "edit_item", "sub_action": "resolve_overlaps",
+                                                   "layers": [layer]}})
+            elif include_gaps and active_index is not None and frame > active_end:
                 problems.append({"code": "GAP", "severity": "warning", "layer": layer,
-                                 "start_frame": end, "end_frame": frame})
-            if tail > end:
-                end, previous = tail, index
+                                 "indices": [active_index, index],
+                                 "item_ids": _item_ids(items, [active_index, index]),
+                                 "frame_range": [active_end, frame]})
+            if active_end is None or tail > active_end:
+                active_end, active_index = tail, index
+
     if expected is not None:
         if not isinstance(expected, list) or len(expected) > 1000:
             raise ValueError("expected must be an array of at most 1000 item descriptions")
+        supported = {"frame", "layer", "length", "type", "text", "item_id", "revision", "id"}
         for index, wanted in enumerate(expected):
-            if not isinstance(wanted, dict) or not wanted or set(wanted) - {"frame", "layer", "length", "type", "text", "id"}:
+            if not isinstance(wanted, dict) or not wanted or set(wanted) - supported:
                 raise ValueError("expected entries must contain supported nonempty item selectors")
-            matches = [i for i, item in enumerate(items) if isinstance(item, dict) and all(item.get(k) == v for k, v in wanted.items())]
+            selector = dict(wanted)
+            legacy_id = selector.pop("id", None)
+            if legacy_id is not None:
+                if "item_id" in selector and selector["item_id"] != legacy_id:
+                    raise ValueError("expected id and item_id must not conflict")
+                selector["item_id"] = legacy_id
+            matches = [i for i, item in enumerate(items)
+                       if isinstance(item, dict) and all(item.get(k) == v for k, v in selector.items())]
             if len(matches) != 1:
                 problems.append({"code": "EXPECTED_NOT_FOUND" if not matches else "EXPECTED_AMBIGUOUS",
-                                 "severity": "error", "expected_index": index, "matches": matches})
-    return {"success": True, "valid": not any(p["severity"] == "error" for p in problems),
-            "item_count": len(items), "problems": problems,
-            "scope": "Frame ranges, same-layer overlaps/gaps and explicit expected items only; visual/audio quality is not checked."}
+                                 "severity": "error", "expected_index": index,
+                                 "expected": selector, "matches": matches,
+                                 "item_ids": _item_ids(items, matches)})
+
+    error_count = sum(problem["severity"] == "error" for problem in problems)
+    warning_count = sum(problem["severity"] == "warning" for problem in problems)
+    return {"success": True, "passed": error_count == 0, "valid": error_count == 0,
+            "score": max(0, 100 - error_count * 20 - warning_count * 5),
+            "item_count": len(items), "issue_count": len(problems),
+            "summary": {"errors": error_count, "warnings": warning_count},
+            "issues": problems, "problems": problems,
+            "scope": "Frame ranges, same-layer overlaps/internal gaps and explicit expected items only; visual/audio quality is not checked."}

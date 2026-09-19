@@ -219,6 +219,25 @@ lines=[
 # 戻り値: total_frames（次のシーンのstart_frame目安）
 ```
 
+**構造化タイムラインQA：**
+
+`action="validate"` はタイムラインを変更せず、同一レイヤー内の重複・内部の空白・プロジェクト尺超過・期待アイテムの有無を検査します。
+期待値には `item_id` と `revision` を指定できるため、移動後のアイテムや取得後に変更されたアイテムも正確に照合できます。
+
+```python
+action="validate",
+duration=1800,
+include_gaps=False,  # 空白を意図したレイヤーでは警告を省略
+expected=[
+    {"item_id": "native:...", "revision": "..."},
+]
+```
+
+結果は `passed`、0〜100の `score`、エラー・警告件数の `summary`、および `issues` を返します。
+各Issueには可能な範囲で `frame_range`、`item_ids`、`suggested_fix` が含まれます。`problems` は既存クライアント互換のための `issues` の別名です。
+先頭フレームより前の空白は警告せず、アイテム同士の内部空白だけを `GAP` として報告します。
+映像の見切れや音量などはこの検査の対象外なので、`preview` / `watch` と組み合わせて確認してください。
+
 ---
 
 ### `ymm4_preview`（映像・音声確認系）
