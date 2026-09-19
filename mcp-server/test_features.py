@@ -154,6 +154,26 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                 await server.dispatch({"action": "add_item", "sub_action": "image", "path": "C:/a.png"})
             post.assert_not_awaited()
 
+    async def test_identity_and_revision_are_forwarded_for_safe_edits(self):
+        identity = "native:item/with spaces"
+        revision = "abc123"
+        cases = [
+            ("property", "/items/prop", {"frame": 0, "layer": 0, "prop": "Length", "value": "90", "item_id": identity, "expected_revision": revision}),
+            ("delete", "/items/delete", {"item_id": identity, "expected_revision": revision}),
+            ("select", "/items/select", {"item_id": identity}),
+        ]
+        for sub_action, path, expected in cases:
+            args = {"action": "edit_item", "sub_action": sub_action, "item_id": identity}
+            if sub_action == "property": args.update(prop="Length", value=90)
+            if sub_action != "select": args["expected_revision"] = revision
+            with self.subTest(sub_action=sub_action), patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
+                await server.dispatch(args)
+                post.assert_awaited_once_with(path, expected)
+
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"items": []})) as get:
+            await server.dispatch({"action": "get_info", "sub_action": "effects", "item_id": identity})
+            get.assert_awaited_once_with("/items/effects?item_id=native%3Aitem%2Fwith%20spaces")
+
     async def test_advanced_hidden_and_rejected_unless_enabled(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertNotIn("ymm4_advanced", [t.name for t in (await server.list_tools()).tools])

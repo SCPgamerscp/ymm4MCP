@@ -4,6 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,8 +17,74 @@ namespace YMM4McpPlugin
     public partial class McpHttpServer
     {
         private readonly SemaphoreSlim _editGate = new(1, 1);
+        private static readonly ConditionalWeakTable<object, RuntimeItemIdentity> RuntimeItemIdentities = new();
+        private static readonly ConditionalWeakTable<object, RuntimeItemRevision> RuntimeItemRevisions = new();
+
+        private sealed class RuntimeItemIdentity
+        {
+            public string Value { get; } = "runtime:" + Guid.NewGuid().ToString("N");
+        }
+
+        private sealed class RuntimeItemRevision
+        {
+            public long Generation;
+        }
+
         private static object Failure(string code, string message, bool outcomeUnknown = false)
             => new { success = false, error_code = code, error = message, retryable = false, outcome_unknown = outcomeUnknown };
+
+        private static (string id, bool persistent) GetItemIdentity(object item)
+        {
+            foreach (string name in new[] { "Id", "ID", "ItemId", "ItemID", "Guid", "ItemGuid" })
+            {
+                object? value = GetPropObj(item, name);
+                string text = value?.ToString()?.Trim() ?? "";
+                if (text.Length == 0 || text == Guid.Empty.ToString()) continue;
+                string source = item.GetType().FullName + ":" + name + ":" + text;
+                return ("native:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant(), true);
+            }
+            return (RuntimeItemIdentities.GetValue(item, _ => new RuntimeItemIdentity()).Value, false);
+        }
+
+        private static string GetItemRevision(object item)
+        {
+            string Snapshot(string name)
+            {
+                try { return GetPropObj(item, name)?.ToString() ?? ""; }
+                catch { return ""; }
+            }
+            string state = string.Join("\u001f", new[]
+            {
+                item.GetType().FullName ?? item.GetType().Name,
+                Snapshot("Frame"), Snapshot("Layer"), Snapshot("Length"), Snapshot("Serif"),
+                Snapshot("Text"), Snapshot("FilePath"), Snapshot("Name"), Snapshot("IsEnabled"),
+                RuntimeItemRevisions.GetValue(item, _ => new RuntimeItemRevision()).Generation.ToString()
+            });
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(state))).ToLowerInvariant();
+        }
+
+        private static void MarkItemChanged(object item)
+            => RuntimeItemRevisions.GetValue(item, _ => new RuntimeItemRevision()).Generation++;
+
+        private static object? FindItemById(System.Collections.IEnumerable rawItems, string itemId, out bool ambiguous)
+        {
+            var matches = rawItems.Cast<object>()
+                .Select(iv => GetPropObj(iv, "Item") ?? iv)
+                .Where(item => GetItemIdentity(item).id == itemId)
+                .Take(2)
+                .ToArray();
+            ambiguous = matches.Length > 1;
+            return matches.Length == 1 ? matches[0] : null;
+        }
+
+        private static object? RevisionConflict(object item, string expectedRevision)
+        {
+            if (string.IsNullOrWhiteSpace(expectedRevision)) return null;
+            string actual = GetItemRevision(item);
+            return string.Equals(actual, expectedRevision, StringComparison.Ordinal)
+                ? null
+                : Failure("REVISION_CONFLICT", "アイテムは取得後に変更されています。最新状態を取得してから再実行してください");
+        }
 
         private static object[] TimelineObjects(object timeline)
         {
@@ -146,6 +215,7 @@ namespace YMM4McpPlugin
         private object DescribeAddedItem(object item, string? warning, bool verified, int requestedFrame, int requestedLayer, string? character)
         {
             var info = ReadItemInfo(item);
+            var identity = GetItemIdentity(info.item);
             long end = (long)info.frame + Math.Max(info.length, 0);
             if (end > int.MaxValue) warning = JoinWarning(warning, "endFrame が Int32 範囲を超えています");
             if (info.length <= 0) warning = JoinWarning(warning, "追加アイテムの実長が未確定です。再追加せず items で確認してください");
@@ -154,6 +224,9 @@ namespace YMM4McpPlugin
                 success = true,
                 verified,
                 warning,
+                item_id = identity.id,
+                revision = GetItemRevision(info.item),
+                identity_persistent = identity.persistent,
                 type = info.type,
                 frame = info.frame,
                 layer = info.layer,

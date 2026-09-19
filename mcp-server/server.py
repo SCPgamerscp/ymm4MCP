@@ -23,6 +23,7 @@ import json
 import os
 import sys
 from typing import Any
+from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import integer, plan_script, validate_timeline
@@ -152,6 +153,8 @@ TOOLS = [
                 "frame": {"type": "integer"},
                 "layer": {"type": "integer"},
                 "length": {"type": "integer"},
+                "item_id": {"type": "string", "description": "items/add_itemで返された安定ID。property/delete/selectではframe+layerより優先"},
+                "expected_revision": {"type": "string", "description": "property/delete時の楽観ロック。最新itemsのrevisionと不一致なら変更しない"},
                 "prop": {"type": "string"},
                 "value": {"type": "string"},
                 "effect": {"type": "string"},
@@ -347,6 +350,7 @@ async def dispatch(args: dict) -> Any:
                 case "position": return await ymm4_get("/preview/position")
                 case "effects":
                     q = []
+                    if "item_id" in args: q.append(f"item_id={quote(str(args['item_id']), safe='')}")
                     if "frame" in args: q.append(f"frame={args['frame']}")
                     if "layer" in args: q.append(f"layer={args['layer']}")
                     qs = ("?" + "&".join(q)) if q else ""
@@ -397,12 +401,15 @@ async def dispatch(args: dict) -> Any:
                     if "layer" in args: payload["layer"] = args["layer"]
                     return await ymm4_post("/items/face/param", payload)
                 case "property":
-                    return await ymm4_post("/items/prop", {
-                        "frame": args.get("frame", 0), 
-                        "layer": args.get("layer", 0), 
-                        "prop": args.get("prop", ""), 
-                        "value": str(args.get("value", ""))
-                    })
+                    payload = {
+                        "frame": args.get("frame", 0),
+                        "layer": args.get("layer", 0),
+                        "prop": args.get("prop", ""),
+                        "value": str(args.get("value", "")),
+                    }
+                    if "item_id" in args: payload["item_id"] = args["item_id"]
+                    if "expected_revision" in args: payload["expected_revision"] = args["expected_revision"]
+                    return await ymm4_post("/items/prop", payload)
                 case "effect":
                     return await ymm4_post("/items/effect", {
                         "frame": args.get("frame", 0), 
@@ -411,6 +418,8 @@ async def dispatch(args: dict) -> Any:
                     })
                 case "delete":
                     payload = {}
+                    if "item_id" in args: payload["item_id"] = args["item_id"]
+                    if "expected_revision" in args: payload["expected_revision"] = args["expected_revision"]
                     if "frame" in args and args["frame"] != -1: payload["frame"] = args["frame"]
                     if "layer" in args and args["layer"] != -1: payload["layer"] = args["layer"]
                     if "layers" in args: payload["layers"] = args["layers"]
@@ -423,6 +432,7 @@ async def dispatch(args: dict) -> Any:
                     return await ymm4_post("/items/move", payload)
                 case "select":
                     payload = {}
+                    if "item_id" in args: payload["item_id"] = args["item_id"]
                     if "frame" in args: payload["frame"] = args["frame"]
                     if "layer" in args: payload["layer"] = args["layer"]
                     if args.get("clear"): payload["clear"] = True
