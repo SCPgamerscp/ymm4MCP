@@ -78,29 +78,58 @@ class PlanningTests(unittest.TestCase):
         self.assertTrue(result["estimated"])
         self.assertEqual(result["added"], 0)
 
-    def test_validation_finds_nested_overlaps_gaps_and_expected_mismatch(self):
-        items = [{"frame": 0, "layer": 0, "length": 100}, {"frame": 5, "layer": 0, "length": 10},
-                 {"frame": 20, "layer": 0, "length": 10}, {"frame": 110, "layer": 0, "length": 20}]
-        result = editing.validate_timeline(items, expected=[{"frame": 777}], duration=120)
-        codes = [p["code"] for p in result["problems"]]
+    def test_validation_returns_structured_qa_with_stable_ids(self):
+        items = [
+            {"item_id": "native:a", "revision": "r1", "frame": 10, "layer": 0, "length": 100},
+            {"item_id": "native:b", "revision": "r2", "frame": 15, "layer": 0, "length": 10},
+            {"item_id": "native:c", "revision": "r3", "frame": 30, "layer": 0, "length": 10},
+            {"item_id": "native:d", "revision": "r4", "frame": 120, "layer": 0, "length": 20},
+        ]
+        result = editing.validate_timeline(items, expected=[{"item_id": "missing"}], duration=130)
+        codes = [issue["code"] for issue in result["issues"]]
         self.assertEqual(codes.count("OVERLAP"), 2)
         self.assertIn("GAP", codes)
         self.assertIn("EXCEEDS_DURATION", codes)
         self.assertIn("EXPECTED_NOT_FOUND", codes)
+        overlap = next(issue for issue in result["issues"] if issue["code"] == "OVERLAP")
+        self.assertEqual(overlap["item_ids"], ["native:a", "native:b"])
+        self.assertEqual(overlap["frame_range"], [15, 25])
+        self.assertEqual(result["summary"], {"errors": 4, "warnings": 1})
+        self.assertEqual(result["issue_count"], 5)
+        self.assertEqual(result["problems"], result["issues"])
+        self.assertFalse(result["passed"])
         self.assertFalse(result["valid"])
 
-    def test_different_layers_and_touching_edges_are_valid(self):
-        items = [{"frame": 0, "layer": 0, "length": 10}, {"frame": 10, "layer": 0, "length": 10},
-                 {"frame": 0, "layer": 1, "length": 20}]
-        result = editing.validate_timeline(items, [{"frame": 10, "layer": 0}], duration=20)
-        self.assertTrue(result["valid"])
-        self.assertEqual(result["problems"], [])
+    def test_different_layers_touching_edges_and_leading_space_are_valid(self):
+        items = [{"frame": 10, "layer": 0, "length": 10}, {"frame": 20, "layer": 0, "length": 10},
+                 {"frame": 10, "layer": 1, "length": 20}]
+        result = editing.validate_timeline(items, [{"frame": 20, "layer": 0}], duration=30)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["score"], 100)
+
+    def test_gap_reporting_can_be_disabled(self):
+        items = [{"frame": 0, "layer": 0, "length": 10}, {"frame": 20, "layer": 0, "length": 10}]
+        result = editing.validate_timeline(items, include_gaps=False)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["issues"], [])
+        with self.assertRaisesRegex(ValueError, "include_gaps"):
+            editing.validate_timeline(items, include_gaps="false")
+
+    def test_expected_stable_id_revision_and_legacy_id(self):
+        item = {"item_id": "native:one", "revision": "abc", "frame": 0, "layer": 0, "length": 10}
+        for expected in ([{"item_id": "native:one", "revision": "abc"}], [{"id": "native:one"}]):
+            with self.subTest(expected=expected):
+                self.assertTrue(editing.validate_timeline([item], expected)["passed"])
+        with self.assertRaisesRegex(ValueError, "must not conflict"):
+            editing.validate_timeline([item], [{"id": "one", "item_id": "two"}])
 
     def test_ambiguous_invalid_and_overflow_items(self):
-        item = {"frame": 0, "layer": 0, "length": 10}
-        result = editing.validate_timeline([item, item, {"frame": 2147483647, "layer": 2, "length": 1}], [item])
+        item = {"item_id": "runtime:a", "frame": 0, "layer": 0, "length": 10}
+        result = editing.validate_timeline([item, item, {"item_id": "runtime:b", "frame": 2147483647, "layer": 2, "length": 1}], [item])
         self.assertIn("EXPECTED_AMBIGUOUS", [p["code"] for p in result["problems"]])
-        self.assertIn("INVALID_ITEM", [p["code"] for p in result["problems"]])
+        invalid = next(p for p in result["issues"] if p["code"] == "INVALID_ITEM")
+        self.assertEqual(invalid["item_ids"], ["runtime:b"])
         with self.assertRaises(ValueError):
             editing.validate_timeline([], [{}])
 
@@ -188,6 +217,14 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.isError)
             result = await server.dispatch({"action": "validate"})
             self.assertFalse(result["success"])
+
+    async def test_validate_forwards_gap_option_and_stable_expectations(self):
+        snapshot = {"items": [{"item_id": "native:a", "revision": "r1", "frame": 10, "layer": 0, "length": 5}]}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=snapshot)) as get:
+            result = await server.dispatch({"action": "validate", "include_gaps": False,
+                                            "expected": [{"item_id": "native:a", "revision": "r1"}]})
+        get.assert_awaited_once_with("/items")
+        self.assertTrue(result["passed"])
 
     async def test_skills_are_allowlisted_and_roles_consistent(self):
         for name in mcp_skills.SKILLS:
