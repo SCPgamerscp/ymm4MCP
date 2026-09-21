@@ -402,6 +402,8 @@ async def dispatch(args: dict) -> Any:
                     if "layer" in args: payload["layer"] = args["layer"]
                     return await ymm4_post("/items/face/param", payload)
                 case "property":
+                    if "expected_revision" in args and not args.get("item_id"):
+                        raise ValueError("expected_revision を使う場合は item_id も指定してください")
                     payload = {
                         "frame": args.get("frame", 0),
                         "layer": args.get("layer", 0),
@@ -418,6 +420,8 @@ async def dispatch(args: dict) -> Any:
                         "effect": args.get("effect", "")
                     })
                 case "delete":
+                    if "expected_revision" in args and not args.get("item_id"):
+                        raise ValueError("expected_revision を使う場合は item_id も指定してください")
                     payload = {}
                     if "item_id" in args: payload["item_id"] = args["item_id"]
                     if "expected_revision" in args: payload["expected_revision"] = args["expected_revision"]

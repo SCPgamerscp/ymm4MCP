@@ -21,7 +21,7 @@ YukkuriMovieMaker4をMCP経由で操作し、ゆっくり実況動画を自動�
 
 - YMM4が起動済み
 - YMM4McpPluginが有効（ツール → MCP連携サーバー → 起動）
-- MCPサーバーがport 8765で動作中
+- MCPサーバーがプラグイン設定のポート（既定8765）で動作中
 
 ---
 
@@ -36,13 +36,15 @@ POST /api/project/save
 POST /api/timeline/duration
 ```
 
-### セリフ・スクリプト系
+### セリフ・アイテム編集系
 ```
-POST /api/voice/add
-POST /api/script/add
-POST /api/item/edit
-POST /api/item/delete
+POST /api/items/voice
+POST /api/items/prop
+POST /api/items/delete
+POST /api/items/select
 ```
+
+複数セリフの `add_script` はHTTPエンドポイントではなく、MCP `ymm4_interact` のactionです。
 
 ### 映像確認系
 ```
@@ -79,12 +81,17 @@ lines=[
 # ※ add_scriptは前のセリフ終了直後に次を配置する
 #   シーンごとにstart_frameを指定して複数回呼ぶこと
 
-# アイテム削除
-action="edit_item", sub_action="delete", layer=7, frame=0
+# アイテム一覧から item_id と revision を取得
+items = (action="get_info", sub_action="items")
+
+# アイテム削除（expected_revisionはitem_idと組み合わせる）
+action="edit_item", sub_action="delete",
+item_id="native:...", expected_revision="..."
 
 # プロパティ変更（フレーム移動など）
 action="edit_item", sub_action="property",
-layer=8, frame=186, prop="Frame", value="210"
+item_id="native:...", expected_revision="...",
+prop="Frame", value="210"
 ```
 
 ### ymm4_preview（映像・音声確認系）

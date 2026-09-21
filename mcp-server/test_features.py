@@ -203,6 +203,16 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             await server.dispatch({"action": "get_info", "sub_action": "effects", "item_id": identity})
             get.assert_awaited_once_with("/items/effects?item_id=native%3Aitem%2Fwith%20spaces")
 
+    async def test_revision_requires_item_id_before_http_request(self):
+        for sub_action in ("property", "delete"):
+            args = {"action": "edit_item", "sub_action": sub_action, "expected_revision": "stale"}
+            if sub_action == "property":
+                args.update(prop="Length", value=90, frame=10, layer=2)
+            with self.subTest(sub_action=sub_action), patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                with self.assertRaisesRegex(ValueError, "item_id"):
+                    await server.dispatch(args)
+                post.assert_not_awaited()
+
     async def test_advanced_hidden_and_rejected_unless_enabled(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertNotIn("ymm4_advanced", [t.name for t in (await server.list_tools()).tools])

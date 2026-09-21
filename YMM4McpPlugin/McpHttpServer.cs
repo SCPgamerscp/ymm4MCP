@@ -742,7 +742,8 @@ namespace YMM4McpPlugin
                     var addM = curList?.GetType().GetMethod("Add", BindingFlags.Public | BindingFlags.Instance);
                     if (addM == null) return (object)new { success = false, error = "ImmutableList.Addなし" };
                     veProp.SetValue(targetItem, addM.Invoke(curList, new[] { eObj }));
-                    return (object)new { success = true, effect = eType.FullName };
+                    MarkItemChanged(targetItem);
+                    return (object)new { success = true, effect = eType.FullName, revision = GetItemRevision(targetItem) };
                 }
                 catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
             });
@@ -755,6 +756,8 @@ namespace YMM4McpPlugin
             int tf = GetInt(b, "frame", 0); int tl = GetInt(b, "layer", 0);
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
+            if (expectedRevision.Length > 0 && itemId.Length == 0)
+                return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
             string pName = GetStr(b, "prop", ""); string pVal = GetStr(b, "value", "");
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -813,6 +816,8 @@ namespace YMM4McpPlugin
             int targetLayer = GetInt(b, "layer", -1);
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
+            if (expectedRevision.Length > 0 && itemId.Length == 0)
+                return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -933,7 +938,8 @@ namespace YMM4McpPlugin
                     {
                         effectsProp.SetValue(targetItem, invokeResult);
                     }
-                    return (object)new { success = true, effect = effectType.Name, item = targetItem.GetType().Name, effectsType = effects?.GetType().FullName };
+                    MarkItemChanged(targetItem);
+                    return (object)new { success = true, effect = effectType.Name, item = targetItem.GetType().Name, effectsType = effects?.GetType().FullName, revision = GetItemRevision(targetItem) };
                 }
                 catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
             });
@@ -1040,7 +1046,9 @@ namespace YMM4McpPlugin
                     }
                     results.Add($"{kv.Key}=NOTFOUND");
                 }
-                return (object)new { success = true, results };
+                bool changed = results.Any(result => result.Contains("=OK(", StringComparison.Ordinal));
+                if (changed) MarkItemChanged(targetItem);
+                return (object)new { success = true, changed, revision = GetItemRevision(targetItem), results };
             });
         }
 
@@ -1142,10 +1150,11 @@ namespace YMM4McpPlugin
                 {
                     var newList = addMethod.Invoke(audioEffects, new[] { effInstance });
                     audioEffProp.SetValue(targetItem, newList);
+                    MarkItemChanged(targetItem);
                 }
                 else return (object)new { success = false, error = "Addメソッドが見つかりません", listType = audioEffects.GetType().FullName };
 
-                return (object)new { success = true, effect = effType.FullName };
+                return (object)new { success = true, effect = effType.FullName, revision = GetItemRevision(targetItem) };
             });
         }
 
