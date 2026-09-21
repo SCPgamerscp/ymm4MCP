@@ -51,8 +51,8 @@ ymm4プラグイン/
 
 ```powershell
 cd YMM4McpPlugin
-dotnet build -c Release
-# → %YMM4_PATH%\user\plugin\YMM4McpPlugin\YMM4McpPlugin.dll に自動コピー
+dotnet build -c Release -p:DeployToYMM4=true
+# → %YMM4_PATH%\user\plugin\YMM4McpPlugin\YMM4McpPlugin.dll にコピー
 ```
 
 デバッグ時の手動デプロイ：
@@ -78,7 +78,7 @@ pip install -r requirements.txt
   "mcpServers": {
     "ymm4": {
       "command": "python",
-      "args": ["C:/Users/ecrea/OneDrive/デスクトップ/ymm4プラグイン/mcp-server/server.py"]
+      "args": ["C:/path/to/ymm4MCP/mcp-server/server.py"]
     }
   }
 }
@@ -88,8 +88,10 @@ pip install -r requirements.txt
 
 1. YMM4を起動
 2. ツールメニュー → 「MCP連携サーバー」を開く
-3. **「▶ 起動」** ボタンをクリック
-4. `MCPサーバー起動: http://localhost:8765/` が表示されれば完了
+3. 自動起動が無効なら **「▶ 起動」** ボタンをクリック
+4. `MCPサーバー起動: http://127.0.0.1:8765/` が表示されれば完了
+
+ポートと自動起動はツール画面で変更できます。Python側はプラグインが生成する接続情報を自動で読み取ります。
 
 ---
 
@@ -107,10 +109,10 @@ pip install -r requirements.txt
 ### セリフ・アイテム操作系
 | エンドポイント | 説明 |
 |---|---|
-| `POST /api/voice/add` | VoiceItemを1件追加 |
-| `POST /api/script/add` | 複数セリフを一括追加（文字数から長さ自動計算） |
-| `POST /api/item/edit` | アイテムのプロパティを変更 |
-| `POST /api/item/delete` | アイテムを削除（layer+frame指定） |
+| `POST /api/items/voice` | VoiceItemを1件追加し、実際の長さ・`item_id`・`revision`を返す |
+| MCP `add_script` | 複数セリフを一括追加（HTTPの独立エンドポイントではありません） |
+| `POST /api/items/prop` | `item_id`（推奨）またはframe+layerでプロパティを変更。`expected_revision`対応 |
+| `POST /api/items/delete` | `item_id`（推奨）またはframe+layer/layersで削除。`expected_revision`対応 |
 
 ### 映像確認系
 | エンドポイント | 説明 |
@@ -141,7 +143,8 @@ pip install -r requirements.txt
 
 `GET /api/items` と各追加APIは `item_id`、`revision`、`identity_persistent` を返します。
 `/api/items/prop` と `/api/items/delete` では `item_id` を指定するとframe/layerより優先され、
-さらに `expected_revision` を渡すと、取得後に別操作で変更されたアイテムを誤って上書きしません。
+さらに同じリクエストで `expected_revision` を渡すと、取得後に別操作で変更されたアイテムを誤って上書きしません。
+`expected_revision` は対象を曖昧にしないため `item_id` と必ず組み合わせてください。
 不一致時は `REVISION_CONFLICT` となるため、最新のitemsを取得してから操作を組み直してください。
 
 ```json
@@ -194,10 +197,10 @@ YMM4本体がネイティブ識別子を公開するアイテムは再起動後�
 | `control` | `save` | 保存 |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
-| `edit_item` | `property` | フレーム位置・長さ等を変更 |
-| `edit_item` | `delete` | アイテム削除 |
+| `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
+| `edit_item` | `delete` | `item_id`（推奨）または位置/レイヤーで削除。`expected_revision`対応 |
 | `edit_item` | `move` | ファイル名指定でアイテムを移動 |
-| `edit_item` | `select` | frame+layer指定でアイテムを選択（clearで全解除） |
+| `edit_item` | `select` | `item_id`（推奨）またはframe+layerで選択（clearで全解除） |
 | `edit_item` | `resolve_overlaps` | 重なり解消（gap指定可） |
 | `edit_item` | `shift` | from_frame以降をdeltaフレーム一括シフト |
 | `get_info` | `selection` | 選択中アイテムの詳細取得 |
