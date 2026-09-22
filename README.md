@@ -112,6 +112,8 @@ pip install -r requirements.txt
 | `POST /api/items/voice` | VoiceItemを1件追加し、実際の長さ・`item_id`・`revision`を返す |
 | MCP `add_script` | 複数セリフを一括追加（HTTPの独立エンドポイントではありません） |
 | `POST /api/items/prop` | `item_id`（推奨）またはframe+layerでプロパティを変更。`expected_revision`対応 |
+| `GET  /api/items/keyframes` | Animationプロパティのキーフレーム一覧。`item_id`またはframe+layer、任意で`prop` |
+| `POST /api/items/keyframe` | キーフレームの set / remove / clear。`item_id`+`expected_revision`対応 |
 | `POST /api/items/delete` | `item_id`（推奨）またはframe+layer/layersで削除。`expected_revision`対応 |
 
 ### 映像確認系
@@ -142,7 +144,7 @@ pip install -r requirements.txt
 #### 安定したアイテム参照と競合防止
 
 `GET /api/items` と各追加APIは `item_id`、`revision`、`identity_persistent` を返します。
-`/api/items/prop` と `/api/items/delete` では `item_id` を指定するとframe/layerより優先され、
+`/api/items/prop` と `/api/items/delete` と `/api/items/keyframe` では `item_id` を指定するとframe/layerより優先され、
 さらに同じリクエストで `expected_revision` を渡すと、取得後に別操作で変更されたアイテムを誤って上書きしません。
 `expected_revision` は対象を曖昧にしないため `item_id` と必ず組み合わせてください。
 不一致時は `REVISION_CONFLICT` となるため、最新のitemsを取得してから操作を組み直してください。
@@ -159,6 +161,24 @@ pip install -r requirements.txt
 YMM4本体がネイティブ識別子を公開するアイテムは再起動後も同じIDになります。
 ネイティブ識別子がない型は実行中のみ安定する `runtime:` IDとなり、`identity_persistent` が `false` になります。
 そのIDは再起動をまたいで保存せず、再接続後に取り直してください。
+
+#### キーフレーム
+
+立ち絵や字幕の X / Y / Zoom / Opacity / Volume などを、アイテム開始からの相対フレーム `at` で時間変化させます。
+
+```json
+{
+  "item_id": "native:...",
+  "expected_revision": "現在のrevision",
+  "prop": "X",
+  "action": "set",
+  "at": 0,
+  "value": -400
+}
+```
+
+MCPからは `edit_item` / `keyframe`（`keyframe_action=set|remove|clear`）と `get_info` / `keyframes` で呼びます。
+YMM4内部の Animation API をリフレクションで叩くため、対象バージョンでメソッドが無い場合は `KEYFRAME_METHOD_UNAVAILABLE` になります。そのときは `inspect` で署名を確認してください。
 
 ### 全機能アクセス用 汎用API ★NEW
 個別エンドポイントで未対応のYMM4内部機能に、リフレクション経由で直接アクセスできます。
@@ -198,6 +218,8 @@ YMM4本体がネイティブ識別子を公開するアイテムは再起動後�
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
+| `edit_item` | `keyframe` | Animationキーフレームの set/remove/clear。`at`は相対フレーム |
+| `get_info` | `keyframes` | 指定アイテムのキーフレーム一覧 |
 | `edit_item` | `delete` | `item_id`（推奨）または位置/レイヤーで削除。`expected_revision`対応 |
 | `edit_item` | `move` | ファイル名指定でアイテムを移動 |
 | `edit_item` | `select` | `item_id`（推奨）またはframe+layerで選択（clearで全解除） |
