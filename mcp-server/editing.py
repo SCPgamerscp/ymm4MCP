@@ -11,6 +11,7 @@ def integer(value, name, minimum=0, maximum=MAX_FRAME):
 
 
 def finite_number(value, name):
+    """Return a finite float from a number or numeric string, rejecting booleans."""
     if isinstance(value, bool):
         raise ValueError(f"{name} must be a finite number")
     if isinstance(value, str):

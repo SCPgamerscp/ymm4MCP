@@ -118,6 +118,7 @@ namespace YMM4McpPlugin
                 CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(supplied));
         }
 
+        /// <summary>Authenticates, routes, and writes the JSON response for one API request.</summary>
         private async Task HandleRequest(HttpListenerContext context)
         {
             var req = context.Request;
@@ -257,6 +258,7 @@ namespace YMM4McpPlugin
 
         private object GetStatus() => new { status = "running", version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3), port = Port, timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") };
 
+        /// <summary>Returns the supported API schema, features, item types, and known limitations.</summary>
         private object GetCapabilities() => new
         {
             success = true,
@@ -2277,6 +2279,9 @@ namespace YMM4McpPlugin
             if (v.TryGetInt32(out int result)) return result;
             throw new ArgumentException(k + " must be a 32-bit integer");
         }
+        /// <summary>Reads a finite JSON number or invariant-culture numeric string.</summary>
+        /// <returns>The parsed value, or <paramref name="def"/> when the key is absent.</returns>
+        /// <exception cref="ArgumentException">The value is not a finite number.</exception>
         private static double GetDouble(Dictionary<string, JsonElement> d, string k, double def)
         {
             if (!d.TryGetValue(k, out var v)) return def;

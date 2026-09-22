@@ -336,6 +336,11 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
 
 
 async def dispatch(args: dict) -> Any:
+    """Dispatch a ``ymm4_interact`` request to the plugin API or a local workflow.
+
+    Returns the plugin or validation result. Unsupported actions and locally rejected
+    arguments raise ``ValueError``.
+    """
     action = args.get("action")
     sub_action = args.get("sub_action")
     

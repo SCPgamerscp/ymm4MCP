@@ -16,6 +16,8 @@ namespace YMM4McpPlugin
         private static readonly string[] KeyframeMethodNames = { "AddKeyFrame", "AddKeyframe", "SetKeyFrame", "ChangeKeyFrame" };
         private static readonly string[] KeyframeRemoveNames = { "RemoveKeyFrame", "RemoveKeyframe" };
 
+        /// <summary>Returns animation properties and keyframes for the item selected by the query string.</summary>
+        /// <returns>A keyframe response, or a structured item-selection failure.</returns>
         private object GetItemKeyframes(HttpListenerRequest req)
         {
             int tf = -1, tl = -1;
@@ -60,6 +62,9 @@ namespace YMM4McpPlugin
             });
         }
 
+        /// <summary>Sets, removes, or clears keyframes on a selected item's animation property.</summary>
+        /// <returns>The updated keyframes, or a structured selection, revision, or capability failure.</returns>
+        /// <exception cref="ArgumentException">The request contains an invalid property, action, frame, or value.</exception>
         private async Task<object> SetItemKeyframe(HttpListenerRequest req)
         {
             var body = await ReadBody(req);
@@ -121,6 +126,8 @@ namespace YMM4McpPlugin
             });
         }
 
+        /// <summary>Finds an item by stable ID, or the first item matching the supplied frame and layer filters.</summary>
+        /// <returns>The item and its actual position, or a structured failure in <c>error</c>.</returns>
         private (object? item, int frame, int layer, object? error) LocateTimelineItem(string itemId, int frame, int layer)
         {
             if (itemId.Length == 0 && frame < 0 && layer < 0)
@@ -163,6 +170,7 @@ namespace YMM4McpPlugin
             return (target, foundFrame, foundLayer, null);
         }
 
+        /// <summary>Returns the distinct names of properties whose current values appear animatable.</summary>
         private static IEnumerable<string> ListAnimatableProperties(object item)
         {
             return item.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
@@ -173,6 +181,7 @@ namespace YMM4McpPlugin
                 .ToArray();
         }
 
+        /// <summary>Resolves an animation property, unwrapping a reactive property's value when necessary.</summary>
         private static object? ResolveAnimation(object item, string prop)
         {
             var value = GetPropObj(item, prop);
@@ -181,6 +190,7 @@ namespace YMM4McpPlugin
             return IsAnimation(value) ? value : null;
         }
 
+        /// <summary>Reports whether a value exposes a recognizable animation type or keyframe API.</summary>
         private static bool IsAnimation(object? value)
         {
             if (value == null) return false;
@@ -189,6 +199,7 @@ namespace YMM4McpPlugin
             return GetPropObj(value, "KeyFrames") != null || t.GetMethod("GetValue") != null;
         }
 
+        /// <summary>Returns normalized keyframes with item-relative and absolute frame positions.</summary>
         private static List<object> ReadKeyframes(object anim, int itemStartFrame)
         {
             var frames = ReadFrameList(anim);
@@ -213,6 +224,7 @@ namespace YMM4McpPlugin
             return result;
         }
 
+        /// <summary>Returns the non-negative frame offsets exposed by an animation's keyframe collection.</summary>
         private static List<int> ReadFrameList(object anim)
         {
             var keyFrames = GetPropObj(anim, "KeyFrames") ?? anim;
@@ -230,6 +242,7 @@ namespace YMM4McpPlugin
             return list;
         }
 
+        /// <summary>Returns the finite numeric values exposed by an animation.</summary>
         private static List<double> ReadValueList(object anim)
         {
             var valuesObj = GetPropObj(anim, "Values") ?? GetPropEnum(anim, "Values");
@@ -248,6 +261,7 @@ namespace YMM4McpPlugin
             return list;
         }
 
+        /// <summary>Returns the first finite default or current animation value, when available.</summary>
         private static double? TryGetDefaultValue(object anim)
         {
             foreach (var name in new[] { "DefaultValue", "Value", "CurrentValue" })
@@ -260,6 +274,8 @@ namespace YMM4McpPlugin
             return null;
         }
 
+        /// <summary>Attempts to add or update a keyframe through the animation's supported API.</summary>
+        /// <returns><see langword="true"/> when a compatible operation completes.</returns>
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
             if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value)) return true;
@@ -273,6 +289,8 @@ namespace YMM4McpPlugin
             return TrySetValueAt(anim, frame, value);
         }
 
+        /// <summary>Attempts to remove a keyframe through the animation or its keyframe collection.</summary>
+        /// <returns><see langword="true"/> when a compatible removal operation completes.</returns>
         private static bool RemoveKeyframe(object anim, int frame)
         {
             if (TryInvokeNamed(anim, KeyframeRemoveNames, frame)) return true;
@@ -280,6 +298,8 @@ namespace YMM4McpPlugin
             return keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
         }
 
+        /// <summary>Attempts to remove known keyframes or invoke a supported clear operation.</summary>
+        /// <returns><see langword="true"/> when at least one compatible operation completes.</returns>
         private static bool ClearKeyframes(object anim)
         {
             var frames = ReadFrameList(anim).OrderByDescending(f => f).ToArray();
@@ -295,6 +315,7 @@ namespace YMM4McpPlugin
             return any;
         }
 
+        /// <summary>Attempts to update an existing frame value, including the frame-zero default.</summary>
         private static bool TrySetValueAt(object anim, int frame, double value)
         {
             var values = GetPropObj(anim, "Values");
@@ -330,6 +351,8 @@ namespace YMM4McpPlugin
             return false;
         }
 
+        /// <summary>Invokes the first compatible named method after converting arguments to its parameter types.</summary>
+        /// <returns><see langword="true"/> when a matching method completes without throwing.</returns>
         private static bool TryInvokeNamed(object target, IEnumerable<string> names, params object[] args)
         {
             var methods = target.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
