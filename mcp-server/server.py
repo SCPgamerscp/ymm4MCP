@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
-from editing import integer, plan_script, validate_timeline
+from editing import integer, plan_script, validate_timeline, finite_number
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -116,10 +116,10 @@ TOOLS = [
         name="ymm4_interact",
         description=(
             "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects), "
+            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes), "
             "'control'(play/stop/save/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
-            "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift), "
+            "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避)を指定する。"
         ),
         inputSchema={
@@ -133,10 +133,10 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects)、"
+                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes)、"
                         "操作(play,stop,save,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
-                        "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift)のいずれか"
+                        "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
                 },
                 "dry_run": {"type": "boolean", "description": "add_script: 検証と推定配置のみ。編集・音声合成なし"},
@@ -154,10 +154,12 @@ TOOLS = [
                 "frame": {"type": "integer"},
                 "layer": {"type": "integer"},
                 "length": {"type": "integer"},
-                "item_id": {"type": "string", "description": "items/add_itemで返された安定ID。property/delete/selectではframe+layerより優先"},
-                "expected_revision": {"type": "string", "description": "property/delete時の楽観ロック。最新itemsのrevisionと不一致なら変更しない"},
-                "prop": {"type": "string"},
-                "value": {"type": "string"},
+                "item_id": {"type": "string", "description": "items/add_itemで返された安定ID。property/delete/select/keyframeではframe+layerより優先"},
+                "expected_revision": {"type": "string", "description": "property/delete/keyframe時の楽観ロック。最新itemsのrevisionと不一致なら変更しない"},
+                "prop": {"type": "string", "description": "property/keyframe: X, Y, Opacity, Zoom などのプロパティ名"},
+                "value": {"description": "propertyでは文字列。keyframeでは数値"},
+                "at": {"type": "integer", "minimum": 0, "description": "keyframe: アイテム開始からの相対フレーム"},
+                "keyframe_action": {"type": "string", "enum": ["set", "remove", "clear"], "description": "keyframe: set=打刻, remove=1点削除, clear=全削除"},
                 "effect": {"type": "string"},
                 "params": {"type": "object"},
                 "frames": {"type": "integer"},
@@ -356,6 +358,14 @@ async def dispatch(args: dict) -> Any:
                     if "layer" in args: q.append(f"layer={args['layer']}")
                     qs = ("?" + "&".join(q)) if q else ""
                     return await ymm4_get(f"/items/effects{qs}")
+                case "keyframes":
+                    q = []
+                    if "item_id" in args: q.append(f"item_id={quote(str(args['item_id']), safe='')}")
+                    if "frame" in args: q.append(f"frame={args['frame']}")
+                    if "layer" in args: q.append(f"layer={args['layer']}")
+                    if "prop" in args: q.append(f"prop={quote(str(args['prop']), safe='')}")
+                    qs = ("?" + "&".join(q)) if q else ""
+                    return await ymm4_get(f"/items/keyframes{qs}")
                 case _: raise ValueError(f"Unknown sub_action for get_info: {sub_action}")
 
         case "control":
@@ -451,6 +461,24 @@ async def dispatch(args: dict) -> Any:
                     payload = {"fromFrame": args.get("from_frame", 0), "delta": args.get("delta", 0)}
                     if "layers" in args: payload["layers"] = args["layers"]
                     return await ymm4_post("/timeline/shift", payload)
+                case "keyframe":
+                    if "expected_revision" in args and not args.get("item_id"):
+                        raise ValueError("expected_revision を使う場合は item_id も指定してください")
+                    payload = {
+                        "prop": args.get("prop", ""),
+                        "action": args.get("keyframe_action", "set"),
+                    }
+                    if "item_id" in args: payload["item_id"] = args["item_id"]
+                    if "expected_revision" in args: payload["expected_revision"] = args["expected_revision"]
+                    if "frame" in args: payload["frame"] = args["frame"]
+                    if "layer" in args: payload["layer"] = args["layer"]
+                    if "at" in args: payload["at"] = integer(args["at"], "at")
+                    elif "keyframe" in args: payload["at"] = integer(args["keyframe"], "keyframe")
+                    if payload["action"] == "set":
+                        if "value" not in args:
+                            raise ValueError("keyframe set には value が必要です")
+                        payload["value"] = finite_number(args["value"], "value")
+                    return await ymm4_post("/items/keyframe", payload)
                 case _: raise ValueError(f"Unknown sub_action for edit_item: {sub_action}")
 
         case "validate":

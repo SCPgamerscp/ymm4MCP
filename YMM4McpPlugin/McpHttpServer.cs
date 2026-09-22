@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -187,6 +188,8 @@ namespace YMM4McpPlugin
                     ("POST", "/api/items/effect/video") => await AddVideoEffect(req),
                     ("POST", "/api/items/effect") => await AddEffectToItem(req),
                     ("POST", "/api/items/prop") => await SetItemProp(req),
+                    ("GET",  "/api/items/keyframes") => GetItemKeyframes(req),
+                    ("POST", "/api/items/keyframe") => await SetItemKeyframe(req),
                     ("GET", "/api/effects/list") => ListEffects(),
                     ("POST", "/api/items/delete") => await DeleteItems(req),
 #if DEBUG
@@ -257,7 +260,7 @@ namespace YMM4McpPlugin
         private object GetCapabilities() => new
         {
             success = true,
-            api_schema_version = 2,
+            api_schema_version = 3,
             plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
             authentication = "X-Ymm4-Token",
             advanced_enabled = _allowAdvanced,
@@ -267,13 +270,14 @@ namespace YMM4McpPlugin
                 media_import = true, character_discovery = true, script_dry_run_in_mcp = true,
                 timeline_validation_in_mcp = true, stable_item_ids = true, optimistic_concurrency = true,
                 persistent_item_ids = "native_when_available", final_video_export = false,
-                resumable_jobs = false, transactions = false, keyframe_api = false,
+                resumable_jobs = false, transactions = false, keyframe_api = true,
                 automatic_visual_audio_qa = false
             },
             limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
                 "Serialized API writes do not lock manual UI edits.", "A timed-out operation may continue; inspect state before retrying.",
                 "Voice parameters are inherited from registered characters; per-request engine/style overrides are not implemented.",
-                "Items without a native YMM4 identifier receive runtime-only IDs; check identity_persistent before storing an ID across restarts." }
+                "Items without a native YMM4 identifier receive runtime-only IDs; check identity_persistent before storing an ID across restarts.",
+                "Keyframe edits use the host Animation/KeyFrames API via reflection; inspect the item if KEYFRAME_METHOD_UNAVAILABLE is returned." }
         };
 
         private object GetProjectInfo()
@@ -2272,6 +2276,21 @@ namespace YMM4McpPlugin
             if (!d.TryGetValue(k, out var v) || v.ValueKind != JsonValueKind.Number) return def;
             if (v.TryGetInt32(out int result)) return result;
             throw new ArgumentException(k + " must be a 32-bit integer");
+        }
+        private static double GetDouble(Dictionary<string, JsonElement> d, string k, double def)
+        {
+            if (!d.TryGetValue(k, out var v)) return def;
+            if (v.ValueKind == JsonValueKind.Number)
+            {
+                if (v.TryGetDouble(out double number) && double.IsFinite(number)) return number;
+            }
+            else if (v.ValueKind == JsonValueKind.String
+                     && double.TryParse(v.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
+                     && double.IsFinite(parsed))
+            {
+                return parsed;
+            }
+            throw new ArgumentException(k + " must be a finite number");
         }
         private void Log(string msg) => LogMessage?.Invoke($"[{DateTime.Now:HH:mm:ss}] {msg}");
 

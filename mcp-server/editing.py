@@ -10,6 +10,19 @@ def integer(value, name, minimum=0, maximum=MAX_FRAME):
     return value
 
 
+def finite_number(value, name):
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite number")
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be a finite number") from exc
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    return float(value)
+
+
 def plan_script(args):
     lines = args.get("lines", [])
     if not isinstance(lines, list) or not 1 <= len(lines) <= 500:

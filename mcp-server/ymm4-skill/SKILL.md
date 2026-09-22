@@ -92,6 +92,14 @@ item_id="native:...", expected_revision="..."
 action="edit_item", sub_action="property",
 item_id="native:...", expected_revision="...",
 prop="Frame", value="210"
+
+# キーフレーム（立ち絵を左から登場）
+action="get_info", sub_action="keyframes", item_id="native:...", prop="X"
+action="edit_item", sub_action="keyframe",
+item_id="native:...", expected_revision="...",
+prop="X", keyframe_action="set", at=0, value=-400
+action="edit_item", sub_action="keyframe",
+item_id="native:...", prop="X", keyframe_action="set", at=30, value=0
 ```
 
 ### ymm4_preview（映像・音声確認系）

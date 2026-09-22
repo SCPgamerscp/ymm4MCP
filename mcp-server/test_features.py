@@ -78,6 +78,13 @@ class PlanningTests(unittest.TestCase):
         self.assertTrue(result["estimated"])
         self.assertEqual(result["added"], 0)
 
+    def test_finite_number_accepts_numeric_strings_and_rejects_non_finite(self):
+        self.assertEqual(editing.finite_number("1.5", "value"), 1.5)
+        self.assertEqual(editing.finite_number(0, "value"), 0.0)
+        for bad in (True, "nope", float("nan"), float("inf"), None, []):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                editing.finite_number(bad, "value")
+
     def test_validation_returns_structured_qa_with_stable_ids(self):
         items = [
             {"item_id": "native:a", "revision": "r1", "frame": 10, "layer": 0, "length": 100},
@@ -190,10 +197,13 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             ("property", "/items/prop", {"frame": 0, "layer": 0, "prop": "Length", "value": "90", "item_id": identity, "expected_revision": revision}),
             ("delete", "/items/delete", {"item_id": identity, "expected_revision": revision}),
             ("select", "/items/select", {"item_id": identity}),
+            ("keyframe", "/items/keyframe", {"prop": "X", "action": "set", "item_id": identity,
+                                             "expected_revision": revision, "at": 30, "value": -200.0}),
         ]
         for sub_action, path, expected in cases:
             args = {"action": "edit_item", "sub_action": sub_action, "item_id": identity}
             if sub_action == "property": args.update(prop="Length", value=90)
+            if sub_action == "keyframe": args.update(prop="X", value=-200, at=30, keyframe_action="set")
             if sub_action != "select": args["expected_revision"] = revision
             with self.subTest(sub_action=sub_action), patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
                 await server.dispatch(args)
@@ -202,16 +212,35 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(server, "ymm4_get", AsyncMock(return_value={"items": []})) as get:
             await server.dispatch({"action": "get_info", "sub_action": "effects", "item_id": identity})
             get.assert_awaited_once_with("/items/effects?item_id=native%3Aitem%2Fwith%20spaces")
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True})) as get:
+            await server.dispatch({"action": "get_info", "sub_action": "keyframes", "item_id": identity, "prop": "X"})
+            get.assert_awaited_once_with("/items/keyframes?item_id=native%3Aitem%2Fwith%20spaces&prop=X")
 
     async def test_revision_requires_item_id_before_http_request(self):
-        for sub_action in ("property", "delete"):
+        for sub_action in ("property", "delete", "keyframe"):
             args = {"action": "edit_item", "sub_action": sub_action, "expected_revision": "stale"}
             if sub_action == "property":
                 args.update(prop="Length", value=90, frame=10, layer=2)
+            if sub_action == "keyframe":
+                args.update(prop="X", value=1, at=0)
             with self.subTest(sub_action=sub_action), patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
                 with self.assertRaisesRegex(ValueError, "item_id"):
                     await server.dispatch(args)
                 post.assert_not_awaited()
+
+    async def test_keyframe_set_requires_value_and_rejects_non_finite(self):
+        base = {"action": "edit_item", "sub_action": "keyframe", "item_id": "native:a", "prop": "X", "at": 10}
+        with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            with self.assertRaisesRegex(ValueError, "value"):
+                await server.dispatch(base)
+            post.assert_not_awaited()
+            with self.assertRaisesRegex(ValueError, "value"):
+                await server.dispatch({**base, "value": float("nan")})
+            post.assert_not_awaited()
+            await server.dispatch({**base, "value": "-12.5", "keyframe_action": "set"})
+            post.assert_awaited_once_with("/items/keyframe", {
+                "prop": "X", "action": "set", "item_id": "native:a", "at": 10, "value": -12.5,
+            })
 
     async def test_advanced_hidden_and_rejected_unless_enabled(self):
         with patch.dict(os.environ, {}, clear=True):
