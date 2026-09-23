@@ -65,6 +65,7 @@ namespace YMM4McpPlugin
                     _listener = listener;
                     _ = ListenLoop(listener);
                     RestorePersistedJobs();
+                    RestoreEditBindings();
                 }
                 catch { listener.Close(); throw; }
             }
@@ -154,6 +155,7 @@ namespace YMM4McpPlugin
                 }
                 Log($"{req.HttpMethod} {path}");
                 object? result = await TryRouteJobs(req, path);
+                result ??= await TryRouteEdits(req, path);
                 result ??= (req.HttpMethod, path) switch
                 {
                     ("GET", "/api/status") => GetStatus(),
@@ -265,7 +267,7 @@ namespace YMM4McpPlugin
         private object GetCapabilities() => new
         {
             success = true,
-            api_schema_version = 4,
+            api_schema_version = 5,
             plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
             authentication = "X-Ymm4-Token",
             advanced_enabled = _allowAdvanced,
@@ -276,7 +278,8 @@ namespace YMM4McpPlugin
                 timeline_validation_in_mcp = true, stable_item_ids = true, optimistic_concurrency = true,
                 persistent_item_ids = "native_when_available", final_video_export = true,
                 resumable_jobs = true, transactions = false, keyframe_api = true,
-                automatic_visual_audio_qa = false, project_open_save_as = true
+                automatic_visual_audio_qa = false, project_open_save_as = true,
+                declarative_edits = true, idempotent_edits = true
             },
             limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
                 "Serialized API writes do not lock manual UI edits.", "A timed-out operation may continue; inspect state before retrying.",
@@ -284,7 +287,8 @@ namespace YMM4McpPlugin
                 "Items without a native YMM4 identifier receive runtime-only IDs; check identity_persistent before storing an ID across restarts.",
                 "Keyframe edits use the host Animation/KeyFrames API via reflection; inspect the item if KEYFRAME_METHOD_UNAVAILABLE is returned.",
                 "Export and project open/save-as discover host methods at runtime. EXPORT_METHOD_UNAVAILABLE / EXPORT_DIALOG_REQUIRED / OPEN_METHOD_UNAVAILABLE mean this YMM4 build needs a path-taking API.",
-                "Jobs continue after MCP disconnect but become interrupted when the YMM4 process exits. resume re-queues; it does not continue an in-progress encode." }
+                "Jobs continue after MCP disconnect but become interrupted when the YMM4 process exits. resume re-queues; it does not continue an in-progress encode.",
+                "EditPlan apply is not a transaction: a partial failure keeps already-added items. Re-send the same idempotency_key or call reconcile_edit to add only the missing items. Extra timeline items are never deleted." }
         };
 
         private object GetProjectInfo()

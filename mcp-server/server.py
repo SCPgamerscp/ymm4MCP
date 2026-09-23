@@ -28,6 +28,7 @@ import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import integer, plan_script, validate_timeline, finite_number
 from jobs import job_id_ok, validate_export_request, validate_project_path
+import editplan
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -116,31 +117,36 @@ TOOLS = [
     Tool(
         name="ymm4_interact",
         description=(
-            "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job), "
+            "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。"
+            "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
+            "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
+            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job/edit_state), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
-            "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避)を指定する。"
+            "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
+            "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用), 'reconcile_edit'(不足分だけ再実行)を指定する。"
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate"],
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate",
+                             "plan_edit", "apply_edit", "reconcile_edit"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job)、"
+                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job,edit_state)、"
                         "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
                 },
-                "dry_run": {"type": "boolean", "description": "add_script: 検証と推定配置のみ。編集・音声合成なし"},
+                "dry_run": {"type": "boolean", "description": "add_script/apply_edit: 検証と推定配置のみ。編集・音声合成なし"},
+                "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
@@ -149,7 +155,7 @@ TOOLS = [
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 7200, "description": "export: 完了待ちの上限秒"},
-                "idempotency_key": {"type": "string", "description": "export: 同じキーの再送は既存ジョブを返す"},
+                "idempotency_key": {"type": "string", "description": "export/apply_edit: 同じキーの再送は既存ジョブまたは既存適用を返す"},
                 "job_id": {"type": "string", "description": "get_info/job と cancel_job/resume_job の対象"},
                 "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
                 "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
@@ -379,6 +385,7 @@ async def dispatch(args: dict) -> Any:
                     if not job_id_ok(job_id):
                         raise ValueError("job_id is invalid")
                     return await ymm4_get(f"/jobs/{job_id}")
+                case "edit_state": return await ymm4_get("/edits/state")
                 case _: raise ValueError(f"Unknown sub_action for get_info: {sub_action}")
 
         case "control":
@@ -534,6 +541,15 @@ async def dispatch(args: dict) -> Any:
         case "add_script":
             return await add_script(args)
 
+        case "plan_edit":
+            return await run_edit_plan(args, dry_run=True)
+
+        case "apply_edit":
+            return await run_edit_plan(args, dry_run=bool(args.get("dry_run", False)))
+
+        case "reconcile_edit":
+            return await run_edit_plan(args, dry_run=False)
+
         case _:
             raise ValueError(f"Unknown action: {action}")
 
@@ -580,6 +596,125 @@ async def add_script(args: dict) -> dict:
                     "rolled_back": False}
     return {"success": True, "added": len(results), "total_frames": frame,
             "details": results, "dry_run": False}
+
+
+async def _load_edit_binding(key: str | None) -> dict | None:
+    if not key:
+        return None
+    try:
+        state = await ymm4_get("/edits/state")
+    except httpx.HTTPError:
+        return None
+    if not isinstance(state, dict) or state.get("success") is False or "error" in state:
+        return None
+    return editplan.pick_binding(state.get("bindings"), key)
+
+
+async def run_edit_plan(args: dict, dry_run: bool) -> dict:
+    """Validate an EditPlan, optionally replay an idempotent apply, otherwise add only missing items."""
+    plan = editplan.parse_plan(args)
+    characters = await ymm4_get("/characters")
+    names = None
+    if isinstance(characters, dict) and characters.get("success") is not False and "error" not in characters:
+        names = [c["name"] for c in characters.get("characters", []) if isinstance(c, dict) and "name" in c]
+    snapshot = await ymm4_get("/items")
+    if snapshot.get("success") is False or "error" in snapshot:
+        return snapshot
+    items = snapshot.get("items") or []
+    record = await _load_edit_binding(plan.get("idempotency_key"))
+    if not dry_run:
+        replay = editplan.replay_record(plan, items, record)
+        if replay:
+            return replay
+    preview = editplan.diff_plan(plan, items, record, names)
+    if dry_run:
+        if names is None:
+            preview.setdefault("warnings", []).append({
+                "code": "CHARACTERS_UNAVAILABLE", "severity": "warning",
+                "message": characters.get("error") if isinstance(characters, dict) else "characters unavailable",
+            })
+        preview["dry_run"] = True
+        return preview
+    if names is None:
+        return characters if isinstance(characters, dict) else {
+            "success": False, "error_code": "CHARACTERS_UNAVAILABLE", "error": "キャラ一覧を取得できません"}
+    unknown = next((w for w in preview["warnings"] if w.get("code") == "CHARACTER_UNKNOWN"), None)
+    if unknown:
+        raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {unknown.get('character')}")
+
+    current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
+    gap = plan["gap"]
+    cursor = {scene["id"]: scene["start_frame"] for scene in plan["scenes"]}
+    bindings = []
+    details = []
+    added = 0
+    for index, op in enumerate(preview["ops"]):
+        scene_id = op["scene_id"]
+        if op["op"] == "keep":
+            current = current_by_id.get(op.get("item_id"), {})
+            try:
+                end = integer(current.get("frame", op["frame"]), "frame") + integer(
+                    current.get("length", op["length"]), "length", 1)
+                cursor[scene_id] = max(cursor.get(scene_id, 0), end + gap)
+            except ValueError:
+                pass
+            bindings.append({"id": op["id"], "item_id": op.get("item_id"), "revision": op.get("revision")})
+            details.append({"id": op["id"], "op": "keep", "item_id": op.get("item_id"), "revision": op.get("revision")})
+            continue
+        payload = dict(op["payload"])
+        if op.get("frame_source") == "sequential":
+            payload["frame"] = cursor.get(scene_id, payload.get("frame", 0))
+        try:
+            res = await ymm4_post(f"/items/{op['kind']}", payload, timeout=120.0)
+        except httpx.HTTPError:
+            return {"success": False, "error_code": "EDIT_REQUEST_FAILED",
+                    "error": "通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
+                    "outcome_unknown": True, "added": added, "failed_id": op["id"], "failed_index": index,
+                    "details": details, "rolled_back": False}
+        if not isinstance(res, dict) or res.get("success") is not True:
+            return {"success": False, "error_code": "EDIT_PARTIAL_FAILURE",
+                    "error": "EditPlanの適用に失敗したため停止しました", "failed_id": op["id"],
+                    "failed_index": index, "added": added, "details": details, "failure": res,
+                    "rolled_back": False}
+        added += 1
+        details.append({"id": op["id"], "op": "add", "item_id": res.get("item_id"),
+                        "revision": res.get("revision"), "kind": op["kind"], "result": res})
+        bindings.append({"id": op["id"], "item_id": res.get("item_id"), "revision": res.get("revision")})
+        try:
+            length = integer(res.get("length"), "actual length", 1)
+            actual_frame = integer(res.get("frame"), "actual frame")
+            cursor[scene_id] = integer(actual_frame + length + gap, "next frame")
+        except ValueError:
+            if op["kind"] == "voice":
+                return {"success": False, "error_code": "VOICE_LENGTH_UNKNOWN",
+                        "error": "追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
+                        "added": added, "failed_id": op["id"], "details": details, "rolled_back": False}
+            cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
+
+    binding_error = None
+    if plan.get("idempotency_key"):
+        try:
+            saved = await ymm4_post("/edits/bindings", {
+                "idempotency_key": plan["idempotency_key"],
+                "plan_hash": editplan.plan_hash(plan),
+                "items": bindings,
+            })
+            if isinstance(saved, dict) and saved.get("success") is False:
+                binding_error = saved
+        except httpx.HTTPError:
+            binding_error = {"error_code": "BINDINGS_NOT_SAVED"}
+    result = {
+        "success": True, "replayed": False, "dry_run": False, "added": added,
+        "kept": sum(d["op"] == "keep" for d in details), "details": details,
+        "plan_hash": editplan.plan_hash(plan), "idempotency_key": plan.get("idempotency_key"),
+        "total_frames": max(cursor.values()) if cursor else plan["total_frames"],
+        "item_count": plan["item_count"], "rolled_back": False,
+        "note": "EditPlan is not transactional; failed items stay unapplied. Reconcile to finish missing ids.",
+    }
+    if binding_error:
+        result["warning"] = "BINDINGS_NOT_SAVED"
+        result["binding_error"] = binding_error
+    return result
 
 
 async def dispatch_advanced(args: dict) -> Any:
