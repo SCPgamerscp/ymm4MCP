@@ -17,6 +17,10 @@ ymm4プラグイン/
 │   ├── YMM4McpPlugin.csproj
 │   ├── McpToolPlugin.cs        # IToolPlugin エントリーポイント
 │   ├── McpHttpServer.cs        # HTTPサーバー (port 8765)
+│   ├── McpJobs.cs              # ジョブ状態・cancel/resume
+│   ├── McpExport.cs            # 完成動画書き出し・プロジェクトopen/save-as
+│   ├── McpKeyframes.cs         # Animationキーフレーム
+│   ├── McpEditing.cs           # 安定ID・revision・素材追加
 │   ├── McpViewModel.cs         # ViewModel (起動/停止UI)
 │   ├── McpView.xaml            # コントロールパネルUI
 │   ├── McpView.xaml.cs
@@ -104,6 +108,13 @@ pip install -r requirements.txt
 | `GET  /api/project` | プロジェクト情報（FPS・解像度等） |
 | `GET  /api/items` | タイムラインの全アイテム取得 |
 | `POST /api/project/save` | プロジェクト保存 |
+| `POST /api/project/open` | `.ymmp` をパス指定で開く |
+| `POST /api/project/save-as` | 別名保存（`overwrite`で上書き） |
+| `POST /api/project/export` | 完成動画書き出しを**ジョブとして投入**。すぐ `job_id` を返す |
+| `GET  /api/jobs` | 最近のジョブ一覧 |
+| `GET  /api/jobs/{id}` | 進捗・phase・検証結果 |
+| `POST /api/jobs/{id}/cancel` | キャンセル要求 |
+| `POST /api/jobs/{id}/resume` | 失敗/中断ジョブを再投入 |
 | `POST /api/timeline/duration` | タイムライン長を設定 |
 
 ### セリフ・アイテム操作系
@@ -162,6 +173,37 @@ YMM4本体がネイティブ識別子を公開するアイテムは再起動後�
 ネイティブ識別子がない型は実行中のみ安定する `runtime:` IDとなり、`identity_persistent` が `false` になります。
 そのIDは再起動をまたいで保存せず、再接続後に取り直してください。
 
+#### ジョブと完成動画の書き出し
+
+長い処理は1リクエストで待たず、ジョブIDを返して進捗を取りにいきます。MCPを切断してもYMM4側のジョブは続きます。YMM4プロセス自体が終了すると `interrupted` になり、`resume` で再投入できます（途中フレームからの再開ではありません）。
+
+```json
+POST /api/project/export
+{
+  "path": "C:/Videos/final.mp4",
+  "format": "mp4",
+  "overwrite": false,
+  "timeout_seconds": 1800,
+  "idempotency_key": "episode-12-render"
+}
+```
+
+戻り値の `job_id` を `GET /api/jobs/{id}` でポーリングします。完了時はファイルの存在・サイズ・MP4なら `ftyp` / WAVなら `RIFF` を検証して `result.verified=true` を返します。
+
+同じ `idempotency_key` の再送は、実行中または成功済みのジョブをそのまま返します。既存ファイルを消したくない場合は `overwrite` を省略してください。
+
+本体の出力APIはバージョン差があるため実行時に探索します。パス付きメソッドが無い場合は `EXPORT_METHOD_UNAVAILABLE` または `EXPORT_DIALOG_REQUIRED` になり、ダイアログ操作は自動化しません。
+
+MCPからは次のように呼びます。
+
+```python
+action="control", sub_action="export", path="C:/Videos/final.mp4"
+action="get_info", sub_action="job", job_id="job_..."
+action="control", sub_action="cancel_job", job_id="job_..."
+action="control", sub_action="open", path="C:/proj/a.ymmp"
+action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
+```
+
 #### キーフレーム
 
 立ち絵や字幕の X / Y / Zoom / Opacity / Volume などを、アイテム開始からの相対フレーム `at` で時間変化させます。
@@ -215,6 +257,10 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `control` | `play` | 再生 |
 | `control` | `stop` | 停止 |
 | `control` | `save` | 保存 |
+| `control` | `open` / `save_as` | プロジェクトをパス指定で開く / 別名保存 |
+| `control` | `export` | 完成動画書き出しをジョブ投入。`path` 必須 |
+| `get_info` | `jobs` / `job` | ジョブ一覧 / `job_id` の進捗 |
+| `control` | `cancel_job` / `resume_job` | ジョブ中止 / 失敗・中断の再投入 |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
@@ -299,10 +345,10 @@ capture_interval_ms=2000   # 画像取得間隔（推奨: 2000ms以上）
 
 ```bash
 python -m pip install -r mcp-server/requirements.txt
-python -m unittest discover -s mcp-server -p 'test_http_timeouts.py' -v
+python -m unittest discover -s mcp-server -p 'test_*.py' -v
 ```
 
-テストはHTTP通信をモックし、待ち時間、エラー分類、接続再利用・終了処理を確認します。実際の録音・画像保存やYMM4の起動は行いません。
+`test_jobs.py` は書き出しパス検証・成果物ヘッダ検査・ジョブdispatchを、YMM4なしで確認します。HTTP通信をモックし、待ち時間、エラー分類、接続再利用・終了処理を確認します。実際の録音・画像保存やYMM4の起動は行いません。
 
 ---
 
