@@ -19,6 +19,7 @@ ymm4プラグイン/
 │   ├── McpHttpServer.cs        # HTTPサーバー (port 8765)
 │   ├── McpJobs.cs              # ジョブ状態・cancel/resume
 │   ├── McpExport.cs            # 完成動画書き出し・プロジェクトopen/save-as
+│   ├── McpEdits.cs             # EditPlan状態・idempotencyバインディング
 │   ├── McpKeyframes.cs         # Animationキーフレーム
 │   ├── McpEditing.cs           # 安定ID・revision・素材追加
 │   ├── McpViewModel.cs         # ViewModel (起動/停止UI)
@@ -115,6 +116,9 @@ pip install -r requirements.txt
 | `GET  /api/jobs/{id}` | 進捗・phase・検証結果 |
 | `POST /api/jobs/{id}/cancel` | キャンセル要求 |
 | `POST /api/jobs/{id}/resume` | 失敗/中断ジョブを再投入 |
+| `GET  /api/edits/state` | 現在のタイムラインをEditPlan構造（1シーン）で取得。適用済みバインディング含む |
+| `GET  /api/edits/bindings` | 保存済み `idempotency_key` → item_id 対応 |
+| `POST /api/edits/bindings` | apply後の plan_id と item_id の対応を保存 |
 | `POST /api/timeline/duration` | タイムライン長を設定 |
 
 ### セリフ・アイテム操作系
@@ -204,6 +208,30 @@ action="control", sub_action="open", path="C:/proj/a.ymmp"
 action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 ```
 
+#### 宣言的EditPlan（dry-run / 差分適用 / 冪等）
+
+LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、計画が変わっておらず対象アイテムが残っていれば二重追加しません。途中失敗はロールバックせず、`reconcile_edit` が不足分だけ再実行します。既存の計画外アイテムは削除しません。
+
+```python
+plan = {
+  "project": {"fps": 30},
+  "scenes": [
+    {"id": "intro", "items": [
+      {"id": "bg-1", "type": "video", "source": "C:/Videos/play.mp4", "layer": 0, "frame": 0},
+      {"id": "line-1", "type": "dialogue", "character": "ゆっくり霊夢", "text": "こんにちは", "layer": 7},
+      {"id": "cap-1", "type": "subtitle", "text": "こんにちは", "layer": 9, "length": 90},
+    ]}
+  ]
+}
+action="plan_edit", plan=plan, idempotency_key="episode-1"   # 変更なし。差分と警告だけ
+action="apply_edit", plan=plan, idempotency_key="episode-1"  # 不足アイテムだけ追加
+action="reconcile_edit", plan=plan, idempotency_key="episode-1"
+action="get_info", sub_action="edit_state"
+```
+
+対応タイプ: `video` / `audio` / `bgm` / `se` / `image` / `text` / `subtitle` / `dialogue` / `voice` / `tachie` / `face`。
+シーン単位のtransactionや映像QAはこのスライスの対象外です。
+
 #### キーフレーム
 
 立ち絵や字幕の X / Y / Zoom / Opacity / Volume などを、アイテム開始からの相対フレーム `at` で時間変化させます。
@@ -260,7 +288,11 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `control` | `open` / `save_as` | プロジェクトをパス指定で開く / 別名保存 |
 | `control` | `export` | 完成動画書き出しをジョブ投入。`path` 必須 |
 | `get_info` | `jobs` / `job` | ジョブ一覧 / `job_id` の進捗 |
+| `get_info` | `edit_state` | 現在のタイムラインをEditPlan構造で取得 |
 | `control` | `cancel_job` / `resume_job` | ジョブ中止 / 失敗・中断の再投入 |
+| `plan_edit` | —— | 完成状態のEditPlanを検証し、差分と警告だけ返す（編集なし） |
+| `apply_edit` | —— | 差分だけ適用。同じ `idempotency_key` は二重追加しない |
+| `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
@@ -348,7 +380,7 @@ python -m pip install -r mcp-server/requirements.txt
 python -m unittest discover -s mcp-server -p 'test_*.py' -v
 ```
 
-`test_jobs.py` は書き出しパス検証・成果物ヘッダ検査・ジョブdispatchを、YMM4なしで確認します。HTTP通信をモックし、待ち時間、エラー分類、接続再利用・終了処理を確認します。実際の録音・画像保存やYMM4の起動は行いません。
+`test_jobs.py` は書き出しパス検証・成果物ヘッダ検査・ジョブdispatchを、YMM4なしで確認します。`test_editplan.py` はEditPlanの検証・差分・冪等再送・部分失敗停止を確認します。HTTP通信をモックし、待ち時間、エラー分類、接続再利用・終了処理を確認します。実際の録音・画像保存やYMM4の起動は行いません。
 
 ---
 

@@ -59,7 +59,9 @@ async def get_prompt(name: str, arguments: dict | None = None):
         role="user", content=TextContent(type="text", text=(
             text + "\n\n## 今回の制作条件\n" + request +
             "\n最初にymm4_interact(action='get_info', sub_action='characters')でキャラ一覧を確認し、"
-            "名前を完全一致で指定すること。台本をdry_runで確認してから配置し、"
+            "名前を完全一致で指定すること。完成状態はplan_editでdry-runし、apply_editで差分適用すること。"
+            "同じ計画の再送にはidempotency_keyを付け、中断後はreconcile_editで不足分だけ再実行すること。"
+            "台本だけ置く場合はadd_scriptをdry_runで確認してから配置し、"
             "配置後にitemsとvalidateで結果を検証すること。"
             "完成動画はcontrol/exportでジョブを投入し、get_info/jobで完了と成果物検証を確認してから完了と報告すること。"
         ))
