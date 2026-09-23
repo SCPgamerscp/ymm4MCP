@@ -33,6 +33,13 @@ GET  /api/status
 GET  /api/project
 GET  /api/items
 POST /api/project/save
+POST /api/project/open
+POST /api/project/save-as
+POST /api/project/export
+GET  /api/jobs
+GET  /api/jobs/{id}
+POST /api/jobs/{id}/cancel
+POST /api/jobs/{id}/resume
 POST /api/timeline/duration
 ```
 
@@ -100,6 +107,10 @@ item_id="native:...", expected_revision="...",
 prop="X", keyframe_action="set", at=0, value=-400
 action="edit_item", sub_action="keyframe",
 item_id="native:...", prop="X", keyframe_action="set", at=30, value=0
+
+# 完成動画を書き出してジョブをポーリング
+action="control", sub_action="export", path="C:/Videos/final.mp4"
+action="get_info", sub_action="job", job_id="job_..."
 ```
 
 ### ymm4_preview（映像・音声確認系）
@@ -191,6 +202,29 @@ layer=8, frame=186, prop="Frame", value="210"
 # セリフを削除して作り直す場合
 action="edit_item", sub_action="delete", layer=7, frame=954
 ```
+
+### Step 6：完成動画を書き出す
+
+タイムラインが揃ったら、書き出しはジョブとして投入し、完了とファイル検証を待ってから報告する。
+
+```python
+# 既存ファイルを消したくない場合は overwrite を付けない
+job = (action="control", sub_action="export",
+       path="C:/Videos/final.mp4", overwrite=True,
+       idempotency_key="episode-final")
+# → すぐ job_id が返る。MCPを切ってもYMM4側のジョブは続く
+
+while True:
+    status = (action="get_info", sub_action="job", job_id=job["job_id"])
+    # queued / running / completed / failed / cancelled / interrupted
+    if status["status"] == "completed" and status.get("result", {}).get("verified"):
+        break
+    if status["status"] in ("failed", "cancelled", "interrupted"):
+        # interrupted は YMM4再起動後。resume_job で再投入
+        break
+```
+
+本体の出力APIがパス指定に対応していない場合は `EXPORT_METHOD_UNAVAILABLE` または `EXPORT_DIALOG_REQUIRED` になる。ダイアログ操作は自動化しない。
 
 ---
 

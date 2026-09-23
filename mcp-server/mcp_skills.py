@@ -61,7 +61,7 @@ async def get_prompt(name: str, arguments: dict | None = None):
             "\n最初にymm4_interact(action='get_info', sub_action='characters')でキャラ一覧を確認し、"
             "名前を完全一致で指定すること。台本をdry_runで確認してから配置し、"
             "配置後にitemsとvalidateで結果を検証すること。"
-            "未対応の書き出しや未検証の結果を完了と報告しないこと。"
+            "完成動画はcontrol/exportでジョブを投入し、get_info/jobで完了と成果物検証を確認してから完了と報告すること。"
         ))
     )])
 

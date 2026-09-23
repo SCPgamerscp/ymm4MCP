@@ -27,6 +27,7 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import integer, plan_script, validate_timeline, finite_number
+from jobs import job_id_ok, validate_export_request, validate_project_path
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -116,8 +117,8 @@ TOOLS = [
         name="ymm4_interact",
         description=(
             "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes), "
-            "'control'(play/stop/save/undo/redo/split/align), "
+            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job), "
+            "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避)を指定する。"
@@ -133,8 +134,8 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes)、"
-                        "操作(play,stop,save,undo,redo,split,align)、"
+                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job)、"
+                        "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
@@ -143,7 +144,13 @@ TOOLS = [
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
-                "path": {"type": "string", "description": "video/audio/image: 素材ファイルの絶対パス"},
+                "path": {"type": "string", "description": "video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
+                "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
+                "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 7200, "description": "export: 完了待ちの上限秒"},
+                "idempotency_key": {"type": "string", "description": "export: 同じキーの再送は既存ジョブを返す"},
+                "job_id": {"type": "string", "description": "get_info/job と cancel_job/resume_job の対象"},
                 "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
                 "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
                 "gap": {"type": "integer", "description": "resolve_overlaps: アイテム間の最小すき間フレーム"},
@@ -366,6 +373,12 @@ async def dispatch(args: dict) -> Any:
                     if "prop" in args: q.append(f"prop={quote(str(args['prop']), safe='')}")
                     qs = ("?" + "&".join(q)) if q else ""
                     return await ymm4_get(f"/items/keyframes{qs}")
+                case "jobs": return await ymm4_get("/jobs")
+                case "job":
+                    job_id = args.get("job_id")
+                    if not job_id_ok(job_id):
+                        raise ValueError("job_id is invalid")
+                    return await ymm4_get(f"/jobs/{job_id}")
                 case _: raise ValueError(f"Unknown sub_action for get_info: {sub_action}")
 
         case "control":
@@ -373,6 +386,36 @@ async def dispatch(args: dict) -> Any:
                 case "play": return await ymm4_post("/playback/play")
                 case "stop": return await ymm4_post("/playback/stop")
                 case "save": return await ymm4_post("/project/save")
+                case "open":
+                    return await ymm4_post("/project/open", {"path": validate_project_path(args, must_exist=False)})
+                case "save_as":
+                    body = {"path": validate_project_path(args, must_exist=False)}
+                    if "overwrite" in args:
+                        if not isinstance(args["overwrite"], bool):
+                            raise ValueError("overwrite must be boolean")
+                        body["overwrite"] = args["overwrite"]
+                    return await ymm4_post("/project/save-as", body)
+                case "export":
+                    parsed = validate_export_request(args)
+                    body = {
+                        "path": parsed["output_path"],
+                        "format": parsed["format"],
+                        "overwrite": parsed["overwrite"],
+                        "timeout_seconds": parsed["timeout_seconds"],
+                    }
+                    if parsed["idempotency_key"]:
+                        body["idempotency_key"] = parsed["idempotency_key"]
+                    return await ymm4_post("/project/export", body)
+                case "cancel_job":
+                    job_id = args.get("job_id")
+                    if not job_id_ok(job_id):
+                        raise ValueError("job_id is invalid")
+                    return await ymm4_post(f"/jobs/{job_id}/cancel")
+                case "resume_job":
+                    job_id = args.get("job_id")
+                    if not job_id_ok(job_id):
+                        raise ValueError("job_id is invalid")
+                    return await ymm4_post(f"/jobs/{job_id}/resume")
                 # YMM4内部コマンドをトリガー（UIメニュー限定機能を直接実行）
                 case "undo": return await ymm4_post("/command", {"name": "UndoCommand"})
                 case "redo": return await ymm4_post("/command", {"name": "RedoCommand"})

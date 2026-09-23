@@ -64,6 +64,7 @@ namespace YMM4McpPlugin
                     _allowAdvanced = Settings.AllowAdvanced;
                     _listener = listener;
                     _ = ListenLoop(listener);
+                    RestorePersistedJobs();
                 }
                 catch { listener.Close(); throw; }
             }
@@ -79,6 +80,7 @@ namespace YMM4McpPlugin
                 _listener = null;
                 listener?.Close();
                 _token = "";
+                CancelAndPersistJobs();
                 // Keep the protected discovery file: clients can distinguish connection
                 // refusal after shutdown; the token is rotated on the next start.
             }
@@ -141,7 +143,7 @@ namespace YMM4McpPlugin
                     await WriteJson(res, 403, new { success = false, error_code = "ADVANCED_DISABLED", error = "Enable advanced APIs in the plugin settings and restart" });
                     return;
                 }
-                if (req.HttpMethod == "POST")
+                if (req.HttpMethod == "POST" && !IsNonBlockingPost(path))
                 {
                     editLock = await _editGate.WaitAsync(0);
                     if (!editLock)
@@ -151,7 +153,8 @@ namespace YMM4McpPlugin
                     }
                 }
                 Log($"{req.HttpMethod} {path}");
-                object? result = (req.HttpMethod, path) switch
+                object? result = await TryRouteJobs(req, path);
+                result ??= (req.HttpMethod, path) switch
                 {
                     ("GET", "/api/status") => GetStatus(),
                     ("GET", "/api/capabilities") => GetCapabilities(),
@@ -214,6 +217,8 @@ namespace YMM4McpPlugin
                     ("POST", "/api/playback/play") => await PlaybackControl("play"),
                     ("POST", "/api/playback/stop") => await PlaybackControl("stop"),
                     ("POST", "/api/project/save") => ExecCommand("SaveProjectCommand"),
+                    ("POST", "/api/project/open") => await OpenProject(req),
+                    ("POST", "/api/project/save-as") => await SaveProjectAs(req),
                     // ── 全機能アクセス用 汎用API ──────────────────────
                     ("POST", "/api/command") => await ExecCommandApi(req),
                     ("GET",  "/api/commands") => ListCommands(),
@@ -260,7 +265,7 @@ namespace YMM4McpPlugin
         private object GetCapabilities() => new
         {
             success = true,
-            api_schema_version = 3,
+            api_schema_version = 4,
             plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
             authentication = "X-Ymm4-Token",
             advanced_enabled = _allowAdvanced,
@@ -269,15 +274,17 @@ namespace YMM4McpPlugin
             {
                 media_import = true, character_discovery = true, script_dry_run_in_mcp = true,
                 timeline_validation_in_mcp = true, stable_item_ids = true, optimistic_concurrency = true,
-                persistent_item_ids = "native_when_available", final_video_export = false,
-                resumable_jobs = false, transactions = false, keyframe_api = true,
-                automatic_visual_audio_qa = false
+                persistent_item_ids = "native_when_available", final_video_export = true,
+                resumable_jobs = true, transactions = false, keyframe_api = true,
+                automatic_visual_audio_qa = false, project_open_save_as = true
             },
             limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
                 "Serialized API writes do not lock manual UI edits.", "A timed-out operation may continue; inspect state before retrying.",
                 "Voice parameters are inherited from registered characters; per-request engine/style overrides are not implemented.",
                 "Items without a native YMM4 identifier receive runtime-only IDs; check identity_persistent before storing an ID across restarts.",
-                "Keyframe edits use the host Animation/KeyFrames API via reflection; inspect the item if KEYFRAME_METHOD_UNAVAILABLE is returned." }
+                "Keyframe edits use the host Animation/KeyFrames API via reflection; inspect the item if KEYFRAME_METHOD_UNAVAILABLE is returned.",
+                "Export and project open/save-as discover host methods at runtime. EXPORT_METHOD_UNAVAILABLE / EXPORT_DIALOG_REQUIRED / OPEN_METHOD_UNAVAILABLE mean this YMM4 build needs a path-taking API.",
+                "Jobs continue after MCP disconnect but become interrupted when the YMM4 process exits. resume re-queues; it does not continue an in-progress encode." }
         };
 
         private object GetProjectInfo()
@@ -2245,6 +2252,14 @@ namespace YMM4McpPlugin
         /// Dispatcher.InvokeAsync(async () => ...) だと Operation 完了と内側 Task 完了が別になる。
         /// </summary>
         private static Task RunOnUi(Func<Task> action)
+        {
+            var dispatcher = Application.Current?.Dispatcher
+                ?? throw new InvalidOperationException("WPF Dispatcher unavailable");
+            if (dispatcher.CheckAccess()) return action();
+            return dispatcher.InvokeAsync(action).Task.Unwrap();
+        }
+
+        private static Task<T> RunOnUi<T>(Func<Task<T>> action)
         {
             var dispatcher = Application.Current?.Dispatcher
                 ?? throw new InvalidOperationException("WPF Dispatcher unavailable");
