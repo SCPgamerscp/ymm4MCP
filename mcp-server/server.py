@@ -601,12 +601,10 @@ async def add_script(args: dict) -> dict:
 async def _load_edit_binding(key: str | None) -> dict | None:
     if not key:
         return None
-    try:
-        state = await ymm4_get("/edits/state")
-    except httpx.HTTPError:
-        return None
-    if not isinstance(state, dict) or state.get("success") is False or "error" in state:
-        return None
+    state = await ymm4_get("/edits/state")
+    if (not isinstance(state, dict) or state.get("success") is False or "error" in state
+            or not isinstance(state.get("bindings"), list)):
+        raise ValueError("EditPlan bindings are unavailable")
     return editplan.pick_binding(state.get("bindings"), key)
 
 
@@ -618,10 +616,23 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if isinstance(characters, dict) and characters.get("success") is not False and "error" not in characters:
         names = [c["name"] for c in characters.get("characters", []) if isinstance(c, dict) and "name" in c]
     snapshot = await ymm4_get("/items")
+    if not isinstance(snapshot, dict):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
+                "error": "タイムラインの状態を取得できません。編集せず停止しました"}
     if snapshot.get("success") is False or "error" in snapshot:
         return snapshot
-    items = snapshot.get("items") or []
-    record = await _load_edit_binding(plan.get("idempotency_key"))
+    items = snapshot.get("items")
+    if not isinstance(items, list):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
+                "error": "タイムラインの状態を取得できません。編集せず停止しました"}
+    try:
+        record = await _load_edit_binding(plan.get("idempotency_key"))
+    except (httpx.HTTPError, ValueError):
+        return {"success": False, "error_code": "BINDINGS_UNAVAILABLE",
+                "error": "再適用情報を確認できません。編集せず停止しました", "rolled_back": False}
+    conflict = editplan.binding_conflict(plan, items, record)
+    if conflict:
+        return conflict
     if not dry_run:
         replay = editplan.replay_record(plan, items, record)
         if replay:
@@ -641,6 +652,11 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     unknown = next((w for w in preview["warnings"] if w.get("code") == "CHARACTER_UNKNOWN"), None)
     if unknown:
         raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {unknown.get('character')}")
+    content_conflicts = [w for w in preview["warnings"] if w.get("code") == "CONTENT_STATE_CONFLICT"]
+    if content_conflicts:
+        return {"success": False, "error_code": "EDIT_STATE_CONFLICT",
+                "error": "同じ内容の既存アイテムの配置が計画と異なります",
+                "conflicts": content_conflicts, "rolled_back": False}
 
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
     gap = plan["gap"]
@@ -691,7 +707,23 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                         "added": added, "failed_id": op["id"], "details": details, "rolled_back": False}
             cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
 
-    binding_error = None
+    try:
+        verified_snapshot = await ymm4_get("/items")
+    except httpx.HTTPError as exc:
+        verified_snapshot = {"error": str(exc)}
+    if (not isinstance(verified_snapshot, dict) or verified_snapshot.get("success") is False
+            or "error" in verified_snapshot or not isinstance(verified_snapshot.get("items"), list)):
+        return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
+                "error": "適用後のタイムラインを確認できません。itemsを確認してから再実行してください",
+                "added": added, "details": details, "outcome_unknown": True, "rolled_back": False,
+                "verification": verified_snapshot}
+    verification_failures = editplan.verify_applied_items(details, verified_snapshot["items"])
+    if verification_failures:
+        return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
+                "error": "追加結果と現在のタイムラインが一致しません。itemsを確認してください",
+                "added": added, "details": details, "verification_failures": verification_failures,
+                "outcome_unknown": True, "rolled_back": False}
+
     if plan.get("idempotency_key"):
         try:
             saved = await ymm4_post("/edits/bindings", {
@@ -699,10 +731,14 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 "plan_hash": editplan.plan_hash(plan),
                 "items": bindings,
             })
-            if isinstance(saved, dict) and saved.get("success") is False:
-                binding_error = saved
-        except httpx.HTTPError:
-            binding_error = {"error_code": "BINDINGS_NOT_SAVED"}
+        except httpx.HTTPError as exc:
+            saved = {"error": str(exc)}
+        if not isinstance(saved, dict) or saved.get("success") is not True:
+            code = saved.get("error_code") if isinstance(saved, dict) else None
+            return {"success": False, "error_code": code or "BINDINGS_NOT_SAVED",
+                    "error": "EditPlanは適用されましたが、再適用情報を保存できませんでした",
+                    "added": added, "details": details, "binding_error": saved,
+                    "rolled_back": False}
     result = {
         "success": True, "replayed": False, "dry_run": False, "added": added,
         "kept": sum(d["op"] == "keep" for d in details), "details": details,
@@ -711,9 +747,6 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         "item_count": plan["item_count"], "rolled_back": False,
         "note": "EditPlan is not transactional; failed items stay unapplied. Reconcile to finish missing ids.",
     }
-    if binding_error:
-        result["warning"] = "BINDINGS_NOT_SAVED"
-        result["binding_error"] = binding_error
     return result
 
 

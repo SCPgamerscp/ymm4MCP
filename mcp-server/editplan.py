@@ -298,10 +298,81 @@ def pick_binding(bindings, key):
     return None
 
 
+def binding_conflict(plan, current_items, record):
+    """Reject key reuse or edits to items already claimed by this plan."""
+    if not isinstance(record, dict):
+        return None
+    expected_hash = plan_hash(plan)
+    if record.get("plan_hash") != expected_hash:
+        return {
+            "success": False, "error_code": "IDEMPOTENCY_KEY_CONFLICT",
+            "error": "idempotency_key is already bound to a different EditPlan",
+            "idempotency_key": plan.get("idempotency_key"),
+            "plan_hash": expected_hash, "bound_plan_hash": record.get("plan_hash"),
+            "rolled_back": False,
+        }
+    current_by_id = {item.get("item_id"): item for item in current_items
+                     if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
+    mapped = bindings_map(record)
+    changed = []
+    for item in flatten_items(plan):
+        bound = mapped.get(item["id"])
+        if not bound:
+            continue
+        current = current_by_id.get(bound["item_id"])
+        if current is None:  # A deleted item can be reconciled.
+            continue
+        expected_revision = bound.get("revision")
+        actual_revision = current.get("revision")
+        if (not isinstance(expected_revision, str) or not expected_revision
+                or not isinstance(actual_revision, str) or not actual_revision
+                or expected_revision != actual_revision):
+            changed.append({"id": item["id"], "item_id": bound["item_id"],
+                            "expected_revision": expected_revision,
+                            "actual_revision": actual_revision})
+    if changed:
+        return {
+            "success": False, "error_code": "EDIT_STATE_CONFLICT",
+            "error": "Bound items changed or their revisions cannot be verified",
+            "idempotency_key": plan.get("idempotency_key"),
+            "conflicts": changed, "rolled_back": False,
+        }
+    return None
+
+
+def verify_applied_items(details, current_items):
+    """Compare every claimed item with one fresh timeline snapshot."""
+    if not isinstance(current_items, list):
+        return [{"code": "ITEMS_UNAVAILABLE"}]
+    current_by_id = {}
+    for item in current_items:
+        if isinstance(item, dict) and isinstance(item.get("item_id"), str):
+            current_by_id.setdefault(item["item_id"], []).append(item)
+    failures = []
+    for detail in details:
+        item_id = detail.get("item_id")
+        matches = current_by_id.get(item_id, [])
+        if not isinstance(item_id, str) or len(matches) != 1:
+            failures.append({"id": detail["id"], "item_id": item_id, "reason": "ITEM_NOT_UNIQUE"})
+            continue
+        current = matches[0]
+        expected = detail.get("result", detail)
+        fields = ("revision", "frame", "layer", "length") if detail["op"] == "add" else ("revision",)
+        mismatches = [field for field in fields
+                      if expected.get(field) is None or current.get(field) != expected[field]
+                      or (field == "revision" and not expected[field])]
+        if mismatches:
+            failures.append({"id": detail["id"], "item_id": item_id,
+                             "reason": "STATE_MISMATCH", "fields": mismatches})
+    return failures
+
+
 def replay_record(plan, current_items, record):
     if not isinstance(record, dict):
         return None
     if record.get("plan_hash") != plan_hash(plan):
+        return None
+    if binding_conflict(plan, current_items, record):
         return None
     current_ids = {item.get("item_id") for item in current_items if isinstance(item, dict)}
     mapped = bindings_map(record)
@@ -365,6 +436,15 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
                 match = current
         if match is not None:
             claimed.add(match["item_id"])
+            mismatches = []
+            if item["frame_source"] == "explicit" and match.get("frame") != item["frame"]:
+                mismatches.append("frame")
+            if item["length_source"] == "explicit" and match.get("length") != item["length"]:
+                mismatches.append("length")
+            if mismatches:
+                warnings.append({"code": "CONTENT_STATE_CONFLICT", "severity": "error",
+                                 "id": item["id"], "item_id": match["item_id"], "fields": mismatches,
+                                 "message": "同じ内容の既存アイテムの配置が計画と異なります"})
             ops.append({**item, "op": "keep", "item_id": match["item_id"],
                         "revision": match.get("revision"), "reason": "content"})
             continue
