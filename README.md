@@ -210,7 +210,9 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 #### 宣言的EditPlan（dry-run / 差分適用 / 冪等）
 
-LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、計画が変わっておらず対象アイテムが残っていれば二重追加しません。途中失敗はロールバックせず、`reconcile_edit` が不足分だけ再実行します。既存の計画外アイテムは削除しません。
+LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。途中失敗はロールバックせず、既存の計画外アイテムも削除しません。
+
+同じキーで計画を変えると `IDEMPOTENCY_KEY_CONFLICT`、適用済みアイテムの revision が変わると `EDIT_STATE_CONFLICT` で編集前に停止します。追加後は `/api/items` の実状態を照合し、不一致や取得失敗は `EDIT_VERIFY_FAILED`、バインディング保存失敗は `BINDINGS_NOT_SAVED` を返します。これらは追加済みアイテムを巻き戻さないため、`details` と最新の `items` を確認してから再実行してください。再適用情報を読み取れない場合は `BINDINGS_UNAVAILABLE` で編集せず停止します。
 
 ```python
 plan = {

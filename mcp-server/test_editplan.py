@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import editplan
 import server
 
@@ -23,6 +24,18 @@ def sample_plan(**overrides):
     }
     plan.update(overrides)
     return {"plan": plan, "idempotency_key": "episode-1"}
+
+
+def one_text_plan(text="hello"):
+    return {"plan": {"scenes": [{"id": "scene", "items": [
+        {"id": "caption", "type": "text", "text": text, "frame": 0, "layer": 1, "length": 10}
+    ]}]}, "idempotency_key": "edit-1"}
+
+
+def one_text_record(revision="r1"):
+    return {"idempotency_key": "edit-1", "plan_hash": editplan.plan_hash(
+        editplan.parse_plan(one_text_plan())), "items": [
+            {"id": "caption", "item_id": "native:caption", "revision": revision}]}
 
 
 class ParsePlanTests(unittest.TestCase):
@@ -107,9 +120,9 @@ class DiffAndReplayTests(unittest.TestCase):
             ],
         }
         current = [
-            {"item_id": "native:bg", "type": "VideoItem", "layer": 0, "frame": 0, "length": 900, "text": "x"},
-            {"item_id": "native:line", "type": "VoiceItem", "layer": 7, "frame": 0, "length": 80, "text": "こんにちは"},
-            {"item_id": "native:cap", "type": "TextItem", "layer": 9, "frame": 0, "length": 90, "text": "こんにちは"},
+            {"item_id": "native:bg", "type": "VideoItem", "layer": 0, "frame": 0, "length": 900, "text": "x", "revision": "r0"},
+            {"item_id": "native:line", "type": "VoiceItem", "layer": 7, "frame": 0, "length": 80, "text": "こんにちは", "revision": "r1"},
+            {"item_id": "native:cap", "type": "TextItem", "layer": 9, "frame": 0, "length": 90, "text": "こんにちは", "revision": "r2"},
             {"item_id": "native:extra", "type": "AudioItem", "layer": 1, "frame": 0, "length": 30, "text": "bgm.wav"},
         ]
         replay = editplan.replay_record(parsed, current, record)
@@ -147,6 +160,36 @@ class DiffAndReplayTests(unittest.TestCase):
         self.assertEqual(state["scenes"][0]["id"], "timeline")
         self.assertEqual(state["scenes"][0]["items"][0]["type"], "voice")
 
+    def test_changed_binding_is_not_replayed(self):
+        plan = editplan.parse_plan(one_text_plan())
+        current = [{"item_id": "native:caption", "revision": "r2"}]
+        self.assertIsNone(editplan.replay_record(plan, current, one_text_record()))
+        conflict = editplan.binding_conflict(plan, current, one_text_record())
+        self.assertEqual(conflict["error_code"], "EDIT_STATE_CONFLICT")
+        self.assertEqual(conflict["conflicts"][0]["id"], "caption")
+
+    def test_missing_binding_can_be_reconciled(self):
+        plan = editplan.parse_plan(one_text_plan())
+        self.assertIsNone(editplan.binding_conflict(plan, [], one_text_record()))
+        self.assertEqual(editplan.diff_plan(plan, [], one_text_record())["added"], 1)
+
+    def test_unbound_content_at_wrong_frame_is_a_conflict(self):
+        plan = editplan.parse_plan(one_text_plan())
+        current = [{"item_id": "native:caption", "revision": "r1", "type": "TextItem",
+                    "text": "hello", "frame": 5, "layer": 1, "length": 10}]
+        preview = editplan.diff_plan(plan, current)
+        self.assertFalse(preview["passed"])
+        self.assertEqual(preview["warnings"][0]["code"], "CONTENT_STATE_CONFLICT")
+
+    def test_added_item_verification_checks_identity_and_revision(self):
+        detail = {"id": "caption", "op": "add", "item_id": "native:caption",
+                  "result": {"revision": "r1", "frame": 0, "layer": 1, "length": 10}}
+        self.assertEqual(editplan.verify_applied_items([detail], []), [
+            {"id": "caption", "item_id": "native:caption", "reason": "ITEM_NOT_UNIQUE"}])
+        current = [{"item_id": "native:caption", "revision": "r2", "frame": 0,
+                    "layer": 1, "length": 10}]
+        self.assertEqual(editplan.verify_applied_items([detail], current)[0]["fields"], ["revision"])
+
 
 class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
     def _patches(self, items, characters, posts):
@@ -154,7 +197,7 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             if path == "/characters":
                 return {"success": True, "characters": characters}
             if path == "/items":
-                return {"success": True, "items": items}
+                return {"success": True, "items": items() if callable(items) else items}
             if path == "/edits/state":
                 return {"success": True, "bindings": []}
             raise AssertionError(path)
@@ -173,19 +216,24 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_apply_edit_adds_then_replays(self):
         created = []
+        created_items = []
 
         async def post(path, body=None, timeout=10.0):
             del timeout
             if path.startswith("/items/"):
                 created.append((path, body))
                 kind = path.rsplit("/", 1)[-1]
-                return {"success": True, "item_id": f"native:{len(created)}", "revision": "r",
-                        "frame": body.get("frame", 0), "length": 45 if kind == "voice" else body.get("length", 30)}
+                result = {"success": True, "item_id": f"native:{len(created)}", "revision": "r",
+                          "frame": body.get("frame", 0), "layer": body["layer"],
+                          "length": 45 if kind == "voice" else body.get("length", 30)}
+                created_items.append({**result, "type": {"video": "VideoItem", "voice": "VoiceItem",
+                                                          "text": "TextItem"}[kind], "text": body.get("text", body.get("path", ""))})
+                return result
             if path == "/edits/bindings":
                 return {"success": True, "idempotency_key": body["idempotency_key"]}
             raise AssertionError(path)
 
-        get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
+        get, posted = self._patches(lambda: created_items, [{"name": "ゆっくり霊夢"}], post)
         with get, posted:
             result = await server.dispatch({"action": "apply_edit", **sample_plan()})
         self.assertTrue(result["success"])
@@ -198,11 +246,7 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             "plan_hash": result["plan_hash"],
             "items": [{"id": row["id"], "item_id": row["item_id"], "revision": "r"} for row in result["details"]],
         }
-        current = [
-            {"item_id": row["item_id"], "type": {"video": "VideoItem", "voice": "VoiceItem", "text": "TextItem"}[row["kind"]],
-             "layer": 0, "frame": 0, "length": 45, "text": "x"}
-            for row in result["details"]
-        ]
+        current = created_items
 
         async def get_replay(path):
             if path == "/characters":
@@ -251,6 +295,196 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_code"], "EDIT_PARTIAL_FAILURE")
         self.assertEqual(result["added"], 1)
         self.assertFalse(result["rolled_back"])
+
+    async def test_reused_key_with_changed_plan_stops_before_post(self):
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/items":
+                return {"items": []}
+            if path == "/edits/state":
+                return {"success": True, "bindings": [one_text_record()]}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", new_callable=AsyncMock) as posted:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan("changed")})
+            posted.assert_not_awaited()
+        self.assertEqual(result["error_code"], "IDEMPOTENCY_KEY_CONFLICT")
+
+    async def test_manual_change_stops_before_post(self):
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/items":
+                return {"items": [{"item_id": "native:caption", "revision": "r2"}]}
+            if path == "/edits/state":
+                return {"success": True, "bindings": [one_text_record()]}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", new_callable=AsyncMock) as posted:
+            result = await server.dispatch({"action": "reconcile_edit", **one_text_plan()})
+            posted.assert_not_awaited()
+        self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+
+    async def test_missing_item_is_added_once_by_reconcile(self):
+        current = []
+        posts = []
+
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/items":
+                return {"items": list(current)}
+            if path == "/edits/state":
+                return {"success": True, "bindings": [one_text_record()]}
+            raise AssertionError(path)
+
+        async def post(path, body=None, timeout=10.0):
+            del timeout
+            posts.append(path)
+            if path == "/items/text":
+                item = {"item_id": "native:caption", "revision": "r1", "frame": body["frame"],
+                        "layer": body["layer"], "length": body["length"], "type": "TextItem", "text": body["text"]}
+                current.append(item)
+                return {"success": True, **item}
+            if path == "/edits/bindings":
+                return {"success": True}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", AsyncMock(side_effect=post)):
+            result = await server.dispatch({"action": "reconcile_edit", **one_text_plan()})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(posts, ["/items/text", "/edits/bindings"])
+
+    async def test_post_apply_mismatch_does_not_save_binding(self):
+        items_calls = 0
+
+        async def get(path):
+            nonlocal items_calls
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/edits/state":
+                return {"success": True, "bindings": []}
+            if path == "/items":
+                items_calls += 1
+                return {"items": [] if items_calls == 1 else [
+                    {"item_id": "native:caption", "revision": "r1", "frame": 5, "layer": 1, "length": 10}]}
+            raise AssertionError(path)
+
+        async def post(path, body=None, timeout=10.0):
+            del body, timeout
+            self.assertEqual(path, "/items/text")
+            return {"success": True, "item_id": "native:caption", "revision": "r1",
+                    "frame": 0, "layer": 1, "length": 10}
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", AsyncMock(side_effect=post)) as posted:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            self.assertEqual(posted.await_count, 1)
+        self.assertEqual(result["error_code"], "EDIT_VERIFY_FAILED")
+        self.assertEqual(result["verification_failures"][0]["fields"], ["frame"])
+
+    async def test_retry_after_mismatch_stops_without_adding(self):
+        current = [{"item_id": "native:caption", "revision": "r1", "type": "TextItem",
+                    "text": "hello", "frame": 5, "layer": 1, "length": 10}]
+        get, post = self._patches(current, [], {"success": True})
+        with get, post as posted:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            posted.assert_not_awaited()
+        self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+
+    async def test_post_apply_read_failure_does_not_save_binding(self):
+        items_calls = 0
+
+        async def get(path):
+            nonlocal items_calls
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/edits/state":
+                return {"success": True, "bindings": []}
+            if path == "/items":
+                items_calls += 1
+                if items_calls == 2:
+                    raise httpx.ConnectError("connection lost")
+                return {"items": []}
+            raise AssertionError(path)
+
+        async def post(path, body=None, timeout=10.0):
+            del body, timeout
+            self.assertEqual(path, "/items/text")
+            return {"success": True, "item_id": "native:caption", "revision": "r1",
+                    "frame": 0, "layer": 1, "length": 10}
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", AsyncMock(side_effect=post)) as posted:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            self.assertEqual(posted.await_count, 1)
+        self.assertEqual(result["error_code"], "EDIT_VERIFY_FAILED")
+        self.assertTrue(result["outcome_unknown"])
+
+    async def test_binding_save_failure_is_not_success(self):
+        current = []
+
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/items":
+                return {"items": list(current)}
+            if path == "/edits/state":
+                return {"success": True, "bindings": []}
+            raise AssertionError(path)
+
+        async def post(path, body=None, timeout=10.0):
+            del timeout
+            if path == "/items/text":
+                current.append({"item_id": "native:caption", "revision": "r1", "frame": 0,
+                                "layer": 1, "length": 10, "type": "TextItem", "text": "hello"})
+                return {"success": True, **current[0]}
+            if path == "/edits/bindings":
+                return {"success": False, "error_code": "BINDINGS_NOT_SAVED"}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", AsyncMock(side_effect=post)):
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "BINDINGS_NOT_SAVED")
+        self.assertEqual(result["added"], 1)
+        self.assertFalse(result["rolled_back"])
+
+    async def test_unavailable_bindings_stop_before_post(self):
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/items":
+                return {"items": []}
+            if path == "/edits/state":
+                return {"success": False, "error": "disk error"}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", new_callable=AsyncMock) as posted:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            posted.assert_not_awaited()
+        self.assertEqual(result["error_code"], "BINDINGS_UNAVAILABLE")
+
+    async def test_invalid_initial_items_stop_before_post(self):
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": []}
+            if path == "/items":
+                return {"success": True, "items": None}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
+                server, "ymm4_post", new_callable=AsyncMock) as posted:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            posted.assert_not_awaited()
+        self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
 
     async def test_get_edit_state_and_skill_prompt(self):
         with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True, "scenes": []})) as get:

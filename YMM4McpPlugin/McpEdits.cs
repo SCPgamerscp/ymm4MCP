@@ -135,12 +135,24 @@ namespace YMM4McpPlugin
             };
             lock (_editsLock)
             {
-                _editBindings.RemoveAll(b => b.IdempotencyKey == key);
-                _editBindings.Add(record);
-                if (_editBindings.Count > 40)
-                    _editBindings = _editBindings.TakeLast(30).ToList();
+                var existing = _editBindings.FirstOrDefault(b => b.IdempotencyKey == key);
+                if (existing != null && !string.Equals(existing.PlanHash, hash, StringComparison.Ordinal))
+                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to a different EditPlan");
+                var updated = _editBindings.Where(b => b.IdempotencyKey != key).Select(b => b.Clone()).ToList();
+                updated.Add(record);
+                if (updated.Count > 40)
+                    updated = updated.TakeLast(30).ToList();
+                try
+                {
+                    PersistEditBindings(updated);
+                    _editBindings = updated;
+                }
+                catch (Exception ex)
+                {
+                    Log("EditPlanバインディング保存に失敗: " + ex.Message);
+                    return Failure("BINDINGS_NOT_SAVED", "EditPlanバインディングを保存できませんでした");
+                }
             }
-            PersistEditBindings();
             return new { success = true, idempotency_key = key, item_count = items.Count, plan_hash = hash };
         }
 
@@ -163,19 +175,12 @@ namespace YMM4McpPlugin
             catch (Exception ex) { Log("EditPlanバインディング復元に失敗: " + ex.Message); }
         }
 
-        private void PersistEditBindings()
+        private static void PersistEditBindings(List<EditBindingRecord> records)
         {
-            try
-            {
-                McpSettings.PrepareDirectory();
-                List<EditBindingRecord> records;
-                lock (_editsLock)
-                    records = _editBindings.Select(b => b.Clone()).ToList();
-                string temp = EditsFilePath + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(records, EditJson));
-                File.Move(temp, EditsFilePath, true);
-            }
-            catch (Exception ex) { Log("EditPlanバインディング保存に失敗: " + ex.Message); }
+            McpSettings.PrepareDirectory();
+            string temp = EditsFilePath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(records, EditJson));
+            File.Move(temp, EditsFilePath, true);
         }
 
         private static object DescribeBinding(EditBindingRecord record) => new
