@@ -1,0 +1,90 @@
+name: Package YMM4 plugin
+
+on:
+  pull_request:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Download official YMM4 Lite build references
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'YukkuriMovieMaker_v4_Lite.zip'
+          $directory = Join-Path $env:RUNNER_TEMP 'ymm4-lite'
+          Invoke-WebRequest -Uri 'https://object-storage.tyo1.conoha.io/v1/nc_4fac3ef0e6d843249e0ab2f1fc3e8f85/public/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          $pluginDlls = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter 'YukkuriMovieMaker.Plugin.dll' -File)
+          if ($pluginDlls.Count -ne 1) { throw "Expected one YMM4 Plugin DLL; found $($pluginDlls.Count)" }
+          $libPath = $pluginDlls[0].DirectoryName
+          if (-not (Test-Path -LiteralPath (Join-Path $libPath 'YukkuriMovieMaker.Controls.dll'))) {
+            throw 'YMM4 Controls DLL is missing'
+          }
+          "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
+      - name: Build .ymme
+        shell: pwsh
+        run: dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
+      - name: Validate release package and tag
+        shell: pwsh
+        run: |
+          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match plugin version $version"
+          }
+          $package = "artifacts/YMM4McpPlugin-$version.ymme"
+          if (-not (Test-Path -LiteralPath $package)) { throw "Missing package: $package" }
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $package).Path)
+          try {
+            $actual = @($zip.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName })
+            $expected = @('YMM4McpPlugin/YMM4McpPlugin.dll', 'YMM4McpPlugin/YMM4McpPlugin.deps.json')
+            if (@(Compare-Object $expected $actual).Count -ne 0) {
+              throw "Unexpected .ymme contents: $($actual -join ', ')"
+            }
+          }
+          finally { $zip.Dispose() }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ymm4mcp-ymme
+          path: artifacts/*.ymme
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify tag is on main
+        shell: pwsh
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch main' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on main' }
+      - uses: actions/download-artifact@v4
+        with:
+          name: ymm4mcp-ymme
+          path: release
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $package = @(Get-ChildItem -LiteralPath release -Filter '*.ymme' -File)
+          if ($package.Count -ne 1) { throw "Expected one .ymme; found $($package.Count)" }
+          $packagePath = $package[0].FullName
+          gh release create $env:GITHUB_REF_NAME $packagePath --verify-tag --title $env:GITHUB_REF_NAME --notes 'YMM4プラグインの .ymme をダウンロードし、ダブルクリックしてインストールしてください。Python MCPサーバーは README の手順で設定してください。'

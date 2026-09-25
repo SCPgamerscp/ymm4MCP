@@ -34,6 +34,8 @@
     <Copy SourceFiles="@(DeployFiles)" DestinationFolder="$(YMM4InstallPath)/user/plugin/YMM4McpPlugin/" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="PackageYmme" AfterTargets="Build" Condition="'$(CreateYmme)' == 'true'">
+    <Error Condition="!Exists('$(TargetPath)')" Text="Plugin DLL is missing; cannot create .ymme." />
+    <Error Condition="!Exists('$(TargetDir)$(AssemblyName).deps.json')" Text="Plugin deps.json is missing; cannot create .ymme." />
     <PropertyGroup>
       <PackageStage>$(IntermediateOutputPath)ymme/YMM4McpPlugin</PackageStage>
       <PackageDirectory>$(MSBuildProjectDirectory)/../artifacts</PackageDirectory>
