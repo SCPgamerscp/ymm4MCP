@@ -594,8 +594,26 @@ async def add_script(args: dict) -> dict:
                     "error": "追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
                     "added": len(results), "failed_line": index, "details": results,
                     "rolled_back": False}
+    try:
+        snapshot = await ymm4_get("/items")
+    except httpx.HTTPError as exc:
+        snapshot = {"error": str(exc)}
+    if (not isinstance(snapshot, dict) or snapshot.get("success") is False
+            or "error" in snapshot or not isinstance(snapshot.get("items"), list)):
+        return {"success": False, "error_code": "SCRIPT_VERIFY_FAILED",
+                "error": "追加後のタイムラインを確認できません。itemsを確認してから再実行してください",
+                "added": len(results), "details": results, "verification": snapshot,
+                "outcome_unknown": True, "rolled_back": False}
+    details = [{"id": str(index), "op": "add", "item_id": res.get("item_id"), "result": res}
+               for index, res in enumerate(results)]
+    failures = editplan.verify_applied_items(details, snapshot["items"])
+    if failures:
+        return {"success": False, "error_code": "SCRIPT_VERIFY_FAILED",
+                "error": "追加結果と現在のタイムラインが一致しません。itemsを確認してください",
+                "added": len(results), "details": results, "verification_failures": failures,
+                "outcome_unknown": True, "rolled_back": False}
     return {"success": True, "added": len(results), "total_frames": frame,
-            "details": results, "dry_run": False}
+            "details": results, "verified": True, "dry_run": False}
 
 
 async def _load_edit_binding(key: str | None) -> dict | None:
