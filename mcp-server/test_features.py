@@ -242,6 +242,33 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                 "prop": "X", "action": "set", "item_id": "native:a", "at": 10, "value": -12.5,
             })
 
+    async def test_invalid_edit_coordinates_are_rejected_before_http(self):
+        invalid = [
+            {"sub_action": "property", "frame": -1, "layer": 0, "prop": "Length", "value": 1},
+            {"sub_action": "select", "frame": 0, "layer": -1},
+            {"sub_action": "move", "filename": "clip.mp4", "frame": -1},
+            {"sub_action": "move", "filename": "clip.mp4", "length": 0},
+            {"sub_action": "duration", "frames": 0},
+            {"sub_action": "resolve_overlaps", "gap": -1},
+            {"sub_action": "resolve_overlaps", "layers": [0, -1]},
+            {"sub_action": "shift", "from_frame": -1, "delta": 1},
+            {"sub_action": "shift", "from_frame": 0, "delta": True},
+        ]
+        for values in invalid:
+            with self.subTest(values=values), patch.object(
+                server, "ymm4_post", new_callable=AsyncMock
+            ) as post:
+                with self.assertRaises(ValueError):
+                    await server.dispatch({"action": "edit_item", **values})
+                post.assert_not_awaited()
+
+    async def test_delete_keeps_legacy_minus_one_selector_sentinel(self):
+        with patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
+            await server.dispatch({
+                "action": "edit_item", "sub_action": "delete", "frame": -1, "layer": -1,
+            })
+            post.assert_awaited_once_with("/items/delete", {})
+
     async def test_advanced_hidden_and_rejected_unless_enabled(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertNotIn("ymm4_advanced", [t.name for t in (await server.list_tools()).tools])
