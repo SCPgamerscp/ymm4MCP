@@ -329,6 +329,7 @@ lines=[
 action="validate",
 duration=1800,
 include_gaps=False,  # 空白を意図したレイヤーでは警告を省略
+subtitle_layers=[9],  # レイヤー9のTextItemを字幕としてセリフとの対応を検査（省略可）
 expected=[
     {"item_id": "native:...", "revision": "..."},
 ]
@@ -337,6 +338,7 @@ expected=[
 結果は `passed`、0〜100の `score`、エラー・警告件数の `summary`、および `issues` を返します。
 各Issueには可能な範囲で `frame_range`、`item_ids`、`suggested_fix` が含まれます。`problems` は既存クライアント互換のための `issues` の別名です。
 先頭フレームより前の空白は警告せず、アイテム同士の内部空白だけを `GAP` として報告します。
+`subtitle_layers` を指定すると、各 VoiceItem の発話と時間が重なる指定レイヤーの TextItem を探し、空白・改行を除いた本文が一致しなければ `SUBTITLE_MISSING` または `SUBTITLE_TEXT_MISMATCH` を返します。テロップ用レイヤーは指定しないでください。発話テキストを取得できない場合は `SUBTITLE_CHECK_SKIPPED` を警告します。字幕が発話の全時間を覆うかどうかは検査しません。
 映像の見切れや音量などはこの検査の対象外なので、`preview` / `watch` と組み合わせて確認してください。
 
 ---
