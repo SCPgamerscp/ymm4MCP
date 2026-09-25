@@ -151,17 +151,51 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_script_preflight_and_actual_duration(self):
         lines = [{"character": "A", "text": "one"}, {"character": "A", "text": "two"}]
-        with patch.object(server, "ymm4_get", AsyncMock(return_value={"characters": [{"name": "A"}]})), patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-            {"success": True, "frame": 10, "length": 95}, {"success": True, "frame": 110, "length": 10}
-        ])) as post:
+        added = [{"success": True, "item_id": "native:one", "revision": "r1", "frame": 10, "layer": 0, "length": 95},
+                 {"success": True, "item_id": "native:two", "revision": "r2", "frame": 110, "layer": 0, "length": 10}]
+        snapshot = {"items": [{k: v for k, v in result.items() if k != "success"} for result in added]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+            {"characters": [{"name": "A"}]}, snapshot,
+        ])) as get, patch.object(server, "ymm4_post", AsyncMock(side_effect=added)) as post:
             result = await server.add_script({"start_frame": 10, "gap": 5, "lines": lines})
             self.assertEqual(post.await_args_list[1].args[1]["frame"], 110)
             self.assertEqual(result["total_frames"], 125)
             self.assertEqual(result["added"], 2)
+            self.assertTrue(result["verified"])
+            self.assertEqual(get.await_args_list[-1].args, ("/items",))
         with patch.object(server, "ymm4_get", AsyncMock(return_value={"characters": []})), patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
             with self.assertRaises(ValueError):
                 await server.add_script({"lines": lines})
             post.assert_not_awaited()
+
+    async def test_script_verification_rejects_missing_or_changed_items(self):
+        added = {"success": True, "item_id": "native:one", "revision": "r1",
+                 "frame": 0, "layer": 0, "length": 30}
+        cases = [
+            ({"items": []}, "ITEM_NOT_UNIQUE"),
+            ({"items": [{**added, "length": 40}]}, "STATE_MISMATCH"),
+        ]
+        for snapshot, reason in cases:
+            with self.subTest(reason=reason), patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"characters": [{"name": "A"}]}, snapshot,
+            ])), patch.object(server, "ymm4_post", AsyncMock(return_value=added)) as post:
+                result = await server.add_script({"lines": [{"character": "A", "text": "one"}]})
+                self.assertEqual(result["error_code"], "SCRIPT_VERIFY_FAILED")
+                self.assertEqual(result["verification_failures"][0]["reason"], reason)
+                self.assertTrue(result["outcome_unknown"])
+                post.assert_awaited_once()
+
+    async def test_script_verification_unavailable_does_not_retry_voice(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+            {"characters": [{"name": "A"}]}, httpx.ReadTimeout(""),
+        ])), patch.object(server, "ymm4_post", AsyncMock(return_value={
+            "success": True, "item_id": "native:one", "revision": "r1",
+            "frame": 0, "layer": 0, "length": 30,
+        })) as post:
+            result = await server.add_script({"lines": [{"character": "A", "text": "one"}]})
+            self.assertEqual(result["error_code"], "SCRIPT_VERIFY_FAILED")
+            self.assertTrue(result["outcome_unknown"])
+            post.assert_awaited_once()
 
     async def test_partial_failure_and_unknown_length_stop(self):
         for failure in ({"success": False, "error": "failed"}, {"success": True, "frame": 10, "length": -1}, httpx.ReadTimeout("")):
