@@ -66,10 +66,35 @@ class ParsePlanTests(unittest.TestCase):
                 {"id": "x", "type": "text", "text": "a", "length": 1}]}]}},
             {"idempotency_key": " padded", "plan": {"scenes": [{"id": "a", "items": [
                 {"id": "x", "type": "text", "text": "a", "length": 1}]}]}},
+            {"atomic_scenes": "true", "plan": {"scenes": [{"id": "a", "items": [
+                {"id": "x", "type": "text", "text": "a", "length": 1}]}]}},
         ]
         for args in invalid:
             with self.subTest(args=args), self.assertRaises(ValueError):
                 editplan.parse_plan(args)
+
+    def test_atomic_scenes_defaults_true_and_is_not_hashed(self):
+        parsed = editplan.parse_plan(sample_plan())
+        self.assertTrue(parsed["atomic_scenes"])
+        off = editplan.parse_plan({**sample_plan(), "atomic_scenes": False})
+        self.assertFalse(off["atomic_scenes"])
+        self.assertEqual(editplan.plan_hash(parsed), editplan.plan_hash(off))
+        self.assertTrue(editplan.checkpoint_id_ok("cp_" + "a" * 32))
+        self.assertFalse(editplan.checkpoint_id_ok("cp_ab"))
+        self.assertFalse(editplan.checkpoint_id_ok("../cp_x"))
+        self.assertEqual(editplan.parse_reason({"reason": "before apply"}), "before apply")
+        with self.assertRaises(ValueError):
+            editplan.parse_reason({"reason": "x" * 201})
+
+    def test_group_ops_keeps_scene_order(self):
+        ops = [
+            {"id": "a", "scene_id": "intro", "op": "add"},
+            {"id": "b", "scene_id": "intro", "op": "keep"},
+            {"id": "c", "scene_id": "body", "op": "add"},
+        ]
+        grouped = editplan.group_ops_by_scene(ops)
+        self.assertEqual([g["id"] for g in grouped], ["intro", "body"])
+        self.assertEqual([op["id"] for op in grouped[0]["ops"]], ["a", "b"])
 
     def test_explicit_scene_duration_and_unique_scene_ids(self):
         parsed = editplan.parse_plan({"plan": {"scenes": [
@@ -279,13 +304,18 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 await server.dispatch({"action": "apply_edit", **sample_plan()})
             posted.assert_not_awaited()
 
-    async def test_partial_failure_does_not_continue(self):
+    async def test_partial_failure_rolls_back_the_failed_scene(self):
+        calls = []
+
         async def post(path, body=None, timeout=10.0):
-            del body, timeout
+            del timeout
+            calls.append((path, body))
             if path == "/items/video":
                 return {"success": True, "item_id": "native:bg", "revision": "r", "frame": 0, "length": 300}
             if path == "/items/voice":
                 return {"success": False, "error": "character missing"}
+            if path == "/items/delete":
+                return {"success": True, "removed": 1, "item_ids": body["item_ids"]}
             raise AssertionError(path)
 
         get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
@@ -293,8 +323,109 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             result = await server.dispatch({"action": "apply_edit", **sample_plan()})
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "EDIT_PARTIAL_FAILURE")
-        self.assertEqual(result["added"], 1)
+        self.assertTrue(result["rolled_back"])
+        self.assertEqual(result["added"], 0)
+        self.assertEqual(result["failed_scene"], "intro")
+        self.assertEqual(result["committed_scenes"], [])
+        self.assertEqual(calls[-1], ("/items/delete", {"item_ids": ["native:bg"]}))
+
+    async def test_unknown_add_outcome_does_not_delete(self):
+        calls = []
+
+        async def post(path, body=None, timeout=10.0):
+            del timeout, body
+            calls.append(path)
+            if path == "/items/video":
+                raise httpx.ConnectError("connection lost")
+            raise AssertionError(path)
+
+        get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
+        with get, posted:
+            result = await server.dispatch({"action": "apply_edit", **sample_plan()})
+        self.assertEqual(result["error_code"], "EDIT_REQUEST_FAILED")
+        self.assertTrue(result["outcome_unknown"])
         self.assertFalse(result["rolled_back"])
+        self.assertNotIn("/items/delete", calls)
+
+    async def test_atomic_scenes_false_keeps_partial_adds(self):
+        async def post(path, body=None, timeout=10.0):
+            del timeout
+            if path == "/items/video":
+                return {"success": True, "item_id": "native:bg", "revision": "r", "frame": 0, "length": 300}
+            if path == "/items/voice":
+                return {"success": False, "error": "character missing"}
+            if path == "/edits/bindings":
+                return {"success": True, "idempotency_key": body["idempotency_key"]}
+            raise AssertionError(path)
+
+        get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
+        with get, posted:
+            result = await server.dispatch({"action": "apply_edit", "atomic_scenes": False, **sample_plan()})
+        self.assertFalse(result["success"])
+        self.assertFalse(result["rolled_back"])
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(result["details"][0]["item_id"], "native:bg")
+
+    async def test_failed_scene_rolls_back_only_that_scene(self):
+        calls = []
+
+        async def post(path, body=None, timeout=10.0):
+            del timeout
+            calls.append((path, body))
+            if path == "/items/text":
+                text = body["text"]
+                if text == "keep-me":
+                    return {"success": True, "item_id": "native:intro", "revision": "r", "frame": 0, "length": 10}
+                if text == "temp":
+                    return {"success": True, "item_id": "native:body", "revision": "r", "frame": 20, "length": 10}
+                return {"success": False, "error": "boom"}
+            if path == "/edits/bindings":
+                return {"success": True, "idempotency_key": body["idempotency_key"]}
+            if path == "/items/delete":
+                return {"success": True, "removed": 1, "item_ids": body["item_ids"]}
+            raise AssertionError(path)
+
+        plan = {"plan": {"scenes": [
+            {"id": "intro", "items": [{"id": "t1", "type": "text", "text": "keep-me", "length": 10, "layer": 1}]},
+            {"id": "body", "items": [
+                {"id": "t2", "type": "text", "text": "temp", "length": 10, "layer": 1, "frame": 20},
+                {"id": "t3", "type": "text", "text": "fail", "length": 10, "layer": 1, "frame": 40},
+            ]},
+        ]}, "idempotency_key": "ep-2"}
+        get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
+        with get, posted:
+            result = await server.dispatch({"action": "apply_edit", **plan})
+        self.assertFalse(result["success"])
+        self.assertTrue(result["rolled_back"])
+        self.assertEqual(result["committed_scenes"], ["intro"])
+        self.assertEqual(result["failed_scene"], "body")
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(result["details"][0]["item_id"], "native:intro")
+        deletes = [body for path, body in calls if path == "/items/delete"]
+        self.assertEqual(deletes, [{"item_ids": ["native:body"]}])
+        bindings = [body for path, body in calls if path == "/edits/bindings"]
+        self.assertEqual(bindings[0]["items"][0]["item_id"], "native:intro")
+
+    async def test_checkpoint_and_rollback_dispatch(self):
+        with patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True, "checkpoint_id": "cp_" + "a" * 32})) as post:
+            await server.dispatch({"action": "control", "sub_action": "checkpoint", "reason": "before apply", "backup": True})
+            post.assert_awaited_once_with("/edits/checkpoint", {"reason": "before apply", "backup": True})
+        checkpoint_id = "cp_" + "b" * 32
+        with patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
+            await server.dispatch({"action": "control", "sub_action": "rollback", "checkpoint_id": checkpoint_id})
+            post.assert_awaited_once_with("/edits/rollback", {"checkpoint_id": checkpoint_id})
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True, "checkpoints": []})) as get:
+            await server.dispatch({"action": "get_info", "sub_action": "checkpoints"})
+            get.assert_awaited_once_with("/edits/checkpoints")
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True})) as get:
+            await server.dispatch({"action": "get_info", "sub_action": "checkpoints", "checkpoint_id": checkpoint_id})
+            get.assert_awaited_once_with(f"/edits/checkpoints/{checkpoint_id}")
+        with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            with self.assertRaises(ValueError):
+                await server.dispatch({"action": "control", "sub_action": "rollback", "checkpoint_id": "../x"})
+            with self.assertRaises(ValueError):
+                await server.dispatch({"action": "control", "sub_action": "checkpoint", "backup": "yes"})
+            post.assert_not_awaited()
 
     async def test_reused_key_with_changed_plan_stops_before_post(self):
         async def get(path):
@@ -494,6 +625,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         prompt = await mcp_skills.get_prompt("jikkyou", {"theme": "ボス戦"})
         self.assertIn("plan_edit", prompt.messages[0].content.text)
         self.assertIn("reconcile_edit", prompt.messages[0].content.text)
+        self.assertIn("control/checkpoint", prompt.messages[0].content.text)
+        self.assertIn("control/rollback", prompt.messages[0].content.text)
 
 
 if __name__ == "__main__":

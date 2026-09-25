@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 from editing import integer, validate_timeline
@@ -13,6 +14,8 @@ MAX_SCENES = 200
 MAX_ITEMS = 1000
 MAX_ID_LEN = 64
 MAX_TEXT = 10000
+MAX_REASON = 200
+_CHECKPOINT_ID = re.compile(r"^cp_[A-Za-z0-9]{8,64}$")
 KIND = {
     "video": "video", "audio": "audio", "bgm": "audio", "se": "audio",
     "image": "image", "text": "text", "subtitle": "text",
@@ -27,6 +30,19 @@ ITEM_FIELDS = {
     "tachie": {"id", "type", "layer", "frame", "length", "character"},
     "face": {"id", "type", "layer", "frame", "length", "character"},
 }
+
+
+def checkpoint_id_ok(value):
+    return isinstance(value, str) and bool(_CHECKPOINT_ID.match(value))
+
+
+def parse_reason(args):
+    if not isinstance(args, dict) or "reason" not in args:
+        return None
+    reason = args["reason"]
+    if not isinstance(reason, str) or len(reason) > MAX_REASON:
+        raise ValueError(f"reason must be a string of at most {MAX_REASON} characters")
+    return reason
 
 
 def _id(value, name):
@@ -87,6 +103,8 @@ def parse_plan(args):
             raise ValueError("idempotency_key must be a 1..128 character string")
     if "dry_run" in args and not isinstance(args["dry_run"], bool):
         raise ValueError("dry_run must be boolean")
+    if "atomic_scenes" in args and not isinstance(args["atomic_scenes"], bool):
+        raise ValueError("atomic_scenes must be boolean")
 
     parsed_scenes = []
     seen_scenes = set()
@@ -144,6 +162,7 @@ def parse_plan(args):
         "project": {k: v for k, v in {"fps": fps, "width": width, "height": height}.items() if v is not None},
         "gap": gap, "chars_per_sec": speed, "start_frame": start, "scenes": parsed_scenes,
         "total_frames": cursor, "item_count": total_items,
+        "atomic_scenes": args.get("atomic_scenes", True),
     }
     if key is not None:
         plan["idempotency_key"] = key
@@ -228,6 +247,17 @@ def flatten_items(plan):
         for item in scene["items"]:
             items.append({**item, "scene_id": scene["id"]})
     return items
+
+
+def group_ops_by_scene(ops):
+    grouped = []
+    for op in ops:
+        scene_id = op.get("scene_id")
+        if not grouped or grouped[-1]["id"] != scene_id:
+            grouped.append({"id": scene_id, "ops": [op]})
+        else:
+            grouped[-1]["ops"].append(op)
+    return grouped
 
 
 def add_payload(item):
@@ -391,6 +421,8 @@ def replay_record(plan, current_items, record):
         "ops": kept, "warnings": [], "plan_hash": record.get("plan_hash"),
         "idempotency_key": record.get("idempotency_key") or plan.get("idempotency_key"),
         "total_frames": plan["total_frames"], "item_count": plan["item_count"],
+        "rolled_back": False, "atomic_scenes": plan.get("atomic_scenes", True),
+        "committed_scenes": [scene["id"] for scene in plan["scenes"]],
         "note": "Same idempotency_key and plan were already applied; nothing was added.",
     }
 
@@ -472,6 +504,7 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
         "ops": ops, "warnings": warnings, "passed": error_count == 0,
         "plan_hash": plan_hash(plan), "idempotency_key": plan.get("idempotency_key"),
         "total_frames": plan["total_frames"], "item_count": plan["item_count"],
+        "atomic_scenes": plan.get("atomic_scenes", True),
         "scenes": [{"id": s["id"], "start_frame": s["start_frame"], "end_frame": s["end_frame"],
                     "item_count": len(s["items"])} for s in plan["scenes"]],
         "note": "No timeline edits performed. Voice lengths are estimates until apply.",

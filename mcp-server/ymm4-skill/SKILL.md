@@ -40,6 +40,9 @@ GET  /api/jobs
 GET  /api/jobs/{id}
 POST /api/jobs/{id}/cancel
 POST /api/jobs/{id}/resume
+POST /api/edits/checkpoint
+GET  /api/edits/checkpoints
+POST /api/edits/rollback
 POST /api/timeline/duration
 ```
 
@@ -111,6 +114,11 @@ item_id="native:...", prop="X", keyframe_action="set", at=30, value=0
 # 完成動画を書き出してジョブをポーリング
 action="control", sub_action="export", path="C:/Videos/final.mp4"
 action="get_info", sub_action="job", job_id="job_..."
+
+# 危険な一括編集の前にスナップショット
+action="control", sub_action="checkpoint", reason="before apply", backup=True
+# 悪化したら、チェックポイント以降に増えたアイテムだけ削除（削除済みは復元しない）
+action="control", sub_action="rollback", checkpoint_id="cp_..."
 ```
 
 ### ymm4_preview（映像・音声確認系）

@@ -66,6 +66,7 @@ namespace YMM4McpPlugin
                     _ = ListenLoop(listener);
                     RestorePersistedJobs();
                     RestoreEditBindings();
+                    RestoreCheckpoints();
                 }
                 catch { listener.Close(); throw; }
             }
@@ -267,7 +268,7 @@ namespace YMM4McpPlugin
         private object GetCapabilities() => new
         {
             success = true,
-            api_schema_version = 5,
+            api_schema_version = 6,
             plugin_version = typeof(McpHttpServer).Assembly.GetName().Version?.ToString(3),
             authentication = "X-Ymm4-Token",
             advanced_enabled = _allowAdvanced,
@@ -277,7 +278,8 @@ namespace YMM4McpPlugin
                 media_import = true, character_discovery = true, script_dry_run_in_mcp = true,
                 timeline_validation_in_mcp = true, stable_item_ids = true, optimistic_concurrency = true,
                 persistent_item_ids = "native_when_available", final_video_export = true,
-                resumable_jobs = true, transactions = false, keyframe_api = true,
+                resumable_jobs = true, transactions = true, scene_transactions = true,
+                checkpoints = true, keyframe_api = true,
                 automatic_visual_audio_qa = false, project_open_save_as = true,
                 declarative_edits = true, idempotent_edits = true
             },
@@ -288,7 +290,8 @@ namespace YMM4McpPlugin
                 "Keyframe edits use the host Animation/KeyFrames API via reflection; inspect the item if KEYFRAME_METHOD_UNAVAILABLE is returned.",
                 "Export and project open/save-as discover host methods at runtime. EXPORT_METHOD_UNAVAILABLE / EXPORT_DIALOG_REQUIRED / OPEN_METHOD_UNAVAILABLE mean this YMM4 build needs a path-taking API.",
                 "Jobs continue after MCP disconnect but become interrupted when the YMM4 process exits. resume re-queues; it does not continue an in-progress encode.",
-                "EditPlan apply is not a transaction: a partial failure keeps already-added items. Re-send the same idempotency_key or call reconcile_edit to add only the missing items. Extra timeline items are never deleted." }
+                "EditPlan apply treats each scene as a transaction: a failed scene deletes its own additions and keeps committed scenes. Extra timeline items are never deleted.",
+                "Checkpoint rollback deletes items added after the snapshot. It does not recreate deleted items or restore property mutations. Use the optional .ymmp backup with project/open for a full restore." }
         };
 
         private object GetProjectInfo()
@@ -820,7 +823,7 @@ namespace YMM4McpPlugin
             return new { count = effects.Length, effects };
         }
 
-        // アイテム削除（layer指定 or frame+layer指定）
+        // アイテム削除（item_id / item_ids / layer指定 / frame+layer指定）
         private async Task<object> DeleteItems(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
@@ -831,8 +834,21 @@ namespace YMM4McpPlugin
             int targetLayer = GetInt(b, "layer", -1);
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
-            if (expectedRevision.Length > 0 && itemId.Length == 0)
-                return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
+            var requestedIds = new List<string>();
+            if (itemId.Length > 0) requestedIds.Add(itemId);
+            if (b.TryGetValue("item_ids", out var idsEl) && idsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in idsEl.EnumerateArray())
+                {
+                    if (el.ValueKind != JsonValueKind.String)
+                        throw new ArgumentException("item_ids must be strings");
+                    string id = el.GetString() ?? "";
+                    if (id.Length == 0) throw new ArgumentException("item_ids must not contain empty ids");
+                    if (!requestedIds.Contains(id)) requestedIds.Add(id);
+                }
+            }
+            if (expectedRevision.Length > 0 && requestedIds.Count != 1)
+                return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id を1件指定してください");
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -840,16 +856,25 @@ namespace YMM4McpPlugin
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
                 var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
 
-                // item_id を第一指定として削除対象のItemオブジェクトを収集
                 var toRemove = new List<object>();
-                if (itemId.Length > 0)
+                var missing = new List<string>();
+                if (requestedIds.Count > 0)
                 {
-                    var target = FindItemById(rawItems, itemId, out bool ambiguous);
-                    if (ambiguous) return Failure("ITEM_ID_AMBIGUOUS", "item_id が複数のアイテムに一致しました");
-                    if (target == null) return Failure("ITEM_NOT_FOUND", "item_id に一致するアイテムがありません");
-                    var conflict = RevisionConflict(target, expectedRevision);
-                    if (conflict != null) return conflict;
-                    toRemove.Add(target);
+                    foreach (string id in requestedIds)
+                    {
+                        var target = FindItemById(rawItems, id, out bool ambiguous);
+                        if (ambiguous) return Failure("ITEM_ID_AMBIGUOUS", "item_id が複数のアイテムに一致しました: " + id);
+                        if (target == null)
+                        {
+                            missing.Add(id);
+                            continue;
+                        }
+                        var conflict = RevisionConflict(target, expectedRevision);
+                        if (conflict != null) return conflict;
+                        toRemove.Add(target);
+                    }
+                    if (toRemove.Count == 0 && requestedIds.Count == 1)
+                        return Failure("ITEM_NOT_FOUND", "item_id に一致するアイテムがありません");
                 }
                 else
                 {
@@ -860,33 +885,42 @@ namespace YMM4McpPlugin
                         else if (targetFrame >= 0 && targetLayer >= 0 && frame == targetFrame && layer == targetLayer) toRemove.Add(item);
                     }
                 }
-                if (toRemove.Count == 0) return (object)new { success = true, removed = 0, note = "対象アイテムなし" };
-
-                // timelineフィールドからTimelineオブジェクトを取得
-                var timelineField = tvm.GetType().GetField("timeline", BindingFlags.NonPublic | BindingFlags.Instance);
-                var timelineObj = timelineField?.GetValue(tvm);
-                if (timelineObj == null) return (object)new { success = false, error = "timelineフィールド取得失敗" };
-
-                var deleteMethod = timelineObj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                    .FirstOrDefault(m => m.Name == "DeleteItems" && m.GetParameters().Length == 1);
-                if (deleteMethod == null) return (object)new { success = false, error = "DeleteItems未発見" };
-                try
-                {
-                    // IEnumerable<IItem> に変換
-                    var iItemType = toRemove[0].GetType().GetInterfaces().FirstOrDefault(i => i.Name == "IItem");
-                    Array arr;
-                    if (iItemType != null)
-                    {
-                        arr = Array.CreateInstance(iItemType, toRemove.Count);
-                        for (int i = 0; i < toRemove.Count; i++) arr.SetValue(toRemove[i], i);
-                    }
-                    else { arr = toRemove.ToArray(); }
-                    var removedIds = toRemove.Select(item => GetItemIdentity(item).id).ToArray();
-                    deleteMethod.Invoke(timelineObj, new object[] { arr });
-                    return (object)new { success = true, removed = toRemove.Count, item_ids = removedIds };
-                }
-                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+                if (toRemove.Count == 0)
+                    return (object)new { success = true, removed = 0, item_ids = Array.Empty<string>(), missing = missing.ToArray(), note = "対象アイテムなし" };
+                var deleted = TryRemoveTimelineItems(tvm, toRemove, missing);
+                return deleted.payload;
             });
+        }
+
+        private (bool ok, object payload) TryRemoveTimelineItems(object tvm, List<object> toRemove, IReadOnlyList<string>? missing = null)
+        {
+            var timelineField = tvm.GetType().GetField("timeline", BindingFlags.NonPublic | BindingFlags.Instance);
+            var timelineObj = timelineField?.GetValue(tvm);
+            if (timelineObj == null) return (false, (object)new { success = false, error = "timelineフィールド取得失敗" });
+
+            var deleteMethod = timelineObj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(m => m.Name == "DeleteItems" && m.GetParameters().Length == 1);
+            if (deleteMethod == null) return (false, (object)new { success = false, error = "DeleteItems未発見" });
+            try
+            {
+                var iItemType = toRemove[0].GetType().GetInterfaces().FirstOrDefault(i => i.Name == "IItem");
+                Array arr;
+                if (iItemType != null)
+                {
+                    arr = Array.CreateInstance(iItemType, toRemove.Count);
+                    for (int i = 0; i < toRemove.Count; i++) arr.SetValue(toRemove[i], i);
+                }
+                else { arr = toRemove.ToArray(); }
+                var removedIds = toRemove.Select(item => GetItemIdentity(item).id).ToArray();
+                deleteMethod.Invoke(timelineObj, new object[] { arr });
+                ForgetEditBindings(removedIds);
+                return (true, (object)new { success = true, removed = toRemove.Count, item_ids = removedIds,
+                    missing = missing?.ToArray() ?? Array.Empty<string>() });
+            }
+            catch (Exception ex)
+            {
+                return (false, (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message });
+            }
         }
 
         private async Task<object> AddEffectToItem(HttpListenerRequest req)

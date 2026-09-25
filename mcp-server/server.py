@@ -119,13 +119,14 @@ TOOLS = [
         description=(
             "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。"
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
+            "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job/edit_state), "
-            "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/undo/redo/split/align), "
+            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
-            "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用), 'reconcile_edit'(不足分だけ再実行)を指定する。"
+            "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -139,14 +140,18 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job,edit_state)、"
-                        "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,undo,redo,split,align)、"
+                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
+                        "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,checkpoint,rollback,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
                 },
                 "dry_run": {"type": "boolean", "description": "add_script/apply_edit: 検証と推定配置のみ。編集・音声合成なし"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
+                "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
+                "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
+                "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
+                "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
@@ -389,6 +394,13 @@ async def dispatch(args: dict) -> Any:
                         raise ValueError("job_id is invalid")
                     return await ymm4_get(f"/jobs/{job_id}")
                 case "edit_state": return await ymm4_get("/edits/state")
+                case "checkpoints":
+                    checkpoint_id = args.get("checkpoint_id")
+                    if checkpoint_id is None:
+                        return await ymm4_get("/edits/checkpoints")
+                    if not editplan.checkpoint_id_ok(checkpoint_id):
+                        raise ValueError("checkpoint_id is invalid")
+                    return await ymm4_get(f"/edits/checkpoints/{checkpoint_id}")
                 case _: raise ValueError(f"Unknown sub_action for get_info: {sub_action}")
 
         case "control":
@@ -426,6 +438,21 @@ async def dispatch(args: dict) -> Any:
                     if not job_id_ok(job_id):
                         raise ValueError("job_id is invalid")
                     return await ymm4_post(f"/jobs/{job_id}/resume")
+                case "checkpoint":
+                    body = {}
+                    reason = editplan.parse_reason(args)
+                    if reason is not None:
+                        body["reason"] = reason
+                    if "backup" in args:
+                        if not isinstance(args["backup"], bool):
+                            raise ValueError("backup must be boolean")
+                        body["backup"] = args["backup"]
+                    return await ymm4_post("/edits/checkpoint", body)
+                case "rollback":
+                    checkpoint_id = args.get("checkpoint_id")
+                    if not editplan.checkpoint_id_ok(checkpoint_id):
+                        raise ValueError("checkpoint_id is invalid")
+                    return await ymm4_post("/edits/rollback", {"checkpoint_id": checkpoint_id})
                 # YMM4内部コマンドをトリガー（UIメニュー限定機能を直接実行）
                 case "undo": return await ymm4_post("/command", {"name": "UndoCommand"})
                 case "redo": return await ymm4_post("/command", {"name": "RedoCommand"})
@@ -648,6 +675,90 @@ async def _load_edit_binding(key: str | None) -> dict | None:
     return editplan.pick_binding(state.get("bindings"), key)
 
 
+async def _delete_item_ids(item_ids: list[str]) -> dict:
+    ids = [item_id for item_id in item_ids if isinstance(item_id, str) and item_id]
+    if not ids:
+        return {"success": True, "removed": 0, "item_ids": []}
+    try:
+        res = await ymm4_post("/items/delete", {"item_ids": ids})
+    except httpx.HTTPError:
+        return {"success": False, "error_code": "ROLLBACK_REQUEST_FAILED",
+                "error": "ロールバック削除の通信に失敗しました。itemsで確認してください。",
+                "outcome_unknown": True, "item_ids": ids}
+    if not isinstance(res, dict) or res.get("success") is not True:
+        return {"success": False, "error_code": "ROLLBACK_FAILED",
+                "error": "失敗シーンの追加分を削除できませんでした",
+                "failure": res, "item_ids": ids}
+    return {"success": True, "removed": res.get("removed", len(ids)),
+            "item_ids": res.get("item_ids", ids), "missing": res.get("missing") or []}
+
+
+async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | None:
+    if not plan.get("idempotency_key") or not bindings:
+        return None
+    try:
+        saved = await ymm4_post("/edits/bindings", {
+            "idempotency_key": plan["idempotency_key"],
+            "plan_hash": editplan.plan_hash(plan),
+            "items": bindings,
+        })
+        if isinstance(saved, dict) and saved.get("success") is False:
+            return saved
+    except httpx.HTTPError:
+        return {"error_code": "BINDINGS_NOT_SAVED"}
+    return None
+
+
+async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_index, failed_scene,
+                               added, details, bindings, committed, scenes, scene_added_ids,
+                               atomic, scene_details=None, scene_bindings=None, extra=None,
+                               outcome_unknown=False):
+    rollback = None
+    rolled_back = False
+    remaining_added = added
+    remaining_details = list(details)
+    if atomic and scene_added_ids and not outcome_unknown:
+        rollback = await _delete_item_ids(scene_added_ids)
+        rolled_back = rollback.get("success") is True
+        if rolled_back:
+            remaining_added = max(0, added - len(scene_added_ids))
+        elif scene_details:
+            remaining_details = remaining_details + scene_details
+    elif scene_details:
+        remaining_details = remaining_details + scene_details
+    persist = list(bindings)
+    if not rolled_back and scene_bindings:
+        persist.extend(scene_bindings)
+    binding_error = await _persist_edit_bindings(plan, persist)
+    scenes = list(scenes)
+    scenes.append({
+        "id": failed_scene, "status": "rolled_back" if rolled_back else "partial",
+        "added": 0 if rolled_back else len(scene_added_ids),
+        "failed_id": failed_id,
+    })
+    result = {
+        "success": False, "error_code": error_code, "error": error,
+        "failed_id": failed_id, "failed_index": failed_index, "failed_scene": failed_scene,
+        "added": remaining_added, "details": remaining_details, "committed_scenes": committed,
+        "scenes": scenes, "rolled_back": rolled_back, "atomic_scenes": atomic,
+        "plan_hash": editplan.plan_hash(plan), "idempotency_key": plan.get("idempotency_key"),
+        "item_count": plan["item_count"],
+        "note": ("Failed scene additions were removed; committed scenes were kept."
+                 if rolled_back else
+                 "Failed scene was not rolled back. Inspect items, then reconcile_edit."),
+    }
+    if extra:
+        result.update(extra)
+    if outcome_unknown:
+        result["outcome_unknown"] = True
+    if rollback is not None:
+        result["rollback"] = rollback
+    if binding_error:
+        result["warning"] = "BINDINGS_NOT_SAVED"
+        result["binding_error"] = binding_error
+    return result
+
+
 async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     """Validate an EditPlan, optionally replay an idempotent apply, otherwise add only missing items."""
     plan = editplan.parse_plan(args)
@@ -701,51 +812,86 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
     gap = plan["gap"]
     cursor = {scene["id"]: scene["start_frame"] for scene in plan["scenes"]}
+    atomic = bool(plan.get("atomic_scenes", True))
     bindings = []
     details = []
+    committed = []
+    scene_reports = []
     added = 0
-    for index, op in enumerate(preview["ops"]):
-        scene_id = op["scene_id"]
-        if op["op"] == "keep":
-            current = current_by_id.get(op.get("item_id"), {})
+    op_index = -1
+    for scene in editplan.group_ops_by_scene(preview["ops"]):
+        scene_id = scene["id"]
+        scene_added_ids = []
+        scene_bindings = []
+        scene_details = []
+        scene_added = 0
+        scene_kept = 0
+        for op in scene["ops"]:
+            op_index += 1
+            if op["op"] == "keep":
+                current = current_by_id.get(op.get("item_id"), {})
+                try:
+                    end = integer(current.get("frame", op["frame"]), "frame") + integer(
+                        current.get("length", op["length"]), "length", 1)
+                    cursor[scene_id] = max(cursor.get(scene_id, 0), end + gap)
+                except ValueError:
+                    pass
+                row = {"id": op["id"], "op": "keep", "item_id": op.get("item_id"),
+                       "revision": op.get("revision"), "scene_id": scene_id}
+                scene_bindings.append({"id": op["id"], "item_id": op.get("item_id"), "revision": op.get("revision")})
+                scene_details.append(row)
+                scene_kept += 1
+                continue
+            payload = dict(op["payload"])
+            if op.get("frame_source") == "sequential":
+                payload["frame"] = cursor.get(scene_id, payload.get("frame", 0))
             try:
-                end = integer(current.get("frame", op["frame"]), "frame") + integer(
-                    current.get("length", op["length"]), "length", 1)
-                cursor[scene_id] = max(cursor.get(scene_id, 0), end + gap)
+                res = await ymm4_post(f"/items/{op['kind']}", payload, timeout=120.0)
+            except httpx.HTTPError:
+                return await _partial_edit_result(
+                    plan, error_code="EDIT_REQUEST_FAILED",
+                    error="通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
+                    failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
+                    added=added, details=details, bindings=bindings, committed=committed,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                    scene_details=scene_details, scene_bindings=scene_bindings, outcome_unknown=True)
+            if not isinstance(res, dict) or res.get("success") is not True:
+                return await _partial_edit_result(
+                    plan, error_code="EDIT_PARTIAL_FAILURE",
+                    error="EditPlanの適用に失敗したため停止しました",
+                    failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
+                    added=added, details=details, bindings=bindings, committed=committed,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                    scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res})
+            added += 1
+            scene_added += 1
+            item_id = res.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                scene_added_ids.append(item_id)
+            scene_details.append({"id": op["id"], "op": "add", "item_id": item_id,
+                                  "revision": res.get("revision"), "kind": op["kind"],
+                                  "scene_id": scene_id, "result": res})
+            scene_bindings.append({"id": op["id"], "item_id": item_id, "revision": res.get("revision")})
+            try:
+                length = integer(res.get("length"), "actual length", 1)
+                actual_frame = integer(res.get("frame"), "actual frame")
+                cursor[scene_id] = integer(actual_frame + length + gap, "next frame")
             except ValueError:
-                pass
-            bindings.append({"id": op["id"], "item_id": op.get("item_id"), "revision": op.get("revision")})
-            details.append({"id": op["id"], "op": "keep", "item_id": op.get("item_id"), "revision": op.get("revision")})
-            continue
-        payload = dict(op["payload"])
-        if op.get("frame_source") == "sequential":
-            payload["frame"] = cursor.get(scene_id, payload.get("frame", 0))
-        try:
-            res = await ymm4_post(f"/items/{op['kind']}", payload, timeout=120.0)
-        except httpx.HTTPError:
-            return {"success": False, "error_code": "EDIT_REQUEST_FAILED",
-                    "error": "通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
-                    "outcome_unknown": True, "added": added, "failed_id": op["id"], "failed_index": index,
-                    "details": details, "rolled_back": False}
-        if not isinstance(res, dict) or res.get("success") is not True:
-            return {"success": False, "error_code": "EDIT_PARTIAL_FAILURE",
-                    "error": "EditPlanの適用に失敗したため停止しました", "failed_id": op["id"],
-                    "failed_index": index, "added": added, "details": details, "failure": res,
-                    "rolled_back": False}
-        added += 1
-        details.append({"id": op["id"], "op": "add", "item_id": res.get("item_id"),
-                        "revision": res.get("revision"), "kind": op["kind"], "result": res})
-        bindings.append({"id": op["id"], "item_id": res.get("item_id"), "revision": res.get("revision")})
-        try:
-            length = integer(res.get("length"), "actual length", 1)
-            actual_frame = integer(res.get("frame"), "actual frame")
-            cursor[scene_id] = integer(actual_frame + length + gap, "next frame")
-        except ValueError:
-            if op["kind"] == "voice":
-                return {"success": False, "error_code": "VOICE_LENGTH_UNKNOWN",
-                        "error": "追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
-                        "added": added, "failed_id": op["id"], "details": details, "rolled_back": False}
-            cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
+                if op["kind"] == "voice":
+                    return await _partial_edit_result(
+                        plan, error_code="VOICE_LENGTH_UNKNOWN",
+                        error="追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
+                        failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
+                        added=added, details=details, bindings=bindings, committed=committed,
+                        scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                        scene_details=scene_details, scene_bindings=scene_bindings)
+                cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
+        bindings.extend(scene_bindings)
+        details.extend(scene_details)
+        committed.append(scene_id)
+        scene_reports.append({
+            "id": scene_id, "status": "committed", "added": scene_added, "kept": scene_kept,
+        })
 
     try:
         verified_snapshot = await ymm4_get("/items")
@@ -756,13 +902,15 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
                 "error": "適用後のタイムラインを確認できません。itemsを確認してから再実行してください",
                 "added": added, "details": details, "outcome_unknown": True, "rolled_back": False,
+                "atomic_scenes": atomic, "committed_scenes": committed, "scenes": scene_reports,
                 "verification": verified_snapshot}
     verification_failures = editplan.verify_applied_items(details, verified_snapshot["items"])
     if verification_failures:
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
                 "error": "追加結果と現在のタイムラインが一致しません。itemsを確認してください",
                 "added": added, "details": details, "verification_failures": verification_failures,
-                "outcome_unknown": True, "rolled_back": False}
+                "outcome_unknown": True, "rolled_back": False, "atomic_scenes": atomic,
+                "committed_scenes": committed, "scenes": scene_reports}
 
     if plan.get("idempotency_key"):
         try:
@@ -778,14 +926,16 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
             return {"success": False, "error_code": code or "BINDINGS_NOT_SAVED",
                     "error": "EditPlanは適用されましたが、再適用情報を保存できませんでした",
                     "added": added, "details": details, "binding_error": saved,
-                    "rolled_back": False}
+                    "rolled_back": False, "atomic_scenes": atomic,
+                    "committed_scenes": committed, "scenes": scene_reports}
     result = {
         "success": True, "replayed": False, "dry_run": False, "added": added,
         "kept": sum(d["op"] == "keep" for d in details), "details": details,
         "plan_hash": editplan.plan_hash(plan), "idempotency_key": plan.get("idempotency_key"),
         "total_frames": max(cursor.values()) if cursor else plan["total_frames"],
-        "item_count": plan["item_count"], "rolled_back": False,
-        "note": "EditPlan is not transactional; failed items stay unapplied. Reconcile to finish missing ids.",
+        "item_count": plan["item_count"], "rolled_back": False, "atomic_scenes": atomic,
+        "committed_scenes": committed, "scenes": scene_reports,
+        "note": "Each scene is a transaction: a failed scene rolls back its own additions only.",
     }
     return result
 
