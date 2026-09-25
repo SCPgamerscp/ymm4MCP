@@ -69,6 +69,14 @@ namespace YMM4McpPlugin
         {
             UpdateJob(job, "running", phase: "prepare", progress: 5, message: "出力パイプラインを探索中",
                 checkpoint: new { output_path = outputPath, format });
+            // overwrite=true may leave the previous export at this path until the new encode starts.
+            // A stable old file must never be reported as this job's completed output.
+            (long length, DateTime lastWriteUtc)? previousOutput = null;
+            if (File.Exists(outputPath))
+            {
+                var oldFile = new FileInfo(outputPath);
+                previousOutput = (oldFile.Length, oldFile.LastWriteTimeUtc);
+            }
             var discovery = Application.Current.Dispatcher.Invoke(() => DiscoverExportSurface());
             var started = Application.Current.Dispatcher.Invoke(() => StartNativeExport(discovery, outputPath, format));
             if (!started.invoked)
@@ -96,14 +104,19 @@ namespace YMM4McpPlugin
             var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
             long lastSize = -1;
             int stable = 0;
+            bool outputWasRemoved = false;
             bool dialogOnly = started.dialogLikely;
             var dialogDeadline = DateTime.UtcNow.AddSeconds(8);
             while (DateTime.UtcNow < deadline)
             {
                 token.ThrowIfCancellationRequested();
-                if (File.Exists(outputPath))
+                var outputInfo = File.Exists(outputPath) ? new FileInfo(outputPath) : null;
+                if (outputInfo == null) outputWasRemoved = true;
+                if (outputInfo != null && (previousOutput == null || outputWasRemoved ||
+                    outputInfo.Length != previousOutput.Value.length ||
+                    outputInfo.LastWriteTimeUtc != previousOutput.Value.lastWriteUtc))
                 {
-                    long size = new FileInfo(outputPath).Length;
+                    long size = outputInfo.Length;
                     if (size > 0 && size == lastSize) stable++;
                     else stable = 0;
                     lastSize = size;
@@ -125,14 +138,19 @@ namespace YMM4McpPlugin
                         return;
                     }
                 }
-                else if (dialogOnly && DateTime.UtcNow > dialogDeadline)
+                else
                 {
-                    UpdateJob(job, "failed", phase: "failed", progress: 0,
-                        message: "出力ダイアログは開きましたがファイルが生成されませんでした",
-                        error: "GUIの出力ダイアログは自動入力できません。パス付きメソッドが見つかるYMM4版が必要です",
-                        errorCode: "EXPORT_DIALOG_REQUIRED",
-                        result: new { discovered = discovery.Describe(), invoked = started.method });
-                    return;
+                    stable = 0;
+                    lastSize = -1;
+                    if (dialogOnly && DateTime.UtcNow > dialogDeadline)
+                    {
+                        UpdateJob(job, "failed", phase: "failed", progress: 0,
+                            message: "出力ダイアログは開きましたがファイルが生成されませんでした",
+                            error: "GUIの出力ダイアログは自動入力できません。パス付きメソッドが見つかるYMM4版が必要です",
+                            errorCode: "EXPORT_DIALOG_REQUIRED",
+                            result: new { discovered = discovery.Describe(), invoked = started.method });
+                        return;
+                    }
                 }
                 await Task.Delay(1000, token);
             }
