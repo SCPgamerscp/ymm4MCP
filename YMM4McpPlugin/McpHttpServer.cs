@@ -399,8 +399,10 @@ namespace YMM4McpPlugin
             var b = await ReadBody(req);
             // filename: ファイル名（部分一致）, frame: 新しい開始フレーム, length: 新しい長さ（省略可）
             string filename = GetStr(b, "filename", "");
-            int newFrame = GetInt(b, "frame", 0);
-            int newLength = GetInt(b, "length", -1);
+            if (string.IsNullOrWhiteSpace(filename)) throw new ArgumentException("filename is required");
+            int newFrame = TimelineInputValidation.AtLeast(GetInt(b, "frame", 0), 0, "frame");
+            int newLength = b.ContainsKey("length")
+                ? TimelineInputValidation.AtLeast(GetInt(b, "length", -1), 1, "length") : -1;
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -417,12 +419,13 @@ namespace YMM4McpPlugin
                     var fp = GetPropObj(item, "FilePath")?.ToString() ?? "";
                     if (!fp.Contains(filename)) continue;
 
+                    var frameProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    var lengthProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    int oldFrame = (int)(frameProp?.GetValue(item) ?? 0);
+                    int oldLength = (int)(lengthProp?.GetValue(item) ?? 0);
+                    TimelineInputValidation.CheckPlacement(newFrame, newLength > 0 ? newLength : oldLength);
                     try
                     {
-                        var frameProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        var lengthProp = item.GetType().GetProperty("Length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        int oldFrame = (int)(frameProp?.GetValue(item) ?? 0);
-                        int oldLength = (int)(lengthProp?.GetValue(item) ?? 0);
                         frameProp?.SetValue(item, newFrame);
                         if (newLength > 0) lengthProp?.SetValue(item, newLength);
                         return (object)new { success = true, filename, oldFrame, oldLength, newFrame, newLength };
@@ -557,10 +560,8 @@ namespace YMM4McpPlugin
         private async Task<object> ResolveOverlaps(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
-            int gap = GetInt(b, "gap", 0);
-            int[]? onlyLayers = null;
-            if (b.TryGetValue("layers", out var le) && le.ValueKind == JsonValueKind.Array)
-                onlyLayers = le.EnumerateArray().Select(x => x.GetInt32()).ToArray();
+            int gap = TimelineInputValidation.AtLeast(GetInt(b, "gap", 0), 0, "gap");
+            int[]? onlyLayers = TimelineInputValidation.GetLayers(b);
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -571,39 +572,25 @@ namespace YMM4McpPlugin
                 var rawItems = GetPropEnum(tvm, "Items");
                 if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
 
-                // レイヤーごとにアイテムを収集
-                var byLayer = new Dictionary<int, List<(int frame, int length, object item)>>();
+                var candidates = new List<(object item, int frame, int length, int layer)>();
                 foreach (var iv in rawItems)
                 {
                     var (frame, layer, length, _, _, item) = ReadItemInfo(iv);
                     if (onlyLayers != null && !onlyLayers.Contains(layer)) continue;
-                    if (!byLayer.ContainsKey(layer)) byLayer[layer] = new();
-                    byLayer[layer].Add((frame, length, item));
+                    candidates.Add((item, frame, length, layer));
                 }
 
                 var moved = new List<object>();
-                foreach (var kv in byLayer)
+                TimelineInputValidation.ApplyResolve(candidates, gap, (item, frame, newFrame, length, layer) =>
                 {
-                    var sorted = kv.Value.OrderBy(x => x.frame).ToList();
-                    int cursor = int.MinValue;
-                    foreach (var (frame, length, item) in sorted)
+                    try
                     {
-                        int newFrame = frame;
-                        if (cursor != int.MinValue && frame < cursor)
-                            newFrame = cursor;
-                        if (newFrame != frame)
-                        {
-                            try
-                            {
-                                var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                                fProp?.SetValue(item, newFrame);
-                                moved.Add(new { layer = kv.Key, oldFrame = frame, newFrame, length });
-                            }
-                            catch (Exception ex) { moved.Add(new { layer = kv.Key, oldFrame = frame, error = ex.Message }); }
-                        }
-                        cursor = newFrame + length + gap;
+                        var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        fProp?.SetValue(item, newFrame);
+                        moved.Add(new { layer, oldFrame = frame, newFrame, length });
                     }
-                }
+                    catch (Exception ex) { moved.Add(new { layer, oldFrame = frame, error = ex.Message }); }
+                });
                 return (object)new { success = true, movedCount = moved.Count, moved };
             });
         }
@@ -615,11 +602,9 @@ namespace YMM4McpPlugin
         private async Task<object> ShiftItems(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
-            int fromFrame = GetInt(b, "fromFrame", 0);
+            int fromFrame = TimelineInputValidation.AtLeast(GetInt(b, "fromFrame", 0), 0, "fromFrame");
             int delta = GetInt(b, "delta", 0);
-            int[]? onlyLayers = null;
-            if (b.TryGetValue("layers", out var le) && le.ValueKind == JsonValueKind.Array)
-                onlyLayers = le.EnumerateArray().Select(x => x.GetInt32()).ToArray();
+            int[]? onlyLayers = TimelineInputValidation.GetLayers(b);
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -630,13 +615,17 @@ namespace YMM4McpPlugin
                 var rawItems = GetPropEnum(tvm, "Items");
                 if (rawItems == null) return (object)new { success = false, error = "Items取得失敗" };
 
-                var moved = new List<object>();
+                var candidates = new List<(object item, int frame, int length, int layer)>();
                 foreach (var iv in rawItems)
                 {
                     var (frame, layer, length, _, _, item) = ReadItemInfo(iv);
                     if (frame < fromFrame) continue;
                     if (onlyLayers != null && !onlyLayers.Contains(layer)) continue;
-                    int newFrame = Math.Max(0, frame + delta);
+                    candidates.Add((item, frame, length, layer));
+                }
+                var moved = new List<object>();
+                TimelineInputValidation.ApplyShift(candidates, delta, (item, frame, newFrame, layer) =>
+                {
                     try
                     {
                         var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -644,7 +633,7 @@ namespace YMM4McpPlugin
                         moved.Add(new { layer, oldFrame = frame, newFrame });
                     }
                     catch (Exception ex) { moved.Add(new { layer, oldFrame = frame, error = ex.Message }); }
-                }
+                });
                 return (object)new { success = true, movedCount = moved.Count, fromFrame, delta, moved };
             });
         }
@@ -824,11 +813,9 @@ namespace YMM4McpPlugin
         private async Task<object> DeleteItems(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
-            int[]? layers = null;
-            if (b.TryGetValue("layers", out var le))
-                layers = le.EnumerateArray().Select(x => x.GetInt32()).ToArray();
-            int targetFrame = GetInt(b, "frame", -1);
-            int targetLayer = GetInt(b, "layer", -1);
+            int[]? layers = TimelineInputValidation.GetLayers(b);
+            int targetFrame = TimelineInputValidation.AtLeast(GetInt(b, "frame", -1), -1, "frame");
+            int targetLayer = TimelineInputValidation.AtLeast(GetInt(b, "layer", -1), -1, "layer");
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
             if (expectedRevision.Length > 0 && itemId.Length == 0)
@@ -2292,9 +2279,7 @@ namespace YMM4McpPlugin
         private static string GetStr(Dictionary<string, JsonElement> d, string k, string def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? def : def;
         private static int GetInt(Dictionary<string, JsonElement> d, string k, int def)
         {
-            if (!d.TryGetValue(k, out var v) || v.ValueKind != JsonValueKind.Number) return def;
-            if (v.TryGetInt32(out int result)) return result;
-            throw new ArgumentException(k + " must be a 32-bit integer");
+            return TimelineInputValidation.GetInt(d, k, def);
         }
         private static double GetDouble(Dictionary<string, JsonElement> d, string k, double def)
         {

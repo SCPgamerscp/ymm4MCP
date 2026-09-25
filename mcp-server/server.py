@@ -160,16 +160,16 @@ TOOLS = [
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 7200, "description": "export: 完了待ちの上限秒"},
                 "idempotency_key": {"type": "string", "description": "export/apply_edit: 同じキーの再送は既存ジョブまたは既存適用を返す"},
                 "job_id": {"type": "string", "description": "get_info/job と cancel_job/resume_job の対象"},
-                "from_frame": {"type": "integer", "description": "shift: このフレーム以降を対象"},
-                "delta": {"type": "integer", "description": "shift: 加算するフレーム数(負で前詰め)"},
-                "gap": {"type": "integer", "description": "resolve_overlaps: アイテム間の最小すき間フレーム"},
-                "filename": {"type": "string", "description": "move: 対象アイテムのファイル名(部分一致)"},
+                "from_frame": {"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "shift: このフレーム以降を対象"},
+                "delta": {"type": "integer", "minimum": -2147483647, "maximum": 2147483647, "description": "shift: 加算するフレーム数(負で前詰め)。移動後の配置が範囲外なら全件拒否"},
+                "gap": {"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "resolve_overlaps: アイテム間の最小すき間フレーム"},
+                "filename": {"type": "string", "minLength": 1, "description": "move: 対象アイテムのファイル名(部分一致、空白のみ不可)"},
                 "clear": {"type": "boolean", "description": "select: trueで全選択解除"},
                 "text": {"type": "string", "description": "表示または発話テキスト"},
                 "character": {"type": "string", "description": "キャラクター名"},
-                "frame": {"type": "integer"},
-                "layer": {"type": "integer"},
-                "length": {"type": "integer"},
+                "frame": {"type": "integer", "minimum": -1, "maximum": 2147483647, "description": "通常は0以上。edit_item/deleteの-1だけ省略指定として許可"},
+                "layer": {"type": "integer", "minimum": -1, "maximum": 2147483647, "description": "通常は0以上。edit_item/deleteの-1だけ省略指定として許可"},
+                "length": {"type": "integer", "minimum": 1, "maximum": 2147483647},
                 "item_id": {"type": "string", "description": "items/add_itemで返された安定ID。property/delete/select/keyframeではframe+layerより優先"},
                 "expected_revision": {"type": "string", "description": "property/delete/keyframe時の楽観ロック。最新itemsのrevisionと不一致なら変更しない"},
                 "prop": {"type": "string", "description": "property/keyframe: X, Y, Opacity, Zoom などのプロパティ名"},
@@ -178,8 +178,8 @@ TOOLS = [
                 "keyframe_action": {"type": "string", "enum": ["set", "remove", "clear"], "description": "keyframe: set=打刻, remove=1点削除, clear=全削除"},
                 "effect": {"type": "string"},
                 "params": {"type": "object"},
-                "frames": {"type": "integer"},
-                "layers": {"type": "array", "items": {"type": "integer"}},
+                "frames": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+                "layers": {"type": "array", "maxItems": 1000, "items": {"type": "integer", "minimum": 0, "maximum": 2147483647}},
                 "lines": {
                     "type": "array",
                     "items": {"type": "object", "properties": {"character": {"type": "string"}, "text": {"type": "string"}, "layer": {"type": "integer"}}}
@@ -509,6 +509,8 @@ async def dispatch(args: dict) -> Any:
                         "frames": integer(args.get("frames", 0), "frames", 1),
                     })
                 case "move":
+                    if not isinstance(args.get("filename"), str) or not args["filename"].strip():
+                        raise ValueError("move requires a non-empty filename")
                     payload = {"filename": args.get("filename", ""),
                                "frame": integer(args.get("frame", 0), "frame")}
                     if "length" in args:
