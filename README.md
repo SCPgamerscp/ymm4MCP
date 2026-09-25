@@ -9,6 +9,41 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
 ---
 
+## 🚀 はじめに（Windows）
+
+1. [Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) から最新版の `YMM4McpPlugin-*.ymme` をダウンロードします。YMM4を閉じて `.ymme` をダブルクリックし、YMM4の案内に従ってインストールします。利用者は `YMM4_PATH` や .NET SDK を設定する必要はありません。
+2. YMM4を起動します。新規インストールではプラグインのHTTPサーバーが自動起動します。「ツール」→「MCP連携サーバー」で状態を確認できます。既に自動起動を無効にしている場合は、この画面の「▶ 起動」を押します。
+3. PythonのMCPサーバー用に、このリポジトリの[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)を取得し、`mcp-server` で依存関係をインストールします（Pythonが必要です）。`.ymme` にPythonサーバーは含まれません。
+
+   ```powershell
+   cd C:\path\to\ymm4MCP\mcp-server
+   python -m pip install -r requirements.txt
+   ```
+
+4. Claude Desktopの `%APPDATA%\Claude\claude_desktop_config.json` にMCPサーバーを追加します。`args` は取得したソースコードの実際の場所に置き換えてください。
+
+   ```json
+   {
+     "mcpServers": {
+       "ymm4": {
+         "command": "python",
+         "args": ["C:/path/to/ymm4MCP/mcp-server/server.py"]
+       }
+     }
+   }
+   ```
+
+プラグインは `%LOCALAPPDATA%\YMM4MCP\connection.json` に接続先と秘密トークンを書き込み、Python側は毎回これを読み取ります。このファイルを共有しないでください。接続確認には、YMM4を起動した状態で次を実行します（`/api/status` にもトークンが必要です）。
+
+```powershell
+$connection = Get-Content "$env:LOCALAPPDATA\YMM4MCP\connection.json" -Raw | ConvertFrom-Json
+Invoke-RestMethod -Uri "$($connection.api_base)/status" -Headers @{ 'X-Ymm4-Token' = $connection.token }
+```
+
+ポートはツール画面でサーバーを停止してから変更・保存し、再度起動します。Python側は更新された接続情報から新しいポートを自動取得します。手動で接続先を指定する場合だけ `YMM4_API_BASE=http://127.0.0.1:<port>/api` を設定してください。
+
+---
+
 ## 📁 ファイル構成
 
 ```
@@ -44,59 +79,17 @@ ymm4プラグイン/
 
 ---
 
-## 🚀 セットアップ手順
+## 開発者向け：ビルドと配布
 
-### 1. 環境変数の設定
-
-```powershell
-[Environment]::SetEnvironmentVariable("YMM4_PATH", "C:\path\to\YukkuriMovieMaker4", "User")
-```
-
-### 2. YMM4プラグインのビルド
+`YMM4_PATH` はソースからビルドするときにだけ必要です。YMM4のインストール先を指定してください。
 
 ```powershell
-cd YMM4McpPlugin
-dotnet build -c Release -p:DeployToYMM4=true
-# → %YMM4_PATH%\user\plugin\YMM4McpPlugin\YMM4McpPlugin.dll にコピー
+$env:YMM4_PATH = "C:\path\to\YukkuriMovieMaker4"
+dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj -c Release -p:CreateYmme=true
+# → artifacts\YMM4McpPlugin-1.4.0.ymme
 ```
 
-デバッグ時の手動デプロイ：
-```powershell
-Stop-Process -Name "YukkuriMovieMaker" -Force
-Copy-Item "bin\Debug\...\YMM4McpPlugin.dll" "$env:YMM4_PATH\user\plugin\YMM4McpPlugin\" -Force
-Start-Process "$env:YMM4_PATH\YukkuriMovieMaker.exe"
-```
-
-### 3. PythonのMCPサーバーのセットアップ
-
-```bash
-cd mcp-server
-pip install -r requirements.txt
-```
-
-### 4. Claude Desktopの設定
-
-`%APPDATA%\Claude\claude_desktop_config.json` に追加：
-
-```json
-{
-  "mcpServers": {
-    "ymm4": {
-      "command": "python",
-      "args": ["C:/path/to/ymm4MCP/mcp-server/server.py"]
-    }
-  }
-}
-```
-
-### 5. YMM4でサーバーを起動
-
-1. YMM4を起動
-2. ツールメニュー → 「MCP連携サーバー」を開く
-3. 自動起動が無効なら **「▶ 起動」** ボタンをクリック
-4. `MCPサーバー起動: http://127.0.0.1:8765/` が表示されれば完了
-
-ポートと自動起動はツール画面で変更できます。Python側はプラグインが生成する接続情報を自動で読み取ります。
+PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。`v1.4.0` タグを `main` のコミットに付けると、バージョン一致を確認してGitHub Releaseへ添付します。YMM4本体のDLLは `.ymme` に含めません。
 
 ---
 
@@ -578,8 +571,8 @@ Claudeはユーザーの依頼内容に応じて自動的に対応するスキ�
 
 | 項目 | 内容 |
 |---|---|
-| YMM4バージョン | v4.35以降（.NET 9 / .NET 10対応）が必要 |
+| YMM4バージョン | v4.47以降（.NET 10対応）が必要 |
 | watchの上限 | 画像+音声データが大きいため最大8秒程度推奨 |
 | 初回キャプチャ | シーク直後の1枚目は黒になることがある（描画待ち）。正常動作 |
-| ポート競合 | 8765が競合する場合は `McpHttpServer.cs` の `Port` を変更 |
+| ポート競合 | 8765が競合する場合はツール画面で停止し、ポートを変更・保存してから再起動 |
 | 内部API | `IMainViewModel` の実装はYMM4バージョンにより異なる場合あり |

@@ -36,6 +36,9 @@
                 <TextBlock Text="record/watchは他アプリを含むシステム音声全体を録音します。" Foreground="#f9e2af" TextWrapping="Wrap"/>
                 <TextBlock Text="接続情報（秘密トークン含む・共有禁止）:" Foreground="#cdd6f4"/>
                 <TextBlock Text="{Binding ConnectionPath}" Foreground="#cdd6f4" TextWrapping="Wrap"/>
+                <TextBlock Foreground="#cdd6f4" Margin="0,6,0,0">
+                    <Hyperlink NavigateUri="https://github.com/SCPgamerscp/ymm4MCP" RequestNavigate="OpenRepository">リポジトリ・導入手順</Hyperlink>
+                </TextBlock>
             </StackPanel>
         </Border>
 

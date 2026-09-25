@@ -9,7 +9,7 @@ namespace YMM4McpPlugin
     public sealed class McpSettings
     {
         public int Port { get; set; } = 8765;
-        public bool AutoStart { get; set; } = false;
+        public bool AutoStart { get; set; } = true;
         public bool AllowAdvanced { get; set; } = false;
         public static string DirectoryPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YMM4MCP");
