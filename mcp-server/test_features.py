@@ -123,6 +123,41 @@ class PlanningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "include_gaps"):
             editing.validate_timeline(items, include_gaps="false")
 
+    def test_subtitle_qa_matches_text_and_time_only_on_selected_layers(self):
+        items = [
+            {"item_id": "voice:1", "type": "VoiceItem", "text": "こんにちは 世界", "frame": 10, "layer": 7, "length": 60},
+            {"item_id": "caption:1", "type": "TextItem", "text": "こんにちは\n世界", "frame": 12, "layer": 9, "length": 58},
+            {"item_id": "title", "type": "TextItem", "text": "別のテロップ", "frame": 10, "layer": 3, "length": 60},
+        ]
+        result = editing.validate_timeline(items, include_gaps=False, subtitle_layers=[9])
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["issues"], [])
+        self.assertTrue(editing.validate_timeline(items, include_gaps=False)["passed"])
+
+    def test_subtitle_qa_reports_missing_mismatch_and_unreadable_voice(self):
+        items = [
+            {"item_id": "voice:1", "type": "VoiceItem", "text": "正しいセリフ", "frame": 0, "layer": 7, "length": 50},
+            {"item_id": "caption:wrong", "type": "TextItem", "text": "別の字幕", "frame": 0, "layer": 9, "length": 50},
+            {"item_id": "voice:2", "type": "VoiceItem", "text": "次のセリフ", "frame": 50, "layer": 7, "length": 50},
+            {"item_id": "voice:3", "type": "VoiceItem", "text": None, "frame": 100, "layer": 7, "length": 50},
+            {"item_id": "title", "type": "TextItem", "text": "次のセリフ", "frame": 50, "layer": 3, "length": 50},
+        ]
+        result = editing.validate_timeline(items, include_gaps=False, subtitle_layers=[9])
+        self.assertEqual([issue["code"] for issue in result["issues"]], [
+            "SUBTITLE_TEXT_MISMATCH", "SUBTITLE_MISSING", "SUBTITLE_CHECK_SKIPPED"])
+        mismatch = result["issues"][0]
+        self.assertEqual(mismatch["item_ids"], ["voice:1", "caption:wrong"])
+        self.assertEqual(mismatch["actual_texts"], ["別の字幕"])
+        self.assertEqual(result["issues"][1]["frame_range"], [50, 100])
+        self.assertEqual(result["summary"], {"errors": 2, "warnings": 1})
+        self.assertFalse(result["passed"])
+        self.assertTrue(editing.validate_timeline(items, include_gaps=False)["passed"])
+
+    def test_subtitle_layers_must_be_nonempty_integer_list(self):
+        for layers in ([], [True], [-1], "9", [0] * 129):
+            with self.subTest(layers=layers), self.assertRaisesRegex(ValueError, "subtitle_layers"):
+                editing.validate_timeline([], subtitle_layers=layers)
+
     def test_expected_stable_id_revision_and_legacy_id(self):
         item = {"item_id": "native:one", "revision": "abc", "frame": 0, "layer": 0, "length": 10}
         for expected in ([{"item_id": "native:one", "revision": "abc"}], [{"id": "native:one"}]):
@@ -325,6 +360,16 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                                             "expected": [{"item_id": "native:a", "revision": "r1"}]})
         get.assert_awaited_once_with("/items")
         self.assertTrue(result["passed"])
+
+    async def test_validate_forwards_subtitle_layers(self):
+        snapshot = {"items": [
+            {"item_id": "voice:1", "type": "VoiceItem", "text": "はい", "frame": 0, "layer": 7, "length": 30},
+            {"item_id": "caption:1", "type": "TextItem", "text": "はい", "frame": 0, "layer": 9, "length": 30},
+        ]}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=snapshot)):
+            self.assertTrue((await server.dispatch({"action": "validate", "subtitle_layers": [9]}))["passed"])
+            result = await server.dispatch({"action": "validate", "subtitle_layers": [8]})
+            self.assertEqual(result["issues"][0]["code"], "SUBTITLE_MISSING")
 
     async def test_skills_are_allowlisted_and_roles_consistent(self):
         for name in mcp_skills.SKILLS:
