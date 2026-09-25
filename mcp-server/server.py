@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
-from editing import integer, plan_script, validate_timeline, finite_number
+from editing import MAX_FRAME, integer, plan_script, validate_timeline, finite_number
 from jobs import job_id_ok, validate_export_request, validate_project_path
 import editplan
 from mcp.server import Server
@@ -455,6 +455,18 @@ async def dispatch(args: dict) -> Any:
                 case _: raise ValueError(f"Unknown sub_action for add_item: {sub_action}")
 
         case "edit_item":
+            # Reject malformed coordinates before a mutating request reaches YMM4.  Delete's
+            # historical -1 selector means "not specified", so it remains supported there.
+            selector_minimum = -1 if sub_action == "delete" else 0
+            for key in ("frame", "layer"):
+                if key in args:
+                    integer(args[key], key, selector_minimum)
+            if "layers" in args:
+                if not isinstance(args["layers"], list) or len(args["layers"]) > 1000:
+                    raise ValueError("layers must be an array of at most 1000 layer numbers")
+                for index, layer in enumerate(args["layers"]):
+                    integer(layer, f"layers[{index}]")
+
             match sub_action:
                 case "face_param":
                     payload = args.get("params", {})
@@ -490,10 +502,14 @@ async def dispatch(args: dict) -> Any:
                     if "layers" in args: payload["layers"] = args["layers"]
                     return await ymm4_post("/items/delete", payload)
                 case "duration":
-                    return await ymm4_post("/timeline/duration", {"frames": args.get("frames", 0)})
+                    return await ymm4_post("/timeline/duration", {
+                        "frames": integer(args.get("frames", 0), "frames", 1),
+                    })
                 case "move":
-                    payload = {"filename": args.get("filename", ""), "frame": args.get("frame", 0)}
-                    if "length" in args: payload["length"] = args["length"]
+                    payload = {"filename": args.get("filename", ""),
+                               "frame": integer(args.get("frame", 0), "frame")}
+                    if "length" in args:
+                        payload["length"] = integer(args["length"], "length", 1)
                     return await ymm4_post("/items/move", payload)
                 case "select":
                     payload = {}
@@ -504,11 +520,14 @@ async def dispatch(args: dict) -> Any:
                     return await ymm4_post("/items/select", payload)
                 case "resolve_overlaps":
                     payload = {}
-                    if "gap" in args: payload["gap"] = args["gap"]
+                    if "gap" in args: payload["gap"] = integer(args["gap"], "gap")
                     if "layers" in args: payload["layers"] = args["layers"]
                     return await ymm4_post("/timeline/resolve-overlaps", payload)
                 case "shift":
-                    payload = {"fromFrame": args.get("from_frame", 0), "delta": args.get("delta", 0)}
+                    payload = {
+                        "fromFrame": integer(args.get("from_frame", 0), "from_frame"),
+                        "delta": integer(args.get("delta", 0), "delta", -MAX_FRAME),
+                    }
                     if "layers" in args: payload["layers"] = args["layers"]
                     return await ymm4_post("/timeline/shift", payload)
                 case "keyframe":
