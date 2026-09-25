@@ -27,7 +27,7 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, finite_number
-from jobs import job_id_ok, validate_export_request, validate_project_path
+from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -121,7 +121,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/media/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
@@ -140,7 +140,7 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
+                        "情報取得(status,project,items,media,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
                         "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,checkpoint,rollback,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
@@ -158,7 +158,7 @@ TOOLS = [
                 "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
                                     "items": {"type": "integer", "minimum": 0},
                                     "description": "validate: 指定レイヤーのTextItemを字幕として扱い、各VoiceItemとの時間・本文一致を検査（省略時は検査しない）"},
-                "path": {"type": "string", "description": "video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "path": {"type": "string", "description": "get_info/media、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
@@ -368,6 +368,11 @@ async def dispatch(args: dict) -> Any:
                 case "capabilities": return await ymm4_get("/capabilities")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
+                case "media":
+                    path = args.get("path")
+                    if not is_absolute_media_path(path):
+                        raise ValueError("media path must be an absolute file path")
+                    return await ymm4_get(f"/media/info?path={quote(path.strip(), safe='')}")
                 case "effects_list": return await ymm4_get("/effects/list")
                 case "selection": return await ymm4_get("/selection")
                 case "commands": return await ymm4_get("/commands")
