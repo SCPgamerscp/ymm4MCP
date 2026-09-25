@@ -2762,7 +2762,7 @@ namespace YMM4McpPlugin
                         await Task.Delay(120); // 描画待ち
                     }
 
-                    string? b64 = null; int w = 0, int h = 0;
+                    string? b64 = null; int w = 0, h = 0;
                     Application.Current.Dispatcher.Invoke(() => { var r = CaptureCurrentFrame(); b64 = r.b64; w = r.w; h = r.h; });
                     if (b64 == null) continue;
 
