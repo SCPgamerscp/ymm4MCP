@@ -54,7 +54,7 @@ ymm4プラグイン/
 │   ├── McpHttpServer.cs        # HTTPサーバー (port 8765)
 │   ├── McpJobs.cs              # ジョブ状態・cancel/resume
 │   ├── McpExport.cs            # 完成動画書き出し・プロジェクトopen/save-as
-│   ├── McpEdits.cs             # EditPlan状態・idempotencyバインディング
+│   ├── McpEdits.cs             # EditPlan状態・idempotencyバインディング・checkpoint
 │   ├── McpKeyframes.cs         # Animationキーフレーム
 │   ├── McpEditing.cs           # 安定ID・revision・素材追加
 │   ├── McpViewModel.cs         # ViewModel (起動/停止UI)
@@ -86,10 +86,10 @@ ymm4プラグイン/
 ```powershell
 $env:YMM4_PATH = "C:\path\to\YukkuriMovieMaker4"
 dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj -c Release -p:CreateYmme=true
-# → artifacts\YMM4McpPlugin-1.4.0.ymme
+# → artifacts\YMM4McpPlugin-1.5.0.ymme
 ```
 
-PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。`v1.4.0` タグを `main` のコミットに付けると、バージョン一致を確認してGitHub Releaseへ添付します。YMM4本体のDLLは `.ymme` に含めません。
+PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。`v1.5.0` タグを `main` のコミットに付けると、バージョン一致を確認してGitHub Releaseへ添付します。YMM4本体のDLLは `.ymme` に含めません。
 
 ---
 
@@ -112,6 +112,9 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `GET  /api/edits/state` | 現在のタイムラインをEditPlan構造（1シーン）で取得。適用済みバインディング含む |
 | `GET  /api/edits/bindings` | 保存済み `idempotency_key` → item_id 対応 |
 | `POST /api/edits/bindings` | apply後の plan_id と item_id の対応を保存 |
+| `POST /api/edits/checkpoint` | 現在の `item_id` スナップショット。`backup=true` なら保存済み `.ymmp` をコピー |
+| `GET  /api/edits/checkpoints` | チェックポイント一覧 |
+| `POST /api/edits/rollback` | スナップショット以降に追加されたアイテムを削除（削除済みの復元はしない） |
 | `POST /api/timeline/duration` | タイムライン長を設定 |
 
 ### セリフ・アイテム操作系
@@ -122,7 +125,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `POST /api/items/prop` | `item_id`（推奨）またはframe+layerでプロパティを変更。`expected_revision`対応 |
 | `GET  /api/items/keyframes` | Animationプロパティのキーフレーム一覧。`item_id`またはframe+layer、任意で`prop` |
 | `POST /api/items/keyframe` | キーフレームの set / remove / clear。`item_id`+`expected_revision`対応 |
-| `POST /api/items/delete` | `item_id`（推奨）またはframe+layer/layersで削除。`expected_revision`対応 |
+| `POST /api/items/delete` | `item_id` / `item_ids`（推奨）またはframe+layer/layersで削除。`expected_revision`対応 |
 
 ### 映像確認系
 | エンドポイント | 説明 |
@@ -209,11 +212,15 @@ action="control", sub_action="open", path="C:/proj/a.ymmp"
 action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 ```
 
-#### 宣言的EditPlan（dry-run / 差分適用 / 冪等）
+#### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）
 
-LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。途中失敗はロールバックせず、既存の計画外アイテムも削除しません。
+LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
 
-同じキーで計画を変えると `IDEMPOTENCY_KEY_CONFLICT`、適用済みアイテムの revision が変わると `EDIT_STATE_CONFLICT` で編集前に停止します。追加後は `/api/items` の実状態を照合し、不一致や取得失敗は `EDIT_VERIFY_FAILED`、バインディング保存失敗は `BINDINGS_NOT_SAVED` を返します。これらは追加済みアイテムを巻き戻さないため、`details` と最新の `items` を確認してから再実行してください。再適用情報を読み取れない場合は `BINDINGS_UNAVAILABLE` で編集せず停止します。
+`apply_edit` はシーンをtransactionにします。あるシーンの追加が失敗すると、**そのシーンで追加したアイテムだけ削除**し、先に完了したシーンは残します。`atomic_scenes=false` で旧来どおり部分追加を残すこともできます。通信失敗（追加できたか不明）では自動削除しません。
+
+同じキーで計画を変えると `IDEMPOTENCY_KEY_CONFLICT`、適用済みアイテムの revision が変わると `EDIT_STATE_CONFLICT` で編集前に停止します。全シーンが通ったあとは `/api/items` の実状態を照合し、不一致や取得失敗は `EDIT_VERIFY_FAILED`、バインディング保存失敗は `BINDINGS_NOT_SAVED` を返します。これらは追加済みアイテムを巻き戻さないため、`details` と最新の `items` を確認してから再実行してください。再適用情報を読み取れない場合は `BINDINGS_UNAVAILABLE` で編集せず停止します。
+
+チェックポイントは `item_id` のスナップショットです。rollbackは「後から増えたアイテムの削除」であり、削除済みアイテムやプロパティ変更は復元しません。完全復元が必要なら `backup=true` で `.ymmp` をコピーし、`control/open` で開きます。
 
 ```python
 plan = {
@@ -227,13 +234,15 @@ plan = {
   ]
 }
 action="plan_edit", plan=plan, idempotency_key="episode-1"   # 変更なし。差分と警告だけ
-action="apply_edit", plan=plan, idempotency_key="episode-1"  # 不足アイテムだけ追加
+action="control", sub_action="checkpoint", reason="before apply", backup=True
+action="apply_edit", plan=plan, idempotency_key="episode-1"  # シーン失敗時はそのシーンだけrollback
 action="reconcile_edit", plan=plan, idempotency_key="episode-1"
+action="control", sub_action="rollback", checkpoint_id="cp_..."
 action="get_info", sub_action="edit_state"
 ```
 
 対応タイプ: `video` / `audio` / `bgm` / `se` / `image` / `text` / `subtitle` / `dialogue` / `voice` / `tachie` / `face`。
-シーン単位のtransactionや映像QAはこのスライスの対象外です。
+映像・音声QAと修正回数制限はこのスライスの対象外です。
 
 #### キーフレーム
 
@@ -292,9 +301,11 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `control` | `export` | 完成動画書き出しをジョブ投入。`path` 必須 |
 | `get_info` | `jobs` / `job` | ジョブ一覧 / `job_id` の進捗 |
 | `get_info` | `edit_state` | 現在のタイムラインをEditPlan構造で取得 |
+| `get_info` | `checkpoints` | チェックポイント一覧。`checkpoint_id` で1件 |
 | `control` | `cancel_job` / `resume_job` | ジョブ中止 / 失敗・中断の再投入 |
+| `control` | `checkpoint` / `rollback` | item_idスナップショット / 追加分の削除。`backup`で.ymmpコピー |
 | `plan_edit` | —— | 完成状態のEditPlanを検証し、差分と警告だけ返す（編集なし） |
-| `apply_edit` | —— | 差分だけ適用。同じ `idempotency_key` は二重追加しない |
+| `apply_edit` | —— | 差分だけ適用。シーン失敗時はそのシーンの追加分をrollback。同じ `idempotency_key` は二重追加しない |
 | `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
@@ -385,7 +396,7 @@ python -m pip install -r mcp-server/requirements.txt
 python -m unittest discover -s mcp-server -p 'test_*.py' -v
 ```
 
-`test_jobs.py` は書き出しパス検証・成果物ヘッダ検査・ジョブdispatchを、YMM4なしで確認します。`test_editplan.py` はEditPlanの検証・差分・冪等再送・部分失敗停止を確認します。HTTP通信をモックし、待ち時間、エラー分類、接続再利用・終了処理を確認します。実際の録音・画像保存やYMM4の起動は行いません。
+`test_jobs.py` は書き出しパス検証・成果物ヘッダ検査・ジョブdispatchを、YMM4なしで確認します。`test_editplan.py` はEditPlanの検証・差分・冪等再送・シーン単位rollback・checkpoint dispatchを確認します。HTTP通信をモックし、待ち時間、エラー分類、接続再利用・終了処理を確認します。実際の録音・画像保存やYMM4の起動は行いません。
 
 ---
 

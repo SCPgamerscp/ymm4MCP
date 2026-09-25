@@ -8,7 +8,7 @@
     <Platforms>x64</Platforms>
     <AssemblyName>YMM4McpPlugin</AssemblyName>
     <RootNamespace>YMM4McpPlugin</RootNamespace>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
     <YMM4LibPath Condition="'$(YMM4LibPath)' == ''">$(YMM4_PATH)</YMM4LibPath>
     <YMM4InstallPath Condition="'$(YMM4InstallPath)' == ''">$(YMM4_PATH)</YMM4InstallPath>
   </PropertyGroup>
