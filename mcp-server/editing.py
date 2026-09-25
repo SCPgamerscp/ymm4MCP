@@ -79,7 +79,7 @@ def _item_ids(items, indices):
             if isinstance(items[index], dict) and isinstance(items[index].get("item_id"), str)]
 
 
-def validate_timeline(items, expected=None, duration=None, include_gaps=True):
+def validate_timeline(items, expected=None, duration=None, include_gaps=True, subtitle_layers=None):
     """Produce machine-readable structural QA without changing the timeline."""
     if not isinstance(items, list):
         raise ValueError("items must be an array")
@@ -87,9 +87,15 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True):
         integer(duration, "duration", 1)
     if not isinstance(include_gaps, bool):
         raise ValueError("include_gaps must be boolean")
+    if subtitle_layers is not None:
+        if not isinstance(subtitle_layers, list) or not 1 <= len(subtitle_layers) <= 128:
+            raise ValueError("subtitle_layers must contain 1..128 layer numbers")
+        subtitle_layers = {integer(layer, "subtitle_layers entry") for layer in subtitle_layers}
 
     problems = []
     layers = {}
+    voices = []
+    subtitles = []
     for index, item in enumerate(items):
         try:
             if not isinstance(item, dict):
@@ -104,6 +110,13 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True):
                              "item_ids": ids, "message": str(exc)})
             continue
         layers.setdefault(layer, []).append((frame, end, index))
+        if subtitle_layers is not None:
+            kind = item.get("type")
+            kind = kind.casefold() if isinstance(kind, str) else ""
+            if kind.endswith("voiceitem") or kind == "voice":
+                voices.append((frame, end, index))
+            elif layer in subtitle_layers and (kind.endswith("textitem") or kind == "text"):
+                subtitles.append((frame, end, index))
         if duration is not None and end > duration:
             problems.append({"code": "EXCEEDS_DURATION", "severity": "error", "index": index,
                              "item_ids": _item_ids(items, [index]), "frame_range": [frame, end],
@@ -131,6 +144,29 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True):
                                  "frame_range": [active_end, frame]})
             if active_end is None or tail > active_end:
                 active_end, active_index = tail, index
+
+    if subtitle_layers is not None:
+        for frame, end, index in voices:
+            voice_text = items[index].get("text")
+            if not isinstance(voice_text, str) or not voice_text.strip():
+                problems.append({"code": "SUBTITLE_CHECK_SKIPPED", "severity": "warning",
+                                 "index": index, "item_ids": _item_ids(items, [index]),
+                                 "frame_range": [frame, end], "message": "発話テキストを取得できません"})
+                continue
+            normalized = "".join(voice_text.split())
+            overlapping = [(s_index, items[s_index].get("text")) for start, stop, s_index in subtitles
+                           if start < end and frame < stop]
+            if any(isinstance(text, str) and "".join(text.split()) == normalized
+                   for _, text in overlapping):
+                continue
+            matches = [s_index for s_index, _ in overlapping]
+            problems.append({
+                "code": "SUBTITLE_TEXT_MISMATCH" if matches else "SUBTITLE_MISSING",
+                "severity": "error", "index": index, "indices": [index, *matches],
+                "item_ids": _item_ids(items, [index, *matches]),
+                "frame_range": [frame, end], "expected_text": voice_text,
+                "actual_texts": [text for _, text in overlapping],
+            })
 
     if expected is not None:
         if not isinstance(expected, list) or len(expected) > 1000:
@@ -160,4 +196,4 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True):
             "item_count": len(items), "issue_count": len(problems),
             "summary": {"errors": error_count, "warnings": warning_count},
             "issues": problems, "problems": problems,
-            "scope": "Frame ranges, same-layer overlaps/internal gaps and explicit expected items only; visual/audio quality is not checked."}
+            "scope": "Frame ranges, same-layer overlaps/internal gaps, explicit expected items, and optional voice/subtitle text match after whitespace removal; visual/audio quality is not checked."}

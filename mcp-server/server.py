@@ -150,6 +150,9 @@ TOOLS = [
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
+                "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
+                                    "items": {"type": "integer", "minimum": 0},
+                                    "description": "validate: 指定レイヤーのTextItemを字幕として扱い、各VoiceItemとの時間・本文一致を検査（省略時は検査しない）"},
                 "path": {"type": "string", "description": "video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
@@ -555,7 +558,7 @@ async def dispatch(args: dict) -> Any:
             if snapshot.get("success") is False or "error" in snapshot:
                 return snapshot
             return validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"),
-                                     args.get("include_gaps", True))
+                                     args.get("include_gaps", True), args.get("subtitle_layers"))
 
         case "add_script":
             return await add_script(args)
