@@ -32,6 +32,40 @@ internal static class TimelineInputValidation
         return value;
     }
 
+    internal static void RequireCoordinates(Dictionary<string, JsonElement> body)
+    {
+        if (!body.ContainsKey("frame") || !body.ContainsKey("layer"))
+            throw new ArgumentException("frame and layer are required to identify an item");
+        AtLeast(GetInt(body, "frame", -1), 0, "frame");
+        AtLeast(GetInt(body, "layer", -1), 0, "layer");
+    }
+
+    internal static void RequireItemTarget(Dictionary<string, JsonElement> body)
+    {
+        if (body.TryGetValue("item_id", out var id))
+        {
+            if (id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString()))
+                throw new ArgumentException("item_id must be a non-empty string");
+            return;
+        }
+        RequireCoordinates(body);
+    }
+
+    internal static void RequireSelectionTarget(Dictionary<string, JsonElement> body)
+    {
+        if (body.TryGetValue("clear", out var clear) && clear.ValueKind == JsonValueKind.True) return;
+        if (body.TryGetValue("item_id", out var id))
+        {
+            if (id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString()))
+                throw new ArgumentException("item_id must be a non-empty string");
+            return;
+        }
+        if (!body.ContainsKey("frame") && !body.ContainsKey("layer"))
+            throw new ArgumentException("select requires item_id, frame, layer, or clear=true");
+        if (body.ContainsKey("frame")) AtLeast(GetInt(body, "frame", -1), 0, "frame");
+        if (body.ContainsKey("layer")) AtLeast(GetInt(body, "layer", -1), 0, "layer");
+    }
+
     internal static int CheckPlacement(long frame, int length)
     {
         if (length <= 0 || frame < 0 || frame + length > int.MaxValue)
