@@ -96,6 +96,19 @@ class PlanningTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 editing.evaluate_qa_gate(good, **kwargs)
 
+    def test_qa_gate_rejects_reports_from_different_criteria(self):
+        items = [{"frame": 0, "layer": 0, "length": 10}]
+        current = editing.validate_timeline(items, include_gaps=True)
+        previous = editing.validate_timeline(items, include_gaps=False)
+        with self.assertRaisesRegex(ValueError, "same validation criteria"):
+            editing.evaluate_qa_gate(current, [previous])
+        with self.assertRaisesRegex(ValueError, "same validation criteria"):
+            editing.evaluate_qa_gate(current, [{k: v for k, v in current.items() if k != "criteria_hash"}])
+        same = editing.validate_timeline(items, subtitle_layers=[9, 7])
+        reordered = editing.validate_timeline(items, subtitle_layers=[7, 9])
+        self.assertEqual(same["criteria_hash"], reordered["criteria_hash"])
+        self.assertEqual(editing.evaluate_qa_gate(same, [reordered])["decision"], "pass")
+
     def test_invalid_script_rejected_before_execution(self):
         base = {"lines": [{"character": "霊夢", "text": "説明"}]}
         invalid = [{"chars_per_sec": 0}, {"chars_per_sec": float("nan")}, {"chars_per_sec": float("inf")},
