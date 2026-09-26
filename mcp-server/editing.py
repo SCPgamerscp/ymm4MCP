@@ -1,4 +1,6 @@
 """Side-effect-free planning and verification for timeline edits."""
+import hashlib
+import json
 import math
 
 MAX_FRAME = 2_147_483_647
@@ -191,7 +193,12 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
 
     error_count = sum(problem["severity"] == "error" for problem in problems)
     warning_count = sum(problem["severity"] == "warning" for problem in problems)
+    criteria = {"expected": expected, "duration": duration, "include_gaps": include_gaps,
+                "subtitle_layers": sorted(subtitle_layers) if subtitle_layers is not None else None}
+    criteria_hash = hashlib.sha256(json.dumps(criteria, sort_keys=True, ensure_ascii=False,
+                                             separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
     return {"success": True, "passed": error_count == 0, "valid": error_count == 0,
+            "criteria_hash": criteria_hash,
             "score": max(0, 100 - error_count * 20 - warning_count * 5),
             "item_count": len(items), "issue_count": len(problems),
             "summary": {"errors": error_count, "warnings": warning_count},
@@ -236,6 +243,9 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         return score
 
     scores = [check_report(report) for report in [*history, current]]
+    if not isinstance(current.get("criteria_hash"), str) or any(
+            report.get("criteria_hash") != current["criteria_hash"] for report in history):
+        raise ValueError("qa_history must use the same validation criteria as current QA")
 
     def signature(report):
         # Compare problem sets as a whole: one persistent issue does not block
