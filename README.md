@@ -196,7 +196,7 @@ POST /api/project/export
 }
 ```
 
-戻り値の `job_id` を `GET /api/jobs/{id}` でポーリングします。完了時はファイルの存在・サイズ・MP4なら `ftyp` / WAVなら `RIFF` を検証して `result.verified=true` を返します。
+戻り値の `job_id` を `GET /api/jobs/{id}` でポーリングします。完了時はファイルの存在・サイズを確認し、MP4 は `ftyp`、`moov`、`mdat`、映像トラック、長さ、解像度を検証して `duration_seconds`、`width`、`height`、`has_audio` を返します。WAV は `RIFF/WAVE` ヘッダを確認します。コンテナの構造検証であり、映像・音声を実際にデコードして再生品質まで判定するものではありません。
 
 同じ `idempotency_key` の再送は、実行中または成功済みのジョブをそのまま返します。既存ファイルを消したくない場合は `overwrite` を省略してください。
 
