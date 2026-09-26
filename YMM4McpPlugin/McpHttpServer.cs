@@ -165,6 +165,7 @@ namespace YMM4McpPlugin
                     ("GET", "/api/items") => GetTimelineItems(),
                     ("GET", "/api/media/info") => GetMediaFileInfo(req),
                     ("GET", "/api/characters") => GetCharacters(),
+                    ("GET", "/api/media/audio-qa") => GetAudioQa(req),
                     ("POST", "/api/items/video") => await AddNativeItem(req, "video"),
                     ("POST", "/api/items/audio") => await AddNativeItem(req, "audio"),
                     ("POST", "/api/items/image") => await AddNativeItem(req, "image"),
