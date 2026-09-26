@@ -43,9 +43,13 @@ namespace YMM4McpPlugin
                     if (Text(header, 0) == "fmt ")
                     {
                         if (size < 16) return Fail("AUDIO_FILE_INVALID", "fmt チャンクが不完全です");
-                        var fmt = Read(file, 16);
+                        var fmt = Read(file, (int)Math.Min(size, 40));
                         format = U16(fmt, 0); channels = U16(fmt, 2); rate = checked((int)U32(fmt, 4));
                         align = U16(fmt, 12); bits = U16(fmt, 14);
+                        // WASAPI commonly writes IEEE float in WAVE_FORMAT_EXTENSIBLE.
+                        if (format == 0xfffe && size >= 40 && U16(fmt, 16) >= 22 && U16(fmt, 18) == 32 &&
+                            new Guid(fmt.AsSpan(24, 16)) == new Guid("00000003-0000-0010-8000-00aa00389b71"))
+                            format = 3;
                     }
                     else if (Text(header, 0) == "data" && dataStart < 0)
                     {
@@ -54,8 +58,11 @@ namespace YMM4McpPlugin
                     }
                     file.Position = next + (size & 1);
                 }
-                if (format != 1 || channels is < 1 or > 2 || bits != 16 || rate is < 1 or > 384000 || align != channels * 2)
-                    return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 16-bit mono/stereo WAV のみ検査できます");
+                bool pcm = format == 1 && bits == 16;
+                bool ieeeFloat = format == 3 && bits == 32;
+                if ((!pcm && !ieeeFloat) || channels is < 1 or > 2 || rate is < 1 or > 384000 ||
+                    align != channels * (pcm ? 2 : 4))
+                    return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 16-bit / IEEE float 32-bit mono/stereo WAV のみ検査できます");
                 if (dataStart < 0 || dataSize == 0 || dataSize % align != 0)
                     return Fail("AUDIO_FILE_INVALID", "PCM データが不完全です");
 
@@ -64,7 +71,7 @@ namespace YMM4McpPlugin
                 var issues = new List<AudioQaIssue>();
                 double[] sumSquares = new double[channels];
                 long clipped = 0, silentStart = -1;
-                int peak = 0;
+                double peak = 0;
                 file.Position = dataStart;
                 var buffer = new byte[8192];
                 long current = 0;
@@ -77,12 +84,20 @@ namespace YMM4McpPlugin
                         bool silent = true;
                         for (int ch = 0; ch < channels; ch++)
                         {
-                            short sample = BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(i * align + ch * 2, 2));
-                            int amplitude = Math.Abs((int)sample);
+                            double normalized;
+                            if (pcm)
+                                normalized = BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(i * align + ch * 2, 2)) / 32768.0;
+                            else
+                            {
+                                normalized = BitConverter.Int32BitsToSingle(
+                                    BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(i * align + ch * 4, 4)));
+                                if (!double.IsFinite(normalized))
+                                    return Fail("AUDIO_FILE_INVALID", "非有限値の音声サンプルがあります");
+                            }
+                            double amplitude = Math.Abs(normalized);
                             peak = Math.Max(peak, amplitude);
-                            if (amplitude >= 32760) clipped++;
-                            if (amplitude > 104) silent = false; // about -50 dBFS
-                            double normalized = sample / 32768.0;
+                            if (amplitude >= 32760.0 / 32768) clipped++;
+                            if (amplitude > 104.0 / 32768) silent = false; // about -50 dBFS
                             sumSquares[ch] += normalized * normalized;
                         }
                         long frame = current + i;
@@ -103,7 +118,7 @@ namespace YMM4McpPlugin
                     rmsByChannel.Min() * 4 < rmsByChannel.Max())
                     issues.Add(new("CHANNEL_IMBALANCE", "warning", null, null, "左右チャンネルの RMS に大きな差があります"));
                 return new(true, !issues.Any(i => i.Severity == "error"), null, null, rate, channels,
-                    (double)frames / rate, (double)peak / 32768,
+                    (double)frames / rate, peak,
                     Math.Sqrt(sumSquares.Sum() / (frames * channels)), issues.ToArray());
             }
             catch (Exception ex) when (ex is IOException or OverflowException or ArgumentException)
