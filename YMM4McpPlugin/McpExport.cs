@@ -190,14 +190,50 @@ namespace YMM4McpPlugin
             var parent = Path.GetDirectoryName(path);
             if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
                 return Failure("DIRECTORY_NOT_FOUND", "保存先フォルダがありません: " + parent);
+            string? backupPath;
+            try { backupPath = BackupProjectFile(path); }
+            catch (Exception ex) { return Failure("BACKUP_FAILED", "既存プロジェクトを退避できません: " + ex.Message); }
             return await RunOnUi(async () =>
             {
                 var invoked = InvokeNamed(SaveAsMethodHints, path);
                 if (!invoked.ok)
-                    return Failure("SAVE_AS_METHOD_UNAVAILABLE", "別名保存のパス指定メソッドが見つかりません");
+                    return (object)new { success = false, error_code = "SAVE_AS_METHOD_UNAVAILABLE",
+                        error = "別名保存のパス指定メソッドが見つかりません", retryable = false,
+                        outcome_unknown = false, backup_path = backupPath };
                 if (invoked.task != null) await invoked.task;
-                return (object)new { success = true, action = "save-as", path, method = invoked.method, target = invoked.target };
+                return (object)new { success = true, action = "save-as", path, method = invoked.method,
+                    target = invoked.target, backup_path = backupPath };
             });
+        }
+
+        private object SaveCurrentProject()
+        {
+            string? backupPath;
+            try { backupPath = BackupProjectFile(CurrentProjectPath()); }
+            catch (Exception ex) { return Failure("BACKUP_FAILED", "既存プロジェクトを退避できません: " + ex.Message); }
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return Failure("NO_MAIN_VIEW_MODEL", "MainViewModel取得失敗");
+                if (vm.GetType().GetProperty("SaveProjectCommand")?.GetValue(vm) is not ICommand command)
+                    return (object)new { success = false, error_code = "SAVE_COMMAND_UNAVAILABLE",
+                        error = "SaveProjectCommand が見つかりません", retryable = false,
+                        outcome_unknown = false, backup_path = backupPath };
+                try
+                {
+                    if (!command.CanExecute(null)) return Failure("SAVE_COMMAND_UNAVAILABLE", "保存コマンドを実行できません");
+                    command.Execute(null);
+                }
+                catch (Exception ex) { return Failure("SAVE_COMMAND_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
+                return (object)new { success = true, action = "save", backup_path = backupPath };
+            });
+        }
+
+        private static string? BackupProjectFile(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+            McpSettings.PrepareDirectory();
+            return ProjectBackup.BeforeOverwrite(path, Path.Combine(McpSettings.DirectoryPath, "project-backups"));
         }
 
         private static (string path, string format, bool overwrite, int timeout, string? key) ParseExportRequest(
