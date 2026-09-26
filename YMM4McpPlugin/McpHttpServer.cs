@@ -220,7 +220,7 @@ namespace YMM4McpPlugin
                     ("POST", "/api/timeline/duration") => await SetTimelineDuration(req),
                     ("POST", "/api/playback/play") => await PlaybackControl("play"),
                     ("POST", "/api/playback/stop") => await PlaybackControl("stop"),
-                    ("POST", "/api/project/save") => ExecCommand("SaveProjectCommand"),
+                    ("POST", "/api/project/save") => SaveCurrentProject(),
                     ("POST", "/api/project/open") => await OpenProject(req),
                     ("POST", "/api/project/save-as") => await SaveProjectAs(req),
                     // ── 全機能アクセス用 汎用API ──────────────────────
