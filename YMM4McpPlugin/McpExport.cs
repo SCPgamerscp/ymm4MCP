@@ -514,11 +514,14 @@ namespace YMM4McpPlugin
             }
             if (format.Equals("mp4", StringComparison.OrdinalIgnoreCase))
             {
-                if (header[4] != (byte)'f' || header[5] != (byte)'t' || header[6] != (byte)'y' || header[7] != (byte)'p')
-                    return (false, "EXPORT_VERIFY_FAILED", "MP4のftypボックスがありません",
+                var inspected = Mp4FileInspector.Inspect(path);
+                if (!inspected.Verified)
+                    return (false, "EXPORT_VERIFY_FAILED", inspected.Error,
                         new { output_path = path, bytes = info.Length, format });
-                string brand = System.Text.Encoding.ASCII.GetString(header.Slice(8, 4));
-                return (true, "", "", new { output_path = path, bytes = info.Length, format = "mp4", has_video = true, brand, verified = true });
+                return (true, "", "", new { output_path = path, bytes = info.Length, format = "mp4",
+                    has_video = true, has_audio = inspected.HasAudio, brand = inspected.Brand,
+                    duration_seconds = inspected.DurationSeconds, width = inspected.Width, height = inspected.Height,
+                    verified = true });
             }
             if (format.Equals("wav", StringComparison.OrdinalIgnoreCase))
             {

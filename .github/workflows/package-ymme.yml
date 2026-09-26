@@ -34,6 +34,8 @@ jobs:
         run: dotnet run --project tests/ReflectionPath.Tests/ReflectionPath.Tests.csproj --configuration Release
       - name: Test effect metadata
         run: dotnet run --project tests/EffectMetadata.Tests/EffectMetadata.Tests.csproj --configuration Release
+      - name: Test MP4 file inspection
+        run: dotnet run --project tests/Mp4FileInspector.Tests/Mp4FileInspector.Tests.csproj --configuration Release
       - name: Download official YMM4 Lite build references
         shell: pwsh
         run: |
