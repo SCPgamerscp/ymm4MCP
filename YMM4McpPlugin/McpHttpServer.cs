@@ -304,9 +304,11 @@ namespace YMM4McpPlugin
                 if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
                 var model = GetMainModel(vm);
                 string? path = GetPropValue(vm, "ProjectFilePath")?.ToString() ?? (model == null ? null : GetPropObj(model, "ProjectFilePath")?.ToString());
+                object? savedValue = GetPropValue(vm, "IsSaved") ?? (model == null ? null : GetPropValue(model, "IsSaved"));
+                bool? isSaved = savedValue is bool saved ? saved : null;
                 return new { success = true, vmType = vm.GetType().FullName,
                     projectName = string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path),
-                    projectPath = path, isSaved = GetPropValue(vm, "IsSaved") };
+                    projectPath = path, isSaved, hasUnsavedChanges = isSaved.HasValue ? !isSaved.Value : (bool?)null };
             });
         }
 
