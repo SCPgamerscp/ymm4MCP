@@ -1377,37 +1377,7 @@ namespace YMM4McpPlugin
         /// <summary>"A.B[2].C" のようなパスを辿って値を取得する（ReactivePropertyの.Valueも自動展開）。</summary>
         private static object? ResolvePath(object? obj, string path)
         {
-            if (obj == null || string.IsNullOrEmpty(path)) return obj;
-            foreach (var rawSeg in path.Split('.'))
-            {
-                if (obj == null) return null;
-                var seg = rawSeg;
-                int idx = -1;
-                int br = seg.IndexOf('[');
-                if (br >= 0 && seg.EndsWith("]"))
-                {
-                    int.TryParse(seg.Substring(br + 1, seg.Length - br - 2), out idx);
-                    seg = seg.Substring(0, br);
-                }
-                if (!string.IsNullOrEmpty(seg))
-                {
-                    obj = GetPropObj(obj, seg);
-                    // ReactiveProperty の .Value を自動展開
-                    if (obj != null)
-                    {
-                        var vProp = obj.GetType().GetProperty("Value");
-                        if (vProp != null && obj.GetType().Name.Contains("ReactiveProperty"))
-                            obj = vProp.GetValue(obj);
-                    }
-                }
-                if (idx >= 0 && obj is System.Collections.IEnumerable en)
-                {
-                    int i = 0; object? found = null;
-                    foreach (var e in en) { if (i == idx) { found = e; break; } i++; }
-                    obj = found;
-                }
-            }
-            return obj;
+            return ReflectionPath.TryResolve(obj, path, out var value) ? value : null;
         }
 
         /// <summary>任意の ICommand をターゲット上で実行する。UI からしか押せないコマンドを直接トリガーできる。</summary>
@@ -1502,7 +1472,8 @@ namespace YMM4McpPlugin
             {
                 var baseObj = ResolveTarget(target);
                 if (baseObj == null) return Failure("TARGET_NOT_FOUND", $"target '{target}' 取得失敗");
-                var val = string.IsNullOrEmpty(path) ? baseObj : ResolvePath(baseObj, path);
+                if (!ReflectionPath.TryResolve(baseObj, path, out var val))
+                    return Failure("PATH_NOT_FOUND", $"path '{path}' 取得失敗");
                 return (object)new { success = true, target, path, type = val?.GetType().FullName, value = ToJsonSafe(val) };
             });
         }
