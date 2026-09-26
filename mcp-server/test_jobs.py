@@ -105,12 +105,17 @@ class JobDispatchTests(unittest.IsolatedAsyncioTestCase):
             await server.dispatch({"action": "control", "sub_action": "open", "path": "C:/p/a.ymmp"})
             post.assert_awaited_once_with("/project/open", {"path": "C:/p/a.ymmp"})
             post.reset_mock()
+            await server.dispatch({"action": "control", "sub_action": "open", "path": "C:/p/a.ymmp", "force": True})
+            post.assert_awaited_once_with("/project/open", {"path": "C:/p/a.ymmp", "force": True})
+            post.reset_mock()
             await server.dispatch({"action": "control", "sub_action": "save_as", "path": "C:/p/b.ymmp", "overwrite": True})
             post.assert_awaited_once_with("/project/save-as", {"path": "C:/p/b.ymmp", "overwrite": True})
 
         with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
             with self.assertRaises(ValueError):
                 await server.dispatch({"action": "control", "sub_action": "save_as", "path": "C:/p/b.ymmp", "overwrite": "true"})
+            with self.assertRaises(ValueError):
+                await server.dispatch({"action": "control", "sub_action": "open", "path": "C:/p/a.ymmp", "force": "true"})
             post.assert_not_awaited()
             with self.assertRaises(ValueError):
                 await server.dispatch({"action": "control", "sub_action": "export", "path": "C:/Videos/final.mp4", "timeout_seconds": "60"})
