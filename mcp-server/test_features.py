@@ -361,6 +361,16 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"YMM4_ENABLE_ADVANCED": "1"}):
             self.assertIn("ymm4_advanced", [t.name for t in (await server.list_tools()).tools])
 
+    async def test_advanced_inspect_encodes_query_values(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True})) as get:
+            await server.dispatch_advanced({
+                "action": "inspect", "target": "Main&debug=1",
+                "path": "Items[0].Name&x=1/日本語",
+            })
+            get.assert_awaited_once_with(
+                "/reflect/inspect?target=Main%26debug%3D1&path=Items%5B0%5D.Name%26x%3D1%2F%E6%97%A5%E6%9C%AC%E8%AA%9E"
+            )
+
     async def test_failure_response_is_an_mcp_error(self):
         with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": False, "error_code": "NO_TIMELINE", "error": "No timeline"})):
             result = await server.call_tool("ymm4_interact", {"action": "get_info", "sub_action": "characters"})

@@ -415,6 +415,8 @@ python -m unittest discover -s mcp-server -p 'test_*.py' -v
 | `command` | 任意のICommandを実行（UIメニュー限定機能を直接トリガー） |
 | `list_commands` | 利用可能な全コマンドと実行可否を一覧 |
 
+`inspect` の `target` と `path` は URL クエリ値としてエンコードされます。失敗時は `success: false`、`error_code`、`error`、`retryable: false`、`outcome_unknown` を返します。主なコードは `INVALID_ARGUMENT`、`TARGET_NOT_FOUND`、`PATH_NOT_FOUND`、`MEMBER_NOT_FOUND`、`MEMBER_READ_ONLY`、`METHOD_NOT_FOUND`、`COMMAND_NOT_FOUND`、`COMMAND_UNAVAILABLE`、`REFLECTION_SET_FAILED`、`REFLECTION_INVOKE_FAILED`、`COMMAND_FAILED` です。実行中の例外で結果が確定できない場合は `outcome_unknown: true` になります。
+
 **使用例：**
 ```python
 # 1. まず構造を調べる

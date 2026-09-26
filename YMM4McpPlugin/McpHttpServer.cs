@@ -1424,15 +1424,15 @@ namespace YMM4McpPlugin
                     _ => null
                 };
             }
-            if (string.IsNullOrEmpty(name)) return new { success = false, error = "name パラメータが必要です" };
+            if (string.IsNullOrEmpty(name)) return Failure("INVALID_ARGUMENT", "name パラメータが必要です");
 
             if (!_allowAdvanced && !((target == "Main" && (name == "UndoCommand" || name == "RedoCommand")) ||
                 (target == "ActiveTimeline" && (name == "SplitItemCommand" || name == "AlignItemsCommand"))))
-                return new { success = false, error_code = "ADVANCED_DISABLED", error = "This command requires advanced APIs" };
+                return Failure("ADVANCED_DISABLED", "This command requires advanced APIs");
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var obj = ResolveTarget(target);
-                if (obj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+                if (obj == null) return Failure("TARGET_NOT_FOUND", $"target '{target}' 取得失敗");
 
                 // プロパティ・フィールド両方から ICommand を探す
                 var t = obj.GetType();
@@ -1445,16 +1445,16 @@ namespace YMM4McpPlugin
                     try { cmdObj = cmdField?.GetValue(obj); } catch { }
                 }
                 if (cmdObj is not ICommand cmd)
-                    return (object)new { success = false, error = $"'{name}' は ICommand ではありません（target={target}）" };
+                    return Failure("COMMAND_NOT_FOUND", $"'{name}' は ICommand ではありません（target={target}）");
 
                 try
                 {
                     bool canExec = cmd.CanExecute(param);
-                    if (!canExec) return (object)new { success = false, error = $"'{name}'.CanExecute=false（現在実行不可）", canExecute = false };
+                    if (!canExec) return (object)new { success = false, error_code = "COMMAND_UNAVAILABLE", error = $"'{name}'.CanExecute=false（現在実行不可）", retryable = false, outcome_unknown = false, canExecute = false };
                     cmd.Execute(param);
                     return (object)new { success = true, command = name, target };
                 }
-                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+                catch (Exception ex) { return Failure("COMMAND_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
             });
         }
 
@@ -1496,7 +1496,7 @@ namespace YMM4McpPlugin
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var baseObj = ResolveTarget(target);
-                if (baseObj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+                if (baseObj == null) return Failure("TARGET_NOT_FOUND", $"target '{target}' 取得失敗");
                 var val = string.IsNullOrEmpty(path) ? baseObj : ResolvePath(baseObj, path);
                 return (object)new { success = true, target, path, type = val?.GetType().FullName, value = ToJsonSafe(val) };
             });
@@ -1508,13 +1508,13 @@ namespace YMM4McpPlugin
             var b = await ReadBody(req);
             string target = GetStr(b, "target", "Main");
             string path = GetStr(b, "path", "");
-            if (string.IsNullOrEmpty(path)) return new { success = false, error = "path パラメータが必要です" };
-            if (!b.TryGetValue("value", out var valElem)) return new { success = false, error = "value パラメータが必要です" };
+            if (string.IsNullOrEmpty(path)) return Failure("INVALID_ARGUMENT", "path パラメータが必要です");
+            if (!b.TryGetValue("value", out var valElem)) return Failure("INVALID_ARGUMENT", "value パラメータが必要です");
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var baseObj = ResolveTarget(target);
-                if (baseObj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+                if (baseObj == null) return Failure("TARGET_NOT_FOUND", $"target '{target}' 取得失敗");
 
                 // 最後のセグメントの親オブジェクトを取得
                 object? parent = baseObj;
@@ -1525,11 +1525,11 @@ namespace YMM4McpPlugin
                     parent = ResolvePath(baseObj, path.Substring(0, lastDot));
                     lastSeg = path.Substring(lastDot + 1);
                 }
-                if (parent == null) return (object)new { success = false, error = "親オブジェクト取得失敗" };
+                if (parent == null) return Failure("PATH_NOT_FOUND", "親オブジェクト取得失敗");
 
                 var prop = parent.GetType().GetProperty(lastSeg, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 var field = prop == null ? parent.GetType().GetField(lastSeg, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) : null;
-                if (prop == null && field == null) return (object)new { success = false, error = $"'{lastSeg}' が見つかりません" };
+                if (prop == null && field == null) return Failure("MEMBER_NOT_FOUND", $"'{lastSeg}' が見つかりません");
 
                 try
                 {
@@ -1549,10 +1549,10 @@ namespace YMM4McpPlugin
                     var conv = ConvertJson(valElem, memberType);
                     if (prop != null && prop.CanWrite) prop.SetValue(parent, conv);
                     else if (field != null) field.SetValue(parent, conv);
-                    else return (object)new { success = false, error = $"'{lastSeg}' は書き込み不可" };
+                    else return Failure("MEMBER_READ_ONLY", $"'{lastSeg}' は書き込み不可");
                     return (object)new { success = true, target, path, valueType = memberType.Name };
                 }
-                catch (Exception ex) { return (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message }; }
+                catch (Exception ex) { return Failure("REFLECTION_SET_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
             });
         }
 
@@ -1562,17 +1562,17 @@ namespace YMM4McpPlugin
             var b = await ReadBody(req);
             string target = GetStr(b, "target", "Main");
             string method = GetStr(b, "method", "");
-            if (string.IsNullOrEmpty(method)) return new { success = false, error = "method パラメータが必要です" };
+            if (string.IsNullOrEmpty(method)) return Failure("INVALID_ARGUMENT", "method パラメータが必要です");
 
             JsonElement[] argElems = System.Array.Empty<JsonElement>();
             if (b.TryGetValue("args", out var ae) && ae.ValueKind == JsonValueKind.Array)
                 argElems = ae.EnumerateArray().ToArray();
 
             // UIスレッドでメソッドを解決して呼び出し（Taskなら後でawait）
-            var (task, immediate, err) = Application.Current.Dispatcher.Invoke(() =>
+            var (task, immediate, errorCode, err) = Application.Current.Dispatcher.Invoke(() =>
             {
                 var obj = ResolveTarget(target);
-                if (obj == null) return ((Task?)null, (object?)null, $"target '{target}' 取得失敗");
+                if (obj == null) return ((Task?)null, (object?)null, "TARGET_NOT_FOUND", $"target '{target}' 取得失敗");
 
                 var candidates = obj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                     .Where(m => m.Name == method && m.GetParameters().Length == argElems.Length).ToArray();
@@ -1580,27 +1580,32 @@ namespace YMM4McpPlugin
                 {
                     var avail = obj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                         .Where(m => m.Name == method).Select(m => m.Name + "(" + string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name)) + ")").ToArray();
-                    return ((Task?)null, (object?)null, $"メソッド '{method}'({argElems.Length}引数) 見つからず。候補: {string.Join("; ", avail)}");
+                    return ((Task?)null, (object?)null, "METHOD_NOT_FOUND", $"メソッド '{method}'({argElems.Length}引数) 見つからず。候補: {string.Join("; ", avail)}");
                 }
 
                 var m2 = candidates[0];
                 var ps = m2.GetParameters();
                 var args = new object?[ps.Length];
-                for (int i = 0; i < ps.Length; i++) args[i] = ConvertJson(argElems[i], ps[i].ParameterType);
+                try
+                {
+                    for (int i = 0; i < ps.Length; i++) args[i] = ConvertJson(argElems[i], ps[i].ParameterType);
+                }
+                catch (Exception ex) { return ((Task?)null, (object?)null, "INVALID_ARGUMENT", ex.InnerException?.Message ?? ex.Message); }
 
                 try
                 {
                     var ret = m2.Invoke(obj, args);
-                    if (ret is Task t) return (t, (object?)null, "");
-                    return ((Task?)null, (object?)ToJsonSafe(ret), "");
+                    if (ret is Task t) return (t, (object?)null, "", "");
+                    return ((Task?)null, (object?)ToJsonSafe(ret), "", "");
                 }
-                catch (Exception ex) { return ((Task?)null, (object?)null, ex.InnerException?.Message ?? ex.Message); }
+                catch (Exception ex) { return ((Task?)null, (object?)null, "REFLECTION_INVOKE_FAILED", ex.InnerException?.Message ?? ex.Message); }
             });
 
-            if (!string.IsNullOrEmpty(err)) return new { success = false, error = err };
+            if (!string.IsNullOrEmpty(err)) return Failure(errorCode, err, errorCode == "REFLECTION_INVOKE_FAILED");
             if (task != null)
             {
-                await task;
+                try { await task; }
+                catch (Exception ex) { return Failure("REFLECTION_INVOKE_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
                 // Task<T> なら結果を取得
                 var resultProp = task.GetType().GetProperty("Result");
                 object? r = null;
@@ -1618,9 +1623,9 @@ namespace YMM4McpPlugin
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var baseObj = ResolveTarget(target);
-                if (baseObj == null) return (object)new { success = false, error = $"target '{target}' 取得失敗" };
+                if (baseObj == null) return Failure("TARGET_NOT_FOUND", $"target '{target}' 取得失敗");
                 var obj = string.IsNullOrEmpty(path) ? baseObj : ResolvePath(baseObj, path);
-                if (obj == null) return (object)new { success = false, error = $"path '{path}' 取得失敗" };
+                if (obj == null) return Failure("PATH_NOT_FOUND", $"path '{path}' 取得失敗");
 
                 var t = obj.GetType();
                 var props = t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
