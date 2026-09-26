@@ -292,6 +292,46 @@ namespace YMM4McpPlugin
             return Path.GetFullPath(path);
         }
 
+        private static object GetExportQa(HttpListenerRequest req)
+        {
+            string path = req.QueryString["path"] ?? "";
+            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)
+                || !path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("path must be an absolute .mp4 file path");
+            path = Path.GetFullPath(path);
+            double? expectedDuration = null;
+            double tolerance = 1;
+            int? width = null, height = null;
+            bool requireAudio = false;
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            if (req.QueryString["expected_duration_seconds"] is string durationText)
+            {
+                if (!double.TryParse(durationText, System.Globalization.NumberStyles.Float, culture, out double value))
+                    throw new ArgumentException("expected_duration_seconds must be a number");
+                expectedDuration = value;
+            }
+            if (req.QueryString["duration_tolerance_seconds"] is string toleranceText &&
+                !double.TryParse(toleranceText, System.Globalization.NumberStyles.Float, culture, out tolerance))
+                throw new ArgumentException("duration_tolerance_seconds must be a number");
+            if (req.QueryString["expected_width"] is string widthText)
+            {
+                if (!int.TryParse(widthText, out int value)) throw new ArgumentException("expected_width must be an integer");
+                width = value;
+            }
+            if (req.QueryString["expected_height"] is string heightText)
+            {
+                if (!int.TryParse(heightText, out int value)) throw new ArgumentException("expected_height must be an integer");
+                height = value;
+            }
+            if (req.QueryString["require_audio"] is string audioText && !bool.TryParse(audioText, out requireAudio))
+                throw new ArgumentException("require_audio must be boolean");
+            // Validate expectations before accessing the file.
+            ExportAcceptance.Evaluate(path, new Mp4Inspection(false, ""), expectedDuration,
+                tolerance, width, height, requireAudio);
+            return ExportAcceptance.Evaluate(path, Mp4FileInspector.Inspect(path), expectedDuration,
+                tolerance, width, height, requireAudio);
+        }
+
         private static object GetMediaFileInfo(HttpListenerRequest req)
         {
             string path = req.QueryString["path"] ?? "";
