@@ -163,6 +163,7 @@ namespace YMM4McpPlugin
                     ("GET", "/api/capabilities") => GetCapabilities(),
                     ("GET", "/api/project") => GetProjectInfo(),
                     ("GET", "/api/items") => GetTimelineItems(),
+                    ("GET", "/api/media/export-qa") => GetExportQa(req),
                     ("GET", "/api/media/info") => GetMediaFileInfo(req),
                     ("GET", "/api/characters") => GetCharacters(),
                     ("POST", "/api/items/video") => await AddNativeItem(req, "video"),
