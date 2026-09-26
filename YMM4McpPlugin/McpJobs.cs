@@ -179,22 +179,22 @@ namespace YMM4McpPlugin
             if (string.IsNullOrEmpty(key)) return null;
             lock (_jobsLock)
             {
-                if (_jobKeys.TryGetValue(key, out var id) && _jobs.TryGetValue(id, out var job)
-                    && job.Status is "queued" or "running" or "completed")
+                if (_jobKeys.TryGetValue(key, out var id) && _jobs.TryGetValue(id, out var job))
                     return job;
             }
             return null;
         }
 
-        private McpJob CreateJob(string kind, Dictionary<string, object?> request, string? idempotencyKey, out bool created)
+        private McpJob CreateJob(string kind, Dictionary<string, object?> request, string? idempotencyKey,
+            out bool created, out bool conflict)
         {
             lock (_jobsLock)
             {
                 if (!string.IsNullOrEmpty(idempotencyKey) && _jobKeys.TryGetValue(idempotencyKey, out var existingId)
-                    && _jobs.TryGetValue(existingId, out var existing)
-                    && existing.Status is "queued" or "running" or "completed")
+                    && _jobs.TryGetValue(existingId, out var existing))
                 {
                     created = false;
+                    conflict = !SameJobRequest(existing, kind, request);
                     return existing;
                 }
                 var job = new McpJob
@@ -213,6 +213,7 @@ namespace YMM4McpPlugin
                     _jobKeys[idempotencyKey] = job.Id;
                 PruneJobsLocked();
                 created = true;
+                conflict = false;
                 return job;
             }
         }

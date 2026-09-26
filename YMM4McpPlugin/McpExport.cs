@@ -29,14 +29,6 @@ namespace YMM4McpPlugin
         {
             var body = await ReadBody(req);
             var parsed = ParseExportRequest(body);
-            var existing = FindIdempotentJob(parsed.key);
-            if (existing != null) return DescribeJob(existing);
-            if (File.Exists(parsed.path) && !parsed.overwrite)
-                return Failure("FILE_EXISTS", "出力先が既に存在します。overwrite=true で上書きしてください");
-            var parent = Path.GetDirectoryName(parsed.path);
-            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
-                return Failure("DIRECTORY_NOT_FOUND", "出力先フォルダがありません: " + parent);
-
             var request = new Dictionary<string, object?>
             {
                 ["output_path"] = parsed.path,
@@ -44,7 +36,20 @@ namespace YMM4McpPlugin
                 ["overwrite"] = parsed.overwrite,
                 ["timeout_seconds"] = parsed.timeout
             };
-            var job = CreateJob("export", request, parsed.key, out bool created);
+            var existing = FindIdempotentJob(parsed.key);
+            if (existing != null)
+                return SameJobRequest(existing, "export", request)
+                    ? DescribeJob(existing)
+                    : Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
+            if (File.Exists(parsed.path) && !parsed.overwrite)
+                return Failure("FILE_EXISTS", "出力先が既に存在します。overwrite=true で上書きしてください");
+            var parent = Path.GetDirectoryName(parsed.path);
+            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+                return Failure("DIRECTORY_NOT_FOUND", "出力先フォルダがありません: " + parent);
+
+            var job = CreateJob("export", request, parsed.key, out bool created, out bool conflict);
+            if (conflict)
+                return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
             if (created)
                 RunJob(job, (running, token) => ExecuteExportJob(running, parsed.path, parsed.format, parsed.timeout, token));
             return DescribeJob(job);
@@ -59,7 +64,12 @@ namespace YMM4McpPlugin
             if (string.IsNullOrEmpty(path))
                 return Failure("JOB_NOT_RESUMABLE", "元の出力パスが残っていません");
             var request = new Dictionary<string, object?>(previous.Request);
-            var job = CreateJob("export", request, previous.IdempotencyKey == null ? null : previous.IdempotencyKey + ":resume", out bool created);
+            // The predecessor ID makes repeated resume calls idempotent even when the
+            // original request had no key. A failed successor can itself be resumed.
+            var job = CreateJob("export", request, previous.Id + ":resume",
+                out bool created, out bool conflict);
+            if (conflict)
+                return Failure("IDEMPOTENCY_KEY_CONFLICT", "再開キーは別の書き出し要求に使用されています");
             if (created)
                 RunJob(job, (running, token) => ExecuteExportJob(running, path, format, timeout, token));
             return DescribeJob(job);
@@ -258,7 +268,8 @@ namespace YMM4McpPlugin
             }
             if (timeout < 1 || timeout > 7200) throw new ArgumentException("timeout_seconds must be an integer in 1..7200");
             string key = GetStr(body, "idempotency_key", "");
-            if (key.Length > 128) throw new ArgumentException("idempotency_key must be a 1..128 character string");
+            if (key.Length > 128 || (key.Length > 0 && key.Trim() != key))
+                throw new ArgumentException("idempotency_key must be a 1..128 character string without surrounding whitespace");
             return (path, format, overwrite, timeout, key.Length == 0 ? null : key);
         }
 
@@ -317,6 +328,20 @@ namespace YMM4McpPlugin
             if (raw is string s && int.TryParse(s, out var parsed)) return parsed;
             return fallback;
         }
+
+        private static bool RequestBool(Dictionary<string, object?> request, string key)
+        {
+            if (!request.TryGetValue(key, out var raw) || raw == null) return false;
+            if (raw is bool value) return value;
+            return raw is JsonElement element && element.ValueKind == JsonValueKind.True;
+        }
+
+        private static bool SameJobRequest(McpJob existing, string kind, Dictionary<string, object?> request)
+            => existing.Kind == kind
+               && StringComparer.OrdinalIgnoreCase.Equals(RequestString(existing.Request, "output_path"), RequestString(request, "output_path"))
+               && StringComparer.OrdinalIgnoreCase.Equals(RequestString(existing.Request, "format"), RequestString(request, "format"))
+               && RequestBool(existing.Request, "overwrite") == RequestBool(request, "overwrite")
+               && RequestInt(existing.Request, "timeout_seconds", 1800) == RequestInt(request, "timeout_seconds", 1800);
 
         private ExportDiscovery DiscoverExportSurface()
         {
