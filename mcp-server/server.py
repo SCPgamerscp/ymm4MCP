@@ -121,7 +121,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/media/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/media/assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
@@ -140,7 +140,7 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,media,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
+                        "情報取得(status,project,items,media,assets,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
                         "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,checkpoint,rollback,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
@@ -167,6 +167,11 @@ TOOLS = [
                 "api_calls": {"type": "integer", "minimum": 0, "description": "qa_gate: 呼び出し側で数えたAPI回数"},
                 "max_api_calls": {"type": "integer", "minimum": 1, "description": "qa_gate: API回数の上限（省略時は無制限）"},
                 "path": {"type": "string", "description": "get_info/media、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "directory": {"type": "string", "description": "get_info/assets: YMM4 がアクセスできる素材フォルダの絶対パス"},
+                "query": {"type": "string", "description": "get_info/assets: ファイル名の部分一致検索"},
+                "recursive": {"type": "boolean", "description": "get_info/assets: サブフォルダを走査する"},
+                "hash": {"type": "boolean", "description": "get_info/assets: 64 MiB 以下の素材の SHA-256 と重複候補を取得"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "description": "get_info/assets: 返却件数。既定100"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
@@ -398,6 +403,25 @@ async def dispatch(args: dict) -> Any:
                     if not is_absolute_media_path(path):
                         raise ValueError("media path must be an absolute file path")
                     return await ymm4_get(f"/media/info?path={quote(path.strip(), safe='')}")
+                case "assets":
+                    directory = args.get("directory")
+                    if not is_absolute_media_path(directory):
+                        raise ValueError("directory must be an absolute path")
+                    params = [f"directory={quote(directory.strip(), safe='')}"]
+                    if "query" in args:
+                        query = args["query"]
+                        if not isinstance(query, str) or len(query) > 256:
+                            raise ValueError("query must be a string of at most 256 characters")
+                        params.append(f"query={quote(query, safe='')}")
+                    for flag in ("recursive", "hash"):
+                        if flag in args:
+                            if not isinstance(args[flag], bool):
+                                raise ValueError(f"{flag} must be boolean")
+                            params.append(f"{flag}={str(args[flag]).lower()}")
+                    if "max_results" in args:
+                        integer(args["max_results"], "max_results", 1, 500)
+                        params.append(f"max_results={args['max_results']}")
+                    return await ymm4_get("/media/assets?" + "&".join(params))
                 case "effects_list": return await ymm4_get("/effects/list")
                 case "effect_metadata":
                     name = args.get("name")
