@@ -58,6 +58,44 @@ class ConnectionTests(unittest.TestCase):
 
 
 class PlanningTests(unittest.TestCase):
+    def test_qa_gate_passes_or_repairs_within_budget(self):
+        failed = editing.validate_timeline([
+            {"item_id": "a", "frame": 0, "layer": 0, "length": 20},
+            {"item_id": "b", "frame": 10, "layer": 0, "length": 20},
+        ])
+        result = editing.evaluate_qa_gate(failed)
+        self.assertEqual((result["decision"], result["reason_code"]), ("repair", "QA_ISSUES_REMAIN"))
+        passed = editing.validate_timeline([{"item_id": "a", "frame": 0, "layer": 0, "length": 20}])
+        result = editing.evaluate_qa_gate(passed, [failed], max_repairs=1)
+        self.assertEqual(result["decision"], "pass")
+        self.assertEqual(result["score_delta"], 20)
+
+    def test_qa_gate_stops_on_regression_stall_and_limits(self):
+        clean = editing.validate_timeline([{"frame": 0, "layer": 0, "length": 20}])
+        failed = editing.validate_timeline([
+            {"frame": 0, "layer": 0, "length": 20},
+            {"frame": 10, "layer": 0, "length": 20},
+        ])
+        result = editing.evaluate_qa_gate(failed, [clean])
+        self.assertEqual((result["reason_code"], result["suggested_action"]),
+                         ("QA_REGRESSED", "consider_checkpoint_rollback"))
+        self.assertEqual(editing.evaluate_qa_gate(failed, [failed])["reason_code"], "QA_STALLED")
+        changed = {**failed, "issues": [{"code": "OTHER"}]}
+        self.assertEqual(editing.evaluate_qa_gate(changed, [failed], max_repairs=1)["reason_code"],
+                         "REPAIR_LIMIT_REACHED")
+        self.assertEqual(editing.evaluate_qa_gate(failed, max_seconds=30, elapsed_seconds=30)["reason_code"],
+                         "TIME_LIMIT_REACHED")
+        self.assertEqual(editing.evaluate_qa_gate(failed, max_api_calls=5, api_calls=5)["reason_code"],
+                         "API_LIMIT_REACHED")
+
+    def test_qa_gate_rejects_invalid_history_and_limits(self):
+        good = editing.validate_timeline([])
+        for kwargs in ({"history": [{}]}, {"history": [good] * 21}, {"max_repairs": True},
+                       {"elapsed_seconds": float("nan")}, {"max_seconds": "no"},
+                       {"api_calls": -1}, {"repeat_limit": 1}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                editing.evaluate_qa_gate(good, **kwargs)
+
     def test_invalid_script_rejected_before_execution(self):
         base = {"lines": [{"character": "霊夢", "text": "説明"}]}
         invalid = [{"chars_per_sec": 0}, {"chars_per_sec": float("nan")}, {"chars_per_sec": float("inf")},
@@ -385,6 +423,20 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                                             "expected": [{"item_id": "native:a", "revision": "r1"}]})
         get.assert_awaited_once_with("/items")
         self.assertTrue(result["passed"])
+
+    async def test_qa_gate_validates_current_snapshot_without_mutation(self):
+        snapshot = {"items": [
+            {"item_id": "native:a", "frame": 0, "layer": 0, "length": 20},
+            {"item_id": "native:b", "frame": 10, "layer": 0, "length": 20},
+        ]}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=snapshot)) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "qa_gate", "max_repairs": 0})
+        get.assert_awaited_once_with("/items")
+        post.assert_not_awaited()
+        self.assertEqual(result["decision"], "stop")
+        self.assertEqual(result["reason_code"], "REPAIR_LIMIT_REACHED")
+        self.assertEqual(result["qa"]["issues"][0]["code"], "OVERLAP")
 
     async def test_validate_forwards_subtitle_layers(self):
         snapshot = {"items": [
