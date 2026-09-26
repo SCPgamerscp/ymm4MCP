@@ -103,7 +103,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `GET  /api/items` | タイムラインの全アイテム取得 |
 | `POST /api/project/save` | プロジェクト保存 |
 | `POST /api/project/open` | `.ymmp` をパス指定で開く |
-| `POST /api/project/save-as` | 別名保存（`overwrite`で上書き） |
+| `POST /api/project/save-as` | 別名保存（`overwrite`で上書き）。既存ファイルは先にバックアップ |
 | `POST /api/project/export` | 完成動画書き出しを**ジョブとして投入**。すぐ `job_id` を返す |
 | `GET  /api/jobs` | 最近のジョブ一覧 |
 | `GET  /api/jobs/{id}` | 進捗・phase・検証結果 |
@@ -211,6 +211,8 @@ action="control", sub_action="cancel_job", job_id="job_..."
 action="control", sub_action="open", path="C:/proj/a.ymmp"
 action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 ```
+
+`save` と `save_as` で既存の `.ymmp` を上書きする前に、以前の内容をローカルの `YMM4MCP/project-backups` にコピーします。応答の `backup_path` から退避先を確認できます。コピーに失敗した場合は `BACKUP_FAILED` で保存せず停止します。新規保存または現在のプロジェクトパスを取得できない場合はバックアップ先が `null` です。退避ファイルの整理は利用者が行ってください。
 
 #### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）
 
