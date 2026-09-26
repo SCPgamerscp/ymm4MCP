@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
-from editing import MAX_FRAME, integer, plan_script, validate_timeline, finite_number
+from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, finite_number
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 from mcp.server import Server
@@ -117,7 +117,7 @@ TOOLS = [
     Tool(
         name="ymm4_interact",
         description=(
-            "validate=タイムライン整合性・期待する配置の検証。add_scriptはdry_runで実行前に確認できます。"
+            "validate=タイムライン整合性・期待する配置の検証。qa_gate=修正ループの合格・継続・停止判定。add_scriptはdry_runで実行前に確認できます。"
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
@@ -133,7 +133,7 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate",
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
                              "plan_edit", "apply_edit", "reconcile_edit"],
                     "description": "実行するアクションの種類"
                 },
@@ -158,6 +158,14 @@ TOOLS = [
                 "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
                                     "items": {"type": "integer", "minimum": 0},
                                     "description": "validate: 指定レイヤーのTextItemを字幕として扱い、各VoiceItemとの時間・本文一致を検査（省略時は検査しない）"},
+                "qa_history": {"type": "array", "maxItems": 20, "items": {"type": "object"},
+                               "description": "qa_gate: 同じ検査条件で得た過去のvalidate結果。古い順"},
+                "max_repairs": {"type": "integer", "minimum": 0, "maximum": 20, "description": "qa_gate: 最大修正回数。既定3"},
+                "repeat_limit": {"type": "integer", "minimum": 2, "maximum": 10, "description": "qa_gate: 同じ問題群が連続したら停止。既定2"},
+                "elapsed_seconds": {"type": "number", "minimum": 0, "description": "qa_gate: 呼び出し側で計測した修正ループ経過秒数"},
+                "max_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "qa_gate: 経過時間の上限（省略時は無制限）"},
+                "api_calls": {"type": "integer", "minimum": 0, "description": "qa_gate: 呼び出し側で数えたAPI回数"},
+                "max_api_calls": {"type": "integer", "minimum": 1, "description": "qa_gate: API回数の上限（省略時は無制限）"},
                 "path": {"type": "string", "description": "get_info/media、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
@@ -587,12 +595,19 @@ async def dispatch(args: dict) -> Any:
                     return await ymm4_post("/items/keyframe", payload)
                 case _: raise ValueError(f"Unknown sub_action for edit_item: {sub_action}")
 
-        case "validate":
+        case "validate" | "qa_gate":
             snapshot = await ymm4_get("/items")
             if snapshot.get("success") is False or "error" in snapshot:
                 return snapshot
-            return validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"),
-                                     args.get("include_gaps", True), args.get("subtitle_layers"))
+            qa = validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"),
+                                   args.get("include_gaps", True), args.get("subtitle_layers"))
+            if action == "validate":
+                return qa
+            return evaluate_qa_gate(
+                qa, args.get("qa_history"), max_repairs=args.get("max_repairs", 3),
+                repeat_limit=args.get("repeat_limit", 2), elapsed_seconds=args.get("elapsed_seconds", 0),
+                max_seconds=args.get("max_seconds"), api_calls=args.get("api_calls", 0),
+                max_api_calls=args.get("max_api_calls"))
 
         case "add_script":
             return await add_script(args)

@@ -197,3 +197,74 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             "summary": {"errors": error_count, "warnings": warning_count},
             "issues": problems, "problems": problems,
             "scope": "Frame ranges, same-layer overlaps/internal gaps, explicit expected items, and optional voice/subtitle text match after whitespace removal; visual/audio quality is not checked."}
+
+
+def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
+                     elapsed_seconds=0, max_seconds=None, api_calls=0, max_api_calls=None):
+    """Decide whether to accept, repair, or stop after a read-only timeline QA run.
+
+    History contains prior validate results in chronological order. Each result must
+    have been produced with the same validation options as the current result.
+    Counters are supplied by the caller; this function never edits or rolls back.
+    """
+    if history is None:
+        history = []
+    if not isinstance(history, list) or len(history) > 20:
+        raise ValueError("qa_history must contain at most 20 prior reports")
+    max_repairs = integer(max_repairs, "max_repairs", 0, 20)
+    repeat_limit = integer(repeat_limit, "repeat_limit", 2, 10)
+    elapsed_seconds = finite_number(elapsed_seconds, "elapsed_seconds")
+    api_calls = integer(api_calls, "api_calls")
+    if elapsed_seconds < 0:
+        raise ValueError("elapsed_seconds must be non-negative")
+    if max_seconds is not None:
+        max_seconds = finite_number(max_seconds, "max_seconds")
+        if max_seconds <= 0:
+            raise ValueError("max_seconds must be positive")
+    if max_api_calls is not None:
+        integer(max_api_calls, "max_api_calls", 1)
+
+    def check_report(report):
+        if not isinstance(report, dict) or report.get("success") is not True or not isinstance(report.get("passed"), bool):
+            raise ValueError("qa_history and current must contain successful validate reports")
+        score = finite_number(report.get("score"), "score")
+        if not 0 <= score <= 100 or not isinstance(report.get("issues"), list):
+            raise ValueError("validate reports require a 0..100 score and issues array")
+        for issue in report["issues"]:
+            if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"]:
+                raise ValueError("validate report issues require a code")
+        return score
+
+    scores = [check_report(report) for report in [*history, current]]
+
+    def signature(report):
+        # Compare problem sets as a whole: one persistent issue does not block
+        # progress if other issues were fixed in the same repair attempt.
+        return sorted((issue["code"], str(issue.get("item_ids", [])),
+                       str(issue.get("frame_range", [])), str(issue.get("layer", "")))
+                      for issue in report["issues"])
+
+    reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
+    if not current["passed"]:
+        if max_seconds is not None and elapsed_seconds >= max_seconds:
+            reason = "TIME_LIMIT_REACHED"
+        elif max_api_calls is not None and api_calls >= max_api_calls:
+            reason = "API_LIMIT_REACHED"
+        elif history and scores[-1] < scores[-2]:
+            reason = "QA_REGRESSED"
+        else:
+            repeated = 1
+            for report in reversed(history):
+                if signature(report) != signature(current):
+                    break
+                repeated += 1
+            if repeated >= repeat_limit:
+                reason = "QA_STALLED"
+            elif len(history) >= max_repairs:
+                reason = "REPAIR_LIMIT_REACHED"
+
+    decision = "pass" if reason == "QA_PASSED" else "repair" if reason == "QA_ISSUES_REMAIN" else "stop"
+    return {"success": True, "decision": decision, "reason_code": reason,
+            "repair_attempts": len(history), "score_delta": scores[-1] - scores[-2] if history else None,
+            "suggested_action": "consider_checkpoint_rollback" if reason == "QA_REGRESSED" else None,
+            "qa": current}

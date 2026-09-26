@@ -308,6 +308,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `plan_edit` | —— | 完成状態のEditPlanを検証し、差分と警告だけ返す（編集なし） |
 | `apply_edit` | —— | 差分だけ適用。シーン失敗時はそのシーンの追加分をrollback。同じ `idempotency_key` は二重追加しない |
 | `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
+| `qa_gate` | —— | 現在のタイムラインQAと過去の検品結果から合格・修正継続・停止を判定（編集なし） |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
@@ -357,6 +358,8 @@ expected=[
 先頭フレームより前の空白は警告せず、アイテム同士の内部空白だけを `GAP` として報告します。
 `subtitle_layers` を指定すると、各 VoiceItem の発話と時間が重なる指定レイヤーの TextItem を探し、空白・改行を除いた本文が一致しなければ `SUBTITLE_MISSING` または `SUBTITLE_TEXT_MISMATCH` を返します。テロップ用レイヤーは指定しないでください。発話テキストを取得できない場合は `SUBTITLE_CHECK_SKIPPED` を警告します。字幕が発話の全時間を覆うかどうかは検査しません。
 映像の見切れや音量などはこの検査の対象外なので、`preview` / `watch` と組み合わせて確認してください。
+
+**修正ループの停止判定：** `action="qa_gate"` は同じ検査条件で現在の `validate` を実行し、`qa_history`（過去の `validate` 結果を古い順に並べた配列）と比較します。`decision` は `pass` / `repair` / `stop`、`reason_code` は `QA_PASSED` / `QA_ISSUES_REMAIN` / `QA_REGRESSED` / `QA_STALLED` / `REPAIR_LIMIT_REACHED` / `TIME_LIMIT_REACHED` / `API_LIMIT_REACHED` です。結果の `qa` を次回の `qa_history` に追加してください。既定では修正3回が上限で、同じ問題群が2回連続した場合も停止します。経過時間とAPI回数は呼び出し側が `elapsed_seconds` / `api_calls` を数え、必要に応じて `max_seconds` / `max_api_calls` を指定します。品質悪化時の `suggested_action: consider_checkpoint_rollback` は提案のみで、ロールバックは自動実行されません。映像・音声の品質判定は行いません。
 
 ---
 
