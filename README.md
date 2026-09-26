@@ -316,7 +316,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `keyframes` | 指定アイテムのキーフレーム一覧 |
 | `edit_item` | `delete` | `item_id`（推奨）または位置/レイヤーで削除。`expected_revision`対応 |
 | `edit_item` | `move` | ファイル名指定でアイテムを移動 |
-| `edit_item` | `select` | `item_id`（推奨）またはframe+layerで選択（clearで全解除） |
+| `edit_item` | `select` | `item_id`（推奨）、frame、layerのいずれかを明示して選択（clearで全解除） |
 | `edit_item` | `resolve_overlaps` | 重なり解消（gap指定可） |
 | `edit_item` | `shift` | from_frame以降をdeltaフレーム一括シフト |
 | `get_info` | `selection` | 選択中アイテムの詳細取得 |
@@ -324,6 +324,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `effects` | 指定アイテムのエフェクト現在値取得 |
 | `control` | `undo` / `redo` | 元に戻す / やり直し |
 | `control` | `split` / `align` | 再生位置で分割 / 整列 |
+
+編集対象は明示してください。`property` と `keyframe` は `item_id` または `frame` と `layer` の両方が必要です。`face_param` と `effect` は `frame` と `layer` の両方が必要です。`select` は `item_id`、`frame`、`layer` のいずれか、または `clear=true` が必要です。対象を省略しても先頭アイテムや全アイテムを暗黙に選ぶことはありません。
 
 **add_scriptのパラメータ：**
 ```python

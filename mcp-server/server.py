@@ -364,6 +364,21 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
         )
 
 
+def require_edit_target(args: dict, *, item_id_allowed: bool = True, partial: bool = False) -> None:
+    """Reject edit requests that would silently target the item at frame 0, layer 0."""
+    if "item_id" in args:
+        if not item_id_allowed:
+            raise ValueError("this edit action requires frame and layer, not item_id")
+        if not isinstance(args["item_id"], str) or not args["item_id"].strip():
+            raise ValueError("item_id must be a non-empty string")
+        return
+    if partial:
+        if "frame" not in args and "layer" not in args:
+            raise ValueError("select requires item_id, frame, layer, or clear=true")
+    elif "frame" not in args or "layer" not in args:
+        raise ValueError("frame and layer are required when item_id is not specified")
+
+
 async def dispatch(args: dict) -> Any:
     action = args.get("action")
     sub_action = args.get("sub_action")
@@ -512,6 +527,7 @@ async def dispatch(args: dict) -> Any:
 
             match sub_action:
                 case "face_param":
+                    require_edit_target(args, item_id_allowed=False)
                     payload = args.get("params", {})
                     if "frame" in args: payload["frame"] = args["frame"]
                     if "layer" in args: payload["layer"] = args["layer"]
@@ -519,6 +535,7 @@ async def dispatch(args: dict) -> Any:
                 case "property":
                     if "expected_revision" in args and not args.get("item_id"):
                         raise ValueError("expected_revision を使う場合は item_id も指定してください")
+                    require_edit_target(args)
                     payload = {
                         "frame": args.get("frame", 0),
                         "layer": args.get("layer", 0),
@@ -529,6 +546,7 @@ async def dispatch(args: dict) -> Any:
                     if "expected_revision" in args: payload["expected_revision"] = args["expected_revision"]
                     return await ymm4_post("/items/prop", payload)
                 case "effect":
+                    require_edit_target(args, item_id_allowed=False)
                     return await ymm4_post("/items/effect", {
                         "frame": args.get("frame", 0), 
                         "layer": args.get("layer", 0), 
@@ -557,6 +575,8 @@ async def dispatch(args: dict) -> Any:
                         payload["length"] = integer(args["length"], "length", 1)
                     return await ymm4_post("/items/move", payload)
                 case "select":
+                    if args.get("clear") is not True:
+                        require_edit_target(args, partial=True)
                     payload = {}
                     if "item_id" in args: payload["item_id"] = args["item_id"]
                     if "frame" in args: payload["frame"] = args["frame"]
@@ -578,6 +598,7 @@ async def dispatch(args: dict) -> Any:
                 case "keyframe":
                     if "expected_revision" in args and not args.get("item_id"):
                         raise ValueError("expected_revision を使う場合は item_id も指定してください")
+                    require_edit_target(args)
                     payload = {
                         "prop": args.get("prop", ""),
                         "action": args.get("keyframe_action", "set"),

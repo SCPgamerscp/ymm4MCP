@@ -507,6 +507,7 @@ namespace YMM4McpPlugin
         private async Task<object> SelectItems(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
+            TimelineInputValidation.RequireSelectionTarget(b);
             int targetFrame = GetInt(b, "frame", -1);
             int targetLayer = GetInt(b, "layer", -1);
             string itemId = GetStr(b, "item_id", "");
@@ -726,6 +727,7 @@ namespace YMM4McpPlugin
         private async Task<object> AddVideoEffect(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
+            TimelineInputValidation.RequireCoordinates(b);
             int tf = GetInt(b, "frame", 0); int tl = GetInt(b, "layer", 0);
             string eName = GetStr(b, "effect", "");
             return Application.Current.Dispatcher.Invoke(() =>
@@ -766,6 +768,7 @@ namespace YMM4McpPlugin
             string expectedRevision = GetStr(b, "expected_revision", "");
             if (expectedRevision.Length > 0 && itemId.Length == 0)
                 return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
+            TimelineInputValidation.RequireItemTarget(b);
             string pName = GetStr(b, "prop", ""); string pVal = GetStr(b, "value", "");
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -914,6 +917,7 @@ namespace YMM4McpPlugin
         private async Task<object> AddEffectToItem(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
+            TimelineInputValidation.RequireCoordinates(b);
             // target: "voice"/"image"/"tachie", targetFrame, targetLayer, effectName, params...
             string effectName = GetStr(b, "effect", "");
             int targetFrame = GetInt(b, "frame", 0);
@@ -1050,6 +1054,7 @@ namespace YMM4McpPlugin
         private async Task<object> SetFaceParam(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
+            TimelineInputValidation.RequireCoordinates(b);
             int tf = GetInt(b, "frame", 0); int tl = GetInt(b, "layer", 0);
             // keyValuePairs: { "FacePath": "...", etc. }
             return Application.Current.Dispatcher.Invoke(() =>

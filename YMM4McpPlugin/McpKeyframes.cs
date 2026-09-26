@@ -69,6 +69,7 @@ namespace YMM4McpPlugin
             string expectedRevision = GetStr(body, "expected_revision", "");
             if (expectedRevision.Length > 0 && itemId.Length == 0)
                 return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
+            TimelineInputValidation.RequireItemTarget(body);
             string prop = GetStr(body, "prop", "");
             if (string.IsNullOrWhiteSpace(prop)) throw new ArgumentException("prop is required");
             string action = GetStr(body, "action", "set").ToLowerInvariant();
