@@ -313,6 +313,23 @@ namespace YMM4McpPlugin
             };
         }
 
+        private static object GetMediaAssets(HttpListenerRequest req)
+        {
+            string directory = req.QueryString["directory"] ?? "";
+            if (!int.TryParse(req.QueryString["max_results"] ?? "100", out int maxResults))
+                throw new ArgumentException("max_results must be an integer");
+            bool ParseFlag(string name)
+            {
+                string? value = req.QueryString[name];
+                if (value == null || value.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+                if (value.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+                throw new ArgumentException(name + " must be boolean");
+            }
+            try { return AssetScanner.Scan(directory, req.QueryString["query"], ParseFlag("recursive"),
+                ParseFlag("hash"), maxResults); }
+            catch (DirectoryNotFoundException) { return Failure("DIRECTORY_NOT_FOUND", "素材フォルダがありません: " + directory); }
+        }
+
         private static bool GetBool(Dictionary<string, JsonElement> body, string key, bool defaultValue)
         {
             if (!body.TryGetValue(key, out var value)) return defaultValue;
