@@ -296,7 +296,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | action | sub_action | 説明 |
 |---|---|---|
 | `get_info` | `status` | サーバー状態確認 |
-| `get_info` | `project` | プロジェクト情報取得 |
+| `get_info` | `project` | プロジェクト情報と未保存変更の状態を取得 |
 | `get_info` | `items` | タイムライン全アイテム取得 |
 | `get_info` | `media` | YMM4側の素材ファイルの存在・サイズ・拡張子・最終更新日時を取得。絶対パス `path` を指定 |
 | `get_info` | `effects_list` | エフェクト一覧 |
@@ -330,6 +330,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `effects` | 指定アイテムのエフェクト現在値取得 |
 | `control` | `undo` / `redo` | 元に戻す / やり直し |
 | `control` | `split` / `align` | 再生位置で分割 / 整列 |
+
+`get_info/project` の `isSaved` と `hasUnsavedChanges` は真偽値です。YMM4から保存状態を取得できない場合は両方とも `null` とし、未保存ではないと推測しません。
 
 編集対象は明示してください。`property` と `keyframe` は `item_id` または `frame` と `layer` の両方が必要です。`face_param` と `effect` は `frame` と `layer` の両方が必要です。`select` は `item_id`、`frame`、`layer` のいずれか、または `clear=true` が必要です。対象を省略しても先頭アイテムや全アイテムを暗黙に選ぶことはありません。
 
