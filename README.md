@@ -221,8 +221,6 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 `get_info/audio_qa` は YMM4 側の絶対パス `path` にある PCM 16-bit WAV（モノラル/ステレオ）を検査します。`min_silence_seconds`（既定2秒）以上の無音、フルスケール付近のサンプルの継続、左右チャンネルの大きな RMS 差を `issues` に返します。`passed` は error が無いときだけ true です。対応外の形式は `AUDIO_FORMAT_UNSUPPORTED` を返します。映像に埋め込まれた音声や MP3 はこの検査の対象外です。
 
-`visual_qa` は `start_frame`（既定0）から必須の `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
-
 #### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）
 
 LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
@@ -388,6 +386,8 @@ expected=[
 **修正ループの停止判定：** `action="qa_gate"` は同じ検査条件で現在の `validate` を実行し、`qa_history`（過去の `validate` 結果を古い順に並べた配列）と比較します。`decision` は `pass` / `repair` / `stop`、`reason_code` は `QA_PASSED` / `QA_ISSUES_REMAIN` / `QA_REGRESSED` / `QA_STALLED` / `REPAIR_LIMIT_REACHED` / `TIME_LIMIT_REACHED` / `API_LIMIT_REACHED` です。結果の `qa` を次回の `qa_history` に追加してください。既定では修正3回が上限で、同じ問題群が2回連続した場合も停止します。経過時間とAPI回数は呼び出し側が `elapsed_seconds` / `api_calls` を数え、必要に応じて `max_seconds` / `max_api_calls` を指定します。品質悪化時の `suggested_action: consider_checkpoint_rollback` は提案のみで、ロールバックは自動実行されません。映像・音声の品質判定は行いません。
 
 各 `validate` 結果の `criteria_hash` は期待アイテム・尺・空白・字幕レイヤーの検査条件を表します。`qa_gate` は現在と履歴の条件が異なる場合、品質の変化を誤判定しないよう入力エラーを返します。
+
+`visual_qa` は `start_frame`（既定0）から必須の `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
 
 ---
 
