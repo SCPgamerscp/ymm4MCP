@@ -275,6 +275,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 **target**: `Main`(MainViewModel) / `ActiveTimeline` / `Player` / `Project`
 **path**: `Items[0].Item.Length` のようにドット・インデックスで深掘り可（ReactivePropertyは自動展開）
+`reflect/get` は存在しないメンバー・範囲外または不正な添字に `PATH_NOT_FOUND` を返します。存在するメンバーの値が `null` なら成功応答で `value: null` を返します。
 
 ### 音声・映像同時取得系
 | エンドポイント | 説明 |
