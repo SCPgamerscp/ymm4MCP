@@ -221,6 +221,8 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 `get_info/audio_qa` は YMM4 側の絶対パス `path` にある PCM 16-bit WAV（モノラル/ステレオ）を検査します。`min_silence_seconds`（既定2秒）以上の無音、フルスケール付近のサンプルの継続、左右チャンネルの大きな RMS 差を `issues` に返します。`passed` は error が無いときだけ true です。対応外の形式は `AUDIO_FORMAT_UNSUPPORTED` を返します。映像に埋め込まれた音声や MP3 はこの検査の対象外です。
 
+`visual_qa` は `start_frame`（既定0）から必須の `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
+
 #### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）
 
 LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
@@ -324,6 +326,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `apply_edit` | —— | 差分だけ適用。シーン失敗時はそのシーンの追加分をrollback。同じ `idempotency_key` は二重追加しない |
 | `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
 | `qa_gate` | —— | 現在のタイムラインQAと過去の検品結果から合格・修正継続・停止を判定（編集なし） |
+| `visual_qa` | —— | 指定区間のプレビューを最大40枚サンプリングし、黒画面・静止候補を報告 |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
