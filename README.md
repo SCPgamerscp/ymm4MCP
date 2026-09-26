@@ -101,6 +101,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `GET  /api/status` | サーバー生存確認 |
 | `GET  /api/project` | プロジェクト情報（FPS・解像度等） |
 | `GET  /api/items` | タイムラインの全アイテム取得 |
+| `GET  /api/media/assets` | YMM4側の素材フォルダ検索。`directory` 必須、`query`・`recursive`・`hash`・`max_results` を指定可能 |
 | `POST /api/project/save` | プロジェクト保存 |
 | `POST /api/project/open` | `.ymmp` をパス指定で開く |
 | `POST /api/project/save-as` | 別名保存（`overwrite`で上書き）。既存ファイルは先にバックアップ |
@@ -301,6 +302,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `project` | プロジェクト情報と未保存変更の状態を取得 |
 | `get_info` | `items` | タイムライン全アイテム取得 |
 | `get_info` | `media` | YMM4側の素材ファイルの存在・サイズ・拡張子・最終更新日時を取得。絶対パス `path` を指定 |
+| `get_info` | `assets` | `directory` 内の画像・動画・音声を検索。`query` はファイル名の部分一致、`hash=True` は SHA-256 と重複候補を返す |
+
 | `get_info` | `effects_list` | エフェクト一覧 |
 | `get_info` | `effect_metadata` | `name` でエフェクトの公開設定項目と属性メタデータを取得 |
 | `control` | `play` | 再生 |
@@ -332,6 +335,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `effects` | 指定アイテムのエフェクト現在値取得 |
 | `control` | `undo` / `redo` | 元に戻す / やり直し |
 | `control` | `split` / `align` | 再生位置で分割 / 整列 |
+
+素材検索は YMM4 が動く PC 上の絶対パスを対象にします。`recursive=True` でサブフォルダも検索します。返却は既定100件（最大500件）、走査は最大5000ファイルです。`truncated` が true の場合は検索条件を絞ってください。ハッシュ計算は1ファイル64 MiB、合計256 MiBまでで、省略された素材があれば `hashTruncated` が true になります。重複候補はハッシュを取得できた返却範囲内だけです。
 
 `get_info/project` の `isSaved` と `hasUnsavedChanges` は真偽値です。YMM4から保存状態を取得できない場合は両方とも `null` とし、未保存ではないと推測しません。
 
