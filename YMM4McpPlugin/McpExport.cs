@@ -64,7 +64,9 @@ namespace YMM4McpPlugin
             if (string.IsNullOrEmpty(path))
                 return Failure("JOB_NOT_RESUMABLE", "元の出力パスが残っていません");
             var request = new Dictionary<string, object?>(previous.Request);
-            var job = CreateJob("export", request, previous.IdempotencyKey == null ? null : previous.IdempotencyKey + ":resume",
+            // The predecessor ID makes repeated resume calls idempotent even when the
+            // original request had no key. A failed successor can itself be resumed.
+            var job = CreateJob("export", request, previous.Id + ":resume",
                 out bool created, out bool conflict);
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "再開キーは別の書き出し要求に使用されています");
