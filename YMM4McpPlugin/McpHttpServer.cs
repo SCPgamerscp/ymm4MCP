@@ -1539,29 +1539,46 @@ namespace YMM4McpPlugin
                 var field = prop == null ? parent.GetType().GetField(lastSeg, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) : null;
                 if (prop == null && field == null) return Failure("MEMBER_NOT_FOUND", $"'{lastSeg}' が見つかりません");
 
-                try
-                {
-                    var member = (object?)prop ?? field;
-                    var memberType = prop?.PropertyType ?? field!.FieldType;
-                    var current = prop != null ? prop.GetValue(parent) : field!.GetValue(parent);
-
-                    // ReactiveProperty<T> なら .Value に設定
-                    var vProp = current?.GetType().GetProperty("Value");
-                    if (current != null && current.GetType().Name.Contains("ReactiveProperty") && vProp != null && vProp.CanWrite)
-                    {
-                        var converted = ConvertJson(valElem, vProp.PropertyType);
-                        vProp.SetValue(current, converted);
-                        return (object)new { success = true, target, path, valueType = vProp.PropertyType.Name };
-                    }
-
-                    var conv = ConvertJson(valElem, memberType);
-                    if (prop != null && prop.CanWrite) prop.SetValue(parent, conv);
-                    else if (field != null) field.SetValue(parent, conv);
-                    else return Failure("MEMBER_READ_ONLY", $"'{lastSeg}' は書き込み不可");
-                    return (object)new { success = true, target, path, valueType = memberType.Name };
-                }
-                catch (Exception ex) { return Failure("REFLECTION_SET_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
+                object? current;
+                try { current = prop != null ? prop.GetValue(parent) : field!.GetValue(parent); }
+                catch (Exception ex) { return Failure("REFLECTION_READ_FAILED", ex.InnerException?.Message ?? ex.Message); }
+                var memberType = prop?.PropertyType ?? field!.FieldType;
+                var vProp = current?.GetType().GetProperty("Value");
+                if (current != null && current.GetType().Name.Contains("ReactiveProperty") && vProp?.CanWrite == true)
+                    return WriteReflectionValue(valElem, vProp.PropertyType,
+                        value => vProp.SetValue(current, value), () => vProp.GetValue(current), target, path);
+                if ((prop != null && !prop.CanWrite) || field?.IsInitOnly == true)
+                    return Failure("MEMBER_READ_ONLY", $"'{lastSeg}' は書き込み不可");
+                return WriteReflectionValue(valElem, memberType,
+                    value => { if (prop != null) prop.SetValue(parent, value); else field!.SetValue(parent, value); },
+                    () => prop != null ? prop.GetValue(parent) : field!.GetValue(parent), target, path);
             });
+        }
+
+        private static object WriteReflectionValue(JsonElement input, Type valueType,
+            Action<object?> write, Func<object?> read, string target, string path)
+        {
+            object? converted;
+            try
+            {
+                converted = ConvertJson(input, valueType);
+                var underlying = Nullable.GetUnderlyingType(valueType) ?? valueType;
+                if (converted == null ? valueType.IsValueType && Nullable.GetUnderlyingType(valueType) == null
+                    : !underlying.IsInstanceOfType(converted))
+                    return Failure("INVALID_ARGUMENT", $"value を {valueType.Name} に変換できません");
+            }
+            catch (Exception ex) { return Failure("INVALID_ARGUMENT", ex.InnerException?.Message ?? ex.Message); }
+            try { write(converted); }
+            catch (Exception ex) { return Failure("REFLECTION_SET_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
+            object? actual;
+            try { actual = read(); }
+            catch (Exception ex) { return Failure("REFLECTION_VERIFY_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
+            if (!Equals(converted, actual))
+                return new { success = false, error_code = "REFLECTION_VERIFY_FAILED",
+                    error = "設定後の値が要求と一致しません", retryable = false, outcome_unknown = true,
+                    target, path, expected = ToJsonSafe(converted), actual = ToJsonSafe(actual) };
+            return new { success = true, target, path, valueType = valueType.Name,
+                verified = true, value = ToJsonSafe(actual) };
         }
 
         /// <summary>任意のオブジェクトの任意メソッドを引数付きで呼び出す（戻り値がTaskならawait）。</summary>

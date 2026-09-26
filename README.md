@@ -430,6 +430,8 @@ python -m unittest discover -s mcp-server -p 'test_*.py' -v
 
 `inspect` の `target` と `path` は URL クエリ値としてエンコードされます。失敗時は `success: false`、`error_code`、`error`、`retryable: false`、`outcome_unknown` を返します。主なコードは `INVALID_ARGUMENT`、`TARGET_NOT_FOUND`、`PATH_NOT_FOUND`、`MEMBER_NOT_FOUND`、`MEMBER_READ_ONLY`、`METHOD_NOT_FOUND`、`COMMAND_NOT_FOUND`、`COMMAND_UNAVAILABLE`、`REFLECTION_SET_FAILED`、`REFLECTION_INVOKE_FAILED`、`COMMAND_FAILED` です。実行中の例外で結果が確定できない場合は `outcome_unknown: true` になります。
 
+`set` は設定後の値を読み戻し、一致した場合だけ `verified: true` を返します。値が丸められるなどして一致しない場合や読み戻せない場合は `REFLECTION_VERIFY_FAILED` です。`outcome_unknown: true` のときは自動再送せず、`get` または `inspect` で現在値を確認してください。
+
 **使用例：**
 ```python
 # 1. まず構造を調べる
