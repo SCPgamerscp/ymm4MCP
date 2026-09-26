@@ -259,6 +259,18 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                 await server.dispatch({"action": "add_item", "sub_action": "image", "path": "C:/a.png"})
             post.assert_not_awaited()
 
+    async def test_media_info_uses_ymm4_host_and_validates_path(self):
+        path = "C:/動画素材/clip 01.mp4"
+        result = {"success": True, "exists": True, "path": path, "extension": ".mp4", "bytes": 1234}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=result)) as get:
+            self.assertEqual(await server.dispatch({"action": "get_info", "sub_action": "media", "path": path}), result)
+            get.assert_awaited_once_with("/media/info?path=C%3A%2F%E5%8B%95%E7%94%BB%E7%B4%A0%E6%9D%90%2Fclip%2001.mp4")
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
+            for invalid in (None, "clip.mp4", "https://example.com/a.mp4", "C:/x\n.mp4"):
+                with self.subTest(path=invalid), self.assertRaisesRegex(ValueError, "absolute"):
+                    await server.dispatch({"action": "get_info", "sub_action": "media", "path": invalid})
+            get.assert_not_awaited()
+
     async def test_identity_and_revision_are_forwarded_for_safe_edits(self):
         identity = "native:item/with spaces"
         revision = "abc123"

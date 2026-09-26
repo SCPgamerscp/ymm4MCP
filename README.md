@@ -293,6 +293,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `status` | サーバー状態確認 |
 | `get_info` | `project` | プロジェクト情報取得 |
 | `get_info` | `items` | タイムライン全アイテム取得 |
+| `get_info` | `media` | YMM4側の素材ファイルの存在・サイズ・拡張子・最終更新日時を取得。絶対パス `path` を指定 |
 | `get_info` | `effects_list` | エフェクト一覧 |
 | `control` | `play` | 再生 |
 | `control` | `stop` | 停止 |

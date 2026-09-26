@@ -235,6 +235,27 @@ namespace YMM4McpPlugin
             return Path.GetFullPath(path);
         }
 
+        private static object GetMediaFileInfo(HttpListenerRequest req)
+        {
+            string path = req.QueryString["path"] ?? "";
+            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+                throw new ArgumentException("path must be an absolute file path");
+            path = Path.GetFullPath(path);
+            var file = new FileInfo(path);
+            string extension = file.Extension.ToLowerInvariant();
+            if (!file.Exists)
+                return new { success = true, exists = false, path, extension };
+            return new
+            {
+                success = true,
+                exists = true,
+                path,
+                extension,
+                bytes = file.Length,
+                last_write_utc = file.LastWriteTimeUtc.ToString("O")
+            };
+        }
+
         private static bool GetBool(Dictionary<string, JsonElement> body, string key, bool defaultValue)
         {
             if (!body.TryGetValue(key, out var value)) return defaultValue;
