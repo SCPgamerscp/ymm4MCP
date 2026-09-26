@@ -170,6 +170,7 @@ TOOLS = [
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
+                "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 7200, "description": "export: 完了待ちの上限秒"},
                 "idempotency_key": {"type": "string", "description": "export/apply_edit: 同じキーの再送は既存ジョブまたは既存適用を返す"},
                 "job_id": {"type": "string", "description": "get_info/job と cancel_job/resume_job の対象"},
@@ -443,7 +444,12 @@ async def dispatch(args: dict) -> Any:
                 case "stop": return await ymm4_post("/playback/stop")
                 case "save": return await ymm4_post("/project/save")
                 case "open":
-                    return await ymm4_post("/project/open", {"path": validate_project_path(args, must_exist=False)})
+                    body = {"path": validate_project_path(args, must_exist=False)}
+                    if "force" in args:
+                        if not isinstance(args["force"], bool):
+                            raise ValueError("force must be boolean")
+                        body["force"] = args["force"]
+                    return await ymm4_post("/project/open", body)
                 case "save_as":
                     body = {"path": validate_project_path(args, must_exist=False)}
                     if "overwrite" in args:
