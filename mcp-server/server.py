@@ -121,7 +121,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/media/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/media/assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
@@ -140,7 +140,7 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,media,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
+                        "情報取得(status,project,items,media,assets,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
                         "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,checkpoint,rollback,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
@@ -167,8 +167,18 @@ TOOLS = [
                 "api_calls": {"type": "integer", "minimum": 0, "description": "qa_gate: 呼び出し側で数えたAPI回数"},
                 "max_api_calls": {"type": "integer", "minimum": 1, "description": "qa_gate: API回数の上限（省略時は無制限）"},
                 "min_silence_seconds": {"type": "number", "minimum": 0.1, "maximum": 60, "description": "get_info/audio_qa: 無音とみなす最短秒数。既定2"},
-                "path": {"type": "string", "description": "get_info/media/audio_qa、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "path": {"type": "string", "description": "get_info/media/audio_qa/export_qa、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "directory": {"type": "string", "description": "get_info/assets: YMM4 がアクセスできる素材フォルダの絶対パス"},
+                "query": {"type": "string", "description": "get_info/assets: ファイル名の部分一致検索"},
+                "recursive": {"type": "boolean", "description": "get_info/assets: サブフォルダを走査する"},
+                "hash": {"type": "boolean", "description": "get_info/assets: 64 MiB 以下の素材の SHA-256 と重複候補を取得"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "description": "get_info/assets: 返却件数。既定100"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
+                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa: 期待する動画の長さ"},
+                "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa: 尺の許容誤差。既定1秒"},
+                "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
+                "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
+                "require_audio": {"type": "boolean", "description": "get_info/export_qa: 音声トラックを必須とする"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
@@ -410,6 +420,25 @@ async def dispatch(args: dict) -> Any:
                     if not is_absolute_media_path(path):
                         raise ValueError("media path must be an absolute file path")
                     return await ymm4_get(f"/media/info?path={quote(path.strip(), safe='')}")
+                case "assets":
+                    directory = args.get("directory")
+                    if not is_absolute_media_path(directory):
+                        raise ValueError("directory must be an absolute path")
+                    params = [f"directory={quote(directory.strip(), safe='')}"]
+                    if "query" in args:
+                        query = args["query"]
+                        if not isinstance(query, str) or len(query) > 256:
+                            raise ValueError("query must be a string of at most 256 characters")
+                        params.append(f"query={quote(query, safe='')}")
+                    for flag in ("recursive", "hash"):
+                        if flag in args:
+                            if not isinstance(args[flag], bool):
+                                raise ValueError(f"{flag} must be boolean")
+                            params.append(f"{flag}={str(args[flag]).lower()}")
+                    if "max_results" in args:
+                        integer(args["max_results"], "max_results", 1, 500)
+                        params.append(f"max_results={args['max_results']}")
+                    return await ymm4_get("/media/assets?" + "&".join(params))
                 case "effects_list": return await ymm4_get("/effects/list")
                 case "effect_metadata":
                     name = args.get("name")
@@ -435,6 +464,27 @@ async def dispatch(args: dict) -> Any:
                     qs = ("?" + "&".join(q)) if q else ""
                     return await ymm4_get(f"/items/keyframes{qs}")
                 case "jobs": return await ymm4_get("/jobs")
+                case "export_qa":
+                    path = args.get("path")
+                    if not is_absolute_media_path(path) or not path.strip().lower().endswith(".mp4"):
+                        raise ValueError("export_qa path must be an absolute .mp4 file path")
+                    q = [f"path={quote(path.strip(), safe='')}"]
+                    for key, lower, upper, strict in (("expected_duration_seconds", 0, None, True),
+                                                      ("duration_tolerance_seconds", 0, 60, False)):
+                        if key in args:
+                            value = finite_number(args[key], key)
+                            if (value <= lower if strict else value < lower) or (upper is not None and value > upper):
+                                raise ValueError(f"{key} is out of range")
+                            q.append(f"{key}={value:g}")
+                    for key in ("expected_width", "expected_height"):
+                        if key in args:
+                            integer(args[key], key, 1, 16384)
+                            q.append(f"{key}={args[key]}")
+                    if "require_audio" in args:
+                        if not isinstance(args["require_audio"], bool):
+                            raise ValueError("require_audio must be boolean")
+                        q.append(f"require_audio={str(args['require_audio']).lower()}")
+                    return await ymm4_get("/media/export-qa?" + "&".join(q))
                 case "job":
                     job_id = args.get("job_id")
                     if not job_id_ok(job_id):

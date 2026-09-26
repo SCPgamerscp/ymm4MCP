@@ -34,10 +34,14 @@ jobs:
         run: dotnet run --project tests/WavAudioInspector.Tests/WavAudioInspector.Tests.csproj --configuration Release
       - name: Test reflection path resolution
         run: dotnet run --project tests/ReflectionPath.Tests/ReflectionPath.Tests.csproj --configuration Release
+      - name: Test export acceptance
+        run: dotnet run --project tests/ExportAcceptance.Tests/ExportAcceptance.Tests.csproj --configuration Release
       - name: Test effect metadata
         run: dotnet run --project tests/EffectMetadata.Tests/EffectMetadata.Tests.csproj --configuration Release
       - name: Test MP4 file inspection
         run: dotnet run --project tests/Mp4FileInspector.Tests/Mp4FileInspector.Tests.csproj --configuration Release
+      - name: Test asset scanner
+        run: dotnet run --project tests/AssetScanner.Tests/AssetScanner.Tests.csproj --configuration Release
       - name: Download official YMM4 Lite build references
         shell: pwsh
         run: |
