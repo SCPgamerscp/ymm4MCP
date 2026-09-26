@@ -957,9 +957,9 @@ async def dispatch_advanced(args: dict) -> Any:
 
     match action:
         case "inspect":
-            q = [f"target={target}"]
+            q = [f"target={quote(target, safe='')}"]
             if args.get("path"):
-                q.append(f"path={args['path']}")
+                q.append(f"path={quote(args['path'], safe='')}")
             return await ymm4_get("/reflect/inspect?" + "&".join(q))
 
         case "get":
