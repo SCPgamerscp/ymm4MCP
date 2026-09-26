@@ -166,7 +166,8 @@ TOOLS = [
                 "max_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "qa_gate: 経過時間の上限（省略時は無制限）"},
                 "api_calls": {"type": "integer", "minimum": 0, "description": "qa_gate: 呼び出し側で数えたAPI回数"},
                 "max_api_calls": {"type": "integer", "minimum": 1, "description": "qa_gate: API回数の上限（省略時は無制限）"},
-                "path": {"type": "string", "description": "get_info/media、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "min_silence_seconds": {"type": "number", "minimum": 0.1, "maximum": 60, "description": "get_info/audio_qa: 無音とみなす最短秒数。既定2"},
+                "path": {"type": "string", "description": "get_info/media/audio_qa、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
@@ -393,6 +394,17 @@ async def dispatch(args: dict) -> Any:
                 case "capabilities": return await ymm4_get("/capabilities")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
+                case "audio_qa":
+                    path = args.get("path")
+                    if not is_absolute_media_path(path):
+                        raise ValueError("audio_qa path must be an absolute file path")
+                    q = f"/media/audio-qa?path={quote(path.strip(), safe='')}"
+                    if "min_silence_seconds" in args:
+                        seconds = finite_number(args["min_silence_seconds"], "min_silence_seconds")
+                        if not 0.1 <= seconds <= 60:
+                            raise ValueError("min_silence_seconds must be in 0.1..60")
+                        q += f"&min_silence_seconds={seconds:g}"
+                    return await ymm4_get(q)
                 case "media":
                     path = args.get("path")
                     if not is_absolute_media_path(path):
