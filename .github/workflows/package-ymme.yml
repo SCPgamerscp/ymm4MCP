@@ -30,6 +30,8 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Test timeline input validation
         run: dotnet run --project tests/TimelineInputValidation.Tests/TimelineInputValidation.Tests.csproj --configuration Release
+      - name: Test WAV audio QA
+        run: dotnet run --project tests/WavAudioInspector.Tests/WavAudioInspector.Tests.csproj --configuration Release
       - name: Test reflection path resolution
         run: dotnet run --project tests/ReflectionPath.Tests/ReflectionPath.Tests.csproj --configuration Release
       - name: Test effect metadata
