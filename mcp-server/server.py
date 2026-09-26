@@ -173,6 +173,11 @@ TOOLS = [
                 "hash": {"type": "boolean", "description": "get_info/assets: 64 MiB 以下の素材の SHA-256 と重複候補を取得"},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "description": "get_info/assets: 返却件数。既定100"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
+                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa: 期待する動画の長さ"},
+                "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa: 尺の許容誤差。既定1秒"},
+                "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
+                "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
+                "require_audio": {"type": "boolean", "description": "get_info/export_qa: 音声トラックを必須とする"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
@@ -447,6 +452,27 @@ async def dispatch(args: dict) -> Any:
                     qs = ("?" + "&".join(q)) if q else ""
                     return await ymm4_get(f"/items/keyframes{qs}")
                 case "jobs": return await ymm4_get("/jobs")
+                case "export_qa":
+                    path = args.get("path")
+                    if not is_absolute_media_path(path) or not path.strip().lower().endswith(".mp4"):
+                        raise ValueError("export_qa path must be an absolute .mp4 file path")
+                    q = [f"path={quote(path.strip(), safe='')}"]
+                    for key, lower, upper, strict in (("expected_duration_seconds", 0, None, True),
+                                                      ("duration_tolerance_seconds", 0, 60, False)):
+                        if key in args:
+                            value = finite_number(args[key], key)
+                            if (value <= lower if strict else value < lower) or (upper is not None and value > upper):
+                                raise ValueError(f"{key} is out of range")
+                            q.append(f"{key}={value:g}")
+                    for key in ("expected_width", "expected_height"):
+                        if key in args:
+                            integer(args[key], key, 1, 16384)
+                            q.append(f"{key}={args[key]}")
+                    if "require_audio" in args:
+                        if not isinstance(args["require_audio"], bool):
+                            raise ValueError("require_audio must be boolean")
+                        q.append(f"require_audio={str(args['require_audio']).lower()}")
+                    return await ymm4_get("/media/export-qa?" + "&".join(q))
                 case "job":
                     job_id = args.get("job_id")
                     if not job_id_ok(job_id):

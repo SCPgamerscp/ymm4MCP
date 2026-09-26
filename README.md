@@ -203,6 +203,8 @@ POST /api/project/export
 
 本体の出力APIはバージョン差があるため実行時に探索します。パス付きメソッドが無い場合は `EXPORT_METHOD_UNAVAILABLE` または `EXPORT_DIALOG_REQUIRED` になり、ダイアログ操作は自動化しません。
 
+完成ファイルを期待値と照合する場合は `get_info/export_qa` を使います。`path` に MP4 の絶対パスを指定し、必要に応じて `expected_duration_seconds`、`duration_tolerance_seconds`（既定1秒）、`expected_width`、`expected_height`、`require_audio=True` を渡します。結果の `passed` と `issues` に尺・解像度・音声トラックの不一致が返ります。MP4 コンテナのメタデータ検査であり、実際の映像・音声のデコード検査ではありません。
+
 MCPからは次のように呼びます。
 
 ```python
