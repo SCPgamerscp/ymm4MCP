@@ -330,6 +330,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 編集対象は明示してください。`property` と `keyframe` は `item_id` または `frame` と `layer` の両方が必要です。`face_param` と `effect` は `frame` と `layer` の両方が必要です。`select` は `item_id`、`frame`、`layer` のいずれか、または `clear=true` が必要です。対象を省略しても先頭アイテムや全アイテムを暗黙に選ぶことはありません。
 
+`edit_item/property` は設定後に同じプロパティを読み直し、要求値と一致したときだけ `verified: true` を返します。YMM4側で値が丸められた、または拒否された場合は `PROPERTY_VERIFY_FAILED` と実際の値を返します。setterの例外や読み取り失敗は `outcome_unknown: true` です。失敗後は再送前に `items` で現在状態を確認してください。
+
 **add_scriptのパラメータ：**
 ```python
 action="add_script",
