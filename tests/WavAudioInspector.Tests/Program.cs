@@ -49,7 +49,7 @@ try
     }
     File.WriteAllBytes(path, Wave(clean));
     Check(WavAudioInspector.Inspect(path).Passed, "clean stereo should pass");
-    File.WriteAllText(path, "invalid wave");
+    File.WriteAllBytes(path, Wave(clean)[..20]);
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID", "truncated WAV accepted");
     var unsupported = Wave(clean);
     BinaryPrimitives.WriteUInt16LittleEndian(unsupported.AsSpan(20, 2), 3);
