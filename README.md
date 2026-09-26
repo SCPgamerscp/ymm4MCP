@@ -212,6 +212,8 @@ action="control", sub_action="open", path="C:/proj/a.ymmp"
 action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 ```
 
+`open` は未保存変更がある場合 `UNSAVED_CHANGES`、保存状態を取得できない場合 `PROJECT_SAVE_STATE_UNKNOWN` を返して停止します。現在の内容を確認して保存した後に再実行するか、破棄を意図する場合は `force=True` を指定してください。YMM4本体の確認ダイアログが表示される場合は、その操作も必要です。
+
 `save` と `save_as` で既存の `.ymmp` を上書きする前に、以前の内容をローカルの `YMM4MCP/project-backups` にコピーします。応答の `backup_path` から退避先を確認できます。コピーに失敗した場合は `BACKUP_FAILED` で保存せず停止します。新規保存または現在のプロジェクトパスを取得できない場合はバックアップ先が `null` です。退避ファイルの整理は利用者が行ってください。
 
 #### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）

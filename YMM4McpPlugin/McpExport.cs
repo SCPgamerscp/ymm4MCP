@@ -174,12 +174,22 @@ namespace YMM4McpPlugin
         {
             var body = await ReadBody(req);
             string path = RequireAbsolutePath(body, "path");
+            bool force = GetBool(body, "force", false);
             if (!path.EndsWith(".ymmp", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("project path must end with .ymmp");
             if (!File.Exists(path))
                 return Failure("FILE_NOT_FOUND", "プロジェクトファイルがありません: " + path);
             return await RunOnUi(async () =>
             {
+                var vm = GetMainViewModel();
+                var model = vm == null ? null : GetMainModel(vm);
+                object? value = vm == null ? null : GetPropValue(vm, "IsSaved") ??
+                    (model == null ? null : GetPropValue(model, "IsSaved"));
+                bool? isSaved = value is bool saved ? saved : null;
+                if (!force && isSaved == false)
+                    return Failure("UNSAVED_CHANGES", "現在のプロジェクトに未保存の変更があります。保存するか force=true を指定してください");
+                if (!force && isSaved == null)
+                    return Failure("PROJECT_SAVE_STATE_UNKNOWN", "保存状態を確認できません。現在のプロジェクトを確認してから force=true を指定してください");
                 var invoked = InvokeNamed(OpenMethodHints, path);
                 if (!invoked.ok)
                     return Failure("OPEN_METHOD_UNAVAILABLE", "プロジェクトをパス指定で開く方法が見つかりません");
