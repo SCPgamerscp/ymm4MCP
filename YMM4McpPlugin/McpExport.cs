@@ -292,6 +292,17 @@ namespace YMM4McpPlugin
             return Path.GetFullPath(path);
         }
 
+        private static object GetAudioQa(HttpListenerRequest req)
+        {
+            string path = req.QueryString["path"] ?? "";
+            double seconds = 2;
+            string? raw = req.QueryString["min_silence_seconds"];
+            if (raw != null && !double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out seconds))
+                throw new ArgumentException("min_silence_seconds must be a number");
+            return WavAudioInspector.Inspect(path, seconds);
+        }
+
         private static object GetExportQa(HttpListenerRequest req)
         {
             string path = req.QueryString["path"] ?? "";

@@ -219,6 +219,8 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 `save` と `save_as` で既存の `.ymmp` を上書きする前に、以前の内容をローカルの `YMM4MCP/project-backups` にコピーします。応答の `backup_path` から退避先を確認できます。コピーに失敗した場合は `BACKUP_FAILED` で保存せず停止します。新規保存または現在のプロジェクトパスを取得できない場合はバックアップ先が `null` です。退避ファイルの整理は利用者が行ってください。
 
+`get_info/audio_qa` は YMM4 側の絶対パス `path` にある PCM 16-bit WAV（モノラル/ステレオ）を検査します。`min_silence_seconds`（既定2秒）以上の無音、フルスケール付近のサンプルの継続、左右チャンネルの大きな RMS 差を `issues` に返します。`passed` は error が無いときだけ true です。対応外の形式は `AUDIO_FORMAT_UNSUPPORTED` を返します。映像に埋め込まれた音声や MP3 はこの検査の対象外です。
+
 #### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）
 
 LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
