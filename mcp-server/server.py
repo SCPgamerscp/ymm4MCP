@@ -29,6 +29,7 @@ from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, finite_number
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
+import visual_qa
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -126,7 +127,8 @@ TOOLS = [
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
-            "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行)を指定する。"
+            "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
+            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -134,7 +136,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
-                             "plan_edit", "apply_edit", "reconcile_edit"],
+                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -167,6 +169,10 @@ TOOLS = [
                 "api_calls": {"type": "integer", "minimum": 0, "description": "qa_gate: 呼び出し側で数えたAPI回数"},
                 "max_api_calls": {"type": "integer", "minimum": 1, "description": "qa_gate: API回数の上限（省略時は無制限）"},
                 "min_silence_seconds": {"type": "number", "minimum": 0.1, "maximum": 60, "description": "get_info/audio_qa: 無音とみなす最短秒数。既定2"},
+                "end_frame": {"type": "integer", "minimum": 0, "description": "visual_qa: 検査の終了フレーム（含む、必須）"},
+                "step_frames": {"type": "integer", "minimum": 1, "description": "visual_qa: サンプリング間隔。既定30、最大40枚"},
+                "min_static_frames": {"type": "integer", "minimum": 1, "description": "visual_qa: 静止候補の最短観測区間。既定60フレーム"},
+                "black_as_error": {"type": "boolean", "description": "visual_qa: 黒画面候補をerrorにする。既定false"},
                 "path": {"type": "string", "description": "get_info/media/audio_qa/export_qa、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
                 "directory": {"type": "string", "description": "get_info/assets: YMM4 がアクセスできる素材フォルダの絶対パス"},
                 "query": {"type": "string", "description": "get_info/assets: ファイル名の部分一致検索"},
@@ -212,7 +218,7 @@ TOOLS = [
                 },
                 "fps": {"type": "integer", "default": 30},
                 "chars_per_sec": {"type": "number", "default": 5},
-                "start_frame": {"type": "integer", "default": 0}
+                "start_frame": {"type": "integer", "default": 0, "description": "add_script/visual_qa: 開始フレーム"}
             },
             "required": ["action"]
         }
@@ -392,11 +398,65 @@ def require_edit_target(args: dict, *, item_id_allowed: bool = True, partial: bo
         raise ValueError("frame and layer are required when item_id is not specified")
 
 
+async def run_visual_qa(args: dict) -> dict:
+    start = integer(args.get("start_frame", 0), "start_frame", minimum=0)
+    if "end_frame" not in args:
+        raise ValueError("visual_qa requires end_frame")
+    end = integer(args["end_frame"], "end_frame", minimum=0)
+    step = integer(args.get("step_frames", 30), "step_frames", minimum=1)
+    minimum = integer(args.get("min_static_frames", 60), "min_static_frames", minimum=1)
+    black_as_error = args.get("black_as_error", False)
+    if not isinstance(black_as_error, bool):
+        raise ValueError("black_as_error must be boolean")
+    if end < start or (end - start) // step + 1 > 40:
+        raise ValueError("visual_qa requires an ordered range of at most 40 samples")
+    position = await ymm4_get("/preview/position")
+    if position.get("success") is False or "error" in position:
+        return {"success": False, "passed": False, "error": "プレビュー位置を取得できません", "details": position}
+    original = position.get("currentFrame")
+    total = position.get("totalFrames")
+    if not isinstance(original, int) or isinstance(original, bool) or original < 0:
+        return {"success": False, "passed": False, "error": "元のプレビュー位置が不明です"}
+    if isinstance(total, int) and not isinstance(total, bool) and total > 0 and end >= total:
+        raise ValueError("end_frame is outside the preview")
+    samples = []
+    failure = None
+    restoration = None
+    try:
+        for frame in range(start, end + 1, step):
+            data = await ymm4_post("/preview/seek", {"frame": frame}, timeout=PREVIEW_OVERHEAD_SECONDS)
+            if data.get("success") is False or "error" in data:
+                failure = f"frame {frame}: プレビューを取得できません"
+                break
+            try:
+                samples.append((frame, visual_qa.thumbnail(data.get("image"))))
+            except ValueError as exc:
+                failure = f"frame {frame}: {exc}"
+                break
+    finally:
+        try:
+            restored = await ymm4_post("/preview/seek", {"frame": original}, timeout=PREVIEW_OVERHEAD_SECONDS)
+            restoration = restored.get("success") is not False and "error" not in restored
+        except Exception:
+            restoration = False
+    if failure or not restoration:
+        return {"success": False, "passed": False, "error": failure or "プレビュー位置を復元できません",
+                "restored_position": restoration, "sample_count": len(samples)}
+    result = visual_qa.inspect(samples, step_frames=step, min_static_frames=minimum,
+                               black_as_error=black_as_error)
+    result.update({"start_frame": start, "end_frame": end, "step_frames": step,
+                   "restored_position": True,
+                   "note": "サンプリング位置の候補です。未検査フレームや意図的な暗転・静止画は判断できません。"})
+    return result
+
+
 async def dispatch(args: dict) -> Any:
     action = args.get("action")
     sub_action = args.get("sub_action")
     
     match action:
+        case "visual_qa":
+            return await run_visual_qa(args)
         case "get_info":
             match sub_action:
                 case "status": return await ymm4_get("/status")
