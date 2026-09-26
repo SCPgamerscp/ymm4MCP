@@ -86,6 +86,24 @@ TimelineInputValidation.ApplyResolve(overlap, 0, (item, _, frame, _, _) => Set(i
 Equal(1, edits);
 Equal(10, last.Frame);
 
+string temporary = Path.Combine(Path.GetTempPath(), "ymm4mcp-backup-test-" + Guid.NewGuid().ToString("N"));
+try
+{
+    Directory.CreateDirectory(temporary);
+    string source = Path.Combine(temporary, "project.ymmp");
+    string backups = Path.Combine(temporary, "backups");
+    Equal<string?>(null, ProjectBackup.BeforeOverwrite(source, backups));
+    File.WriteAllText(source, "first version");
+    string firstBackup = ProjectBackup.BeforeOverwrite(source, backups)!;
+    File.WriteAllText(source, "second version");
+    string secondBackup = ProjectBackup.BeforeOverwrite(source, backups)!;
+    Equal("first version", File.ReadAllText(firstBackup));
+    Equal("second version", File.ReadAllText(secondBackup));
+    Equal("second version", File.ReadAllText(source));
+    Equal(false, firstBackup == secondBackup);
+}
+finally { if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true); }
+
 Console.WriteLine("Timeline input validation tests passed");
 
 sealed class Item(int frame)
