@@ -795,14 +795,31 @@ namespace YMM4McpPlugin
                 if (conflict != null) return conflict;
                 var p = targetItem.GetType().GetProperty(pName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (p == null || !p.CanWrite) return Failure("PROPERTY_NOT_WRITABLE", $"プロパティ'{pName}'を変更できません");
+                object? converted;
+                try { converted = Convert.ChangeType(pVal, p.PropertyType); }
+                catch (Exception ex) { return Failure("INVALID_ARGUMENT", ex.InnerException?.Message ?? ex.Message); }
                 try
                 {
-                    p.SetValue(targetItem, Convert.ChangeType(pVal, p.PropertyType));
-                    MarkItemChanged(targetItem);
-                    var identity = GetItemIdentity(targetItem);
-                    return (object)new { success = true, item_id = identity.id, revision = GetItemRevision(targetItem), identity_persistent = identity.persistent, prop = pName, value = pVal };
+                    p.SetValue(targetItem, converted);
                 }
-                catch (Exception ex) { return Failure("PROPERTY_SET_FAILED", ex.InnerException?.Message ?? ex.Message); }
+                catch (Exception ex)
+                {
+                    MarkItemChanged(targetItem); // setter may have changed state before throwing
+                    return Failure("PROPERTY_SET_FAILED", ex.InnerException?.Message ?? ex.Message, true);
+                }
+                MarkItemChanged(targetItem);
+                object? actual;
+                try { actual = p.GetValue(targetItem); }
+                catch (Exception ex) { return Failure("PROPERTY_VERIFY_FAILED", ex.InnerException?.Message ?? ex.Message, true); }
+                var identity = GetItemIdentity(targetItem);
+                if (!Equals(converted, actual))
+                    return (object)new { success = false, error_code = "PROPERTY_VERIFY_FAILED",
+                        error = $"プロパティ'{pName}'の設定後の値が要求と一致しません", retryable = false,
+                        outcome_unknown = true, item_id = identity.id, revision = GetItemRevision(targetItem),
+                        expected = ToJsonSafe(converted), actual = ToJsonSafe(actual) };
+                return (object)new { success = true, item_id = identity.id, revision = GetItemRevision(targetItem),
+                    identity_persistent = identity.persistent, prop = pName, value = pVal, verified = true,
+                    actual = ToJsonSafe(actual) };
             });
         }
 
