@@ -198,6 +198,7 @@ namespace YMM4McpPlugin
                     ("GET",  "/api/items/keyframes") => GetItemKeyframes(req),
                     ("POST", "/api/items/keyframe") => await SetItemKeyframe(req),
                     ("GET", "/api/effects/list") => ListEffects(),
+                    ("GET", "/api/effects/describe") => DescribeEffect(req),
                     ("POST", "/api/items/delete") => await DeleteItems(req),
 #if DEBUG
                     ("GET", "/api/debug/tachie") => DebugTachie(),
@@ -814,6 +815,20 @@ namespace YMM4McpPlugin
                 .Select(t => new { name = t.Name.Replace("Effect", ""), fullName = t.Name })
                 .OrderBy(t => t.name).ToArray();
             return new { count = effects.Length, effects };
+        }
+
+        private object DescribeEffect(HttpListenerRequest req)
+        {
+            string name = req.QueryString["name"] ?? "";
+            if (string.IsNullOrWhiteSpace(name)) return Failure("INVALID_ARGUMENT", "name パラメータが必要です");
+            var matches = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(a => { try { return a.GetTypes(); } catch { return System.Array.Empty<Type>(); } })
+                .Where(t => !t.IsAbstract && !t.IsInterface && t.Namespace?.StartsWith("YukkuriMovieMaker.Project.Effects") == true)
+                .Where(t => t.Name == name || t.FullName == name || t.Name == name + "Effect")
+                .Take(2).ToArray();
+            if (matches.Length == 0) return Failure("EFFECT_NOT_FOUND", $"エフェクト '{name}' が見つかりません");
+            if (matches.Length > 1) return Failure("EFFECT_AMBIGUOUS", "同名のエフェクトがあります。fullName を指定してください");
+            return EffectMetadata.Describe(matches[0]);
         }
 
         // アイテム削除（item_id / item_ids / layer指定 / frame+layer指定）

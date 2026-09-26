@@ -275,6 +275,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `POST /api/reflect/invoke` | 任意メソッドを引数付き呼び出し（戻り値がTaskなら自動await） |
 | `GET  /api/reflect/inspect` | オブジェクトの型・プロパティ・メソッド・コマンド一覧（機能の発見用） |
 
+`GET /api/effects/describe?name=...` は `effects/list` のエフェクト名または完全型名を受け取り、公開プロパティの型・書き込み可否と、属性に記述された範囲・既定値・表示名・単位を返します。属性がない値は `null` です。MCPでは `get_info` の `sub_action="effect_metadata"` と `name` で取得できます。YMM4の実行状態に依存する適用可能対象はこの情報だけでは判定しません。
+
 **target**: `Main`(MainViewModel) / `ActiveTimeline` / `Player` / `Project`
 **path**: `Items[0].Item.Length` のようにドット・インデックスで深掘り可（ReactivePropertyは自動展開）
 `reflect/get` は存在しないメンバー・範囲外または不正な添字に `PATH_NOT_FOUND` を返します。存在するメンバーの値が `null` なら成功応答で `value: null` を返します。
@@ -298,6 +300,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `items` | タイムライン全アイテム取得 |
 | `get_info` | `media` | YMM4側の素材ファイルの存在・サイズ・拡張子・最終更新日時を取得。絶対パス `path` を指定 |
 | `get_info` | `effects_list` | エフェクト一覧 |
+| `get_info` | `effect_metadata` | `name` でエフェクトの公開設定項目と属性メタデータを取得 |
 | `control` | `play` | 再生 |
 | `control` | `stop` | 停止 |
 | `control` | `save` | 保存 |

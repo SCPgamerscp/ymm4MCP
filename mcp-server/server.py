@@ -121,7 +121,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/media/characters/capabilities/effects_list/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/media/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
@@ -140,7 +140,7 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,media,characters,capabilities,effects_list,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
+                        "情報取得(status,project,items,media,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
                         "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,checkpoint,rollback,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
@@ -190,6 +190,7 @@ TOOLS = [
                 "at": {"type": "integer", "minimum": 0, "description": "keyframe: アイテム開始からの相対フレーム"},
                 "keyframe_action": {"type": "string", "enum": ["set", "remove", "clear"], "description": "keyframe: set=打刻, remove=1点削除, clear=全削除"},
                 "effect": {"type": "string"},
+                "name": {"type": "string", "description": "effect_metadata: effects_list の name または fullName"},
                 "params": {"type": "object"},
                 "frames": {"type": "integer", "minimum": 1, "maximum": 2147483647},
                 "layers": {"type": "array", "maxItems": 1000, "items": {"type": "integer", "minimum": 0, "maximum": 2147483647}},
@@ -397,6 +398,11 @@ async def dispatch(args: dict) -> Any:
                         raise ValueError("media path must be an absolute file path")
                     return await ymm4_get(f"/media/info?path={quote(path.strip(), safe='')}")
                 case "effects_list": return await ymm4_get("/effects/list")
+                case "effect_metadata":
+                    name = args.get("name")
+                    if not isinstance(name, str) or not name.strip():
+                        raise ValueError("effect_metadata requires name")
+                    return await ymm4_get(f"/effects/describe?name={quote(name.strip(), safe='')}")
                 case "selection": return await ymm4_get("/selection")
                 case "commands": return await ymm4_get("/commands")
                 case "position": return await ymm4_get("/preview/position")

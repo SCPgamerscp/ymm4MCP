@@ -309,6 +309,14 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                     await server.dispatch({"action": "get_info", "sub_action": "media", "path": invalid})
             get.assert_not_awaited()
 
+    async def test_effect_metadata_requires_name_and_encodes_it(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"parameters": []})) as get:
+            await server.dispatch({"action": "get_info", "sub_action": "effect_metadata", "name": "Fade & Glow"})
+            get.assert_awaited_once_with("/effects/describe?name=Fade%20%26%20Glow")
+            with self.assertRaisesRegex(ValueError, "name"):
+                await server.dispatch({"action": "get_info", "sub_action": "effect_metadata", "name": " "})
+            get.assert_awaited_once()
+
     async def test_identity_and_revision_are_forwarded_for_safe_edits(self):
         identity = "native:item/with spaces"
         revision = "abc123"
