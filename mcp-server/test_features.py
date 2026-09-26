@@ -347,6 +347,25 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                     await server.dispatch(args)
                 post.assert_not_awaited()
 
+    async def test_edit_target_must_be_explicit_before_http_request(self):
+        invalid = [
+            {"sub_action": "property", "prop": "Length", "value": 90},
+            {"sub_action": "property", "prop": "Length", "value": 90, "frame": 0},
+            {"sub_action": "property", "prop": "Length", "value": 90, "item_id": " "},
+            {"sub_action": "face_param", "params": {"FacePath": "a"}},
+            {"sub_action": "effect", "effect": "Fade", "layer": 0},
+            {"sub_action": "effect", "effect": "Fade", "item_id": "native:a"},
+            {"sub_action": "keyframe", "prop": "X", "value": 1, "at": 0},
+            {"sub_action": "select"},
+        ]
+        with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            for edit in invalid:
+                with self.subTest(edit=edit), self.assertRaises(ValueError):
+                    await server.dispatch({"action": "edit_item", **edit})
+            post.assert_not_awaited()
+            await server.dispatch({"action": "edit_item", "sub_action": "select", "clear": True})
+            post.assert_awaited_once_with("/items/select", {"clear": True})
+
     async def test_keyframe_set_requires_value_and_rejects_non_finite(self):
         base = {"action": "edit_item", "sub_action": "keyframe", "item_id": "native:a", "prop": "X", "at": 10}
         with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
