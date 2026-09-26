@@ -30,6 +30,21 @@ foreach (string bad in new[] { "null", "3", "\"1\"", "[-1]", "[true]", "[1.2]", 
     Invalid(() => TimelineInputValidation.GetLayers(Body($"{{\"layers\":{bad}}}")));
 Invalid(() => TimelineInputValidation.GetLayers(Body("{\"layers\":[" + string.Join(',', Enumerable.Repeat("0", 1001)) + "]}")));
 
+TimelineInputValidation.RequireCoordinates(Body("{\"frame\":0,\"layer\":0}"));
+foreach (string bad in new[] { "{}", "{\"frame\":0}", "{\"layer\":0}",
+                            "{\"frame\":-1,\"layer\":0}" })
+    Invalid(() => TimelineInputValidation.RequireCoordinates(Body(bad)));
+TimelineInputValidation.RequireItemTarget(Body("{\"item_id\":\"native:a\"}"));
+TimelineInputValidation.RequireItemTarget(Body("{\"frame\":1,\"layer\":2}"));
+foreach (string bad in new[] { "{}", "{\"item_id\":\" \"}", "{\"item_id\":3}",
+                            "{\"frame\":0}" })
+    Invalid(() => TimelineInputValidation.RequireItemTarget(Body(bad)));
+TimelineInputValidation.RequireSelectionTarget(Body("{\"frame\":10}"));
+TimelineInputValidation.RequireSelectionTarget(Body("{\"layer\":2}"));
+TimelineInputValidation.RequireSelectionTarget(Body("{\"clear\":true}"));
+Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body("{}")));
+Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body("{\"frame\":-1}")));
+
 Invalid(() => TimelineInputValidation.AtLeast(-2, -1, "frame"));
 Equal(-1, TimelineInputValidation.AtLeast(-1, -1, "frame"));
 Invalid(() => TimelineInputValidation.CheckPlacement(-1, 1));
