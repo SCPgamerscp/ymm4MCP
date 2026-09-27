@@ -58,7 +58,8 @@ try
         0, 0, 0, 0, 0, 0, 0, 0, (byte)'v', (byte)'i', (byte)'d', (byte)'e' }),
         Box("mdhd", mdhd), Box("minf", Box("stbl", Box("stts", badStts)))));
     Write(ftyp, Box("moov", Box("mvhd", mvhd), badVideo), mdat);
-    Check(!Mp4FileInspector.Inspect(path).Verified, "truncated stts accepted");
+    var unknownFps = Mp4FileInspector.Inspect(path);
+    Check(unknownFps.Verified && unknownFps.AverageFps is null, "bad stts should leave FPS unknown");
 
     Write(ftyp, mdat);
     Check(!Mp4FileInspector.Inspect(path).Verified, "missing moov accepted");

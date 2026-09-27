@@ -77,6 +77,7 @@ namespace YMM4McpPlugin
             int trackWidth = 0, trackHeight = 0;
             uint timescale = 0;
             ulong samples = 0, ticks = 0;
+            long sampleTableStart = -1, sampleTableEnd = -1;
             while (file.Position < end)
             {
                 var box = ReadBox(file, end);
@@ -103,7 +104,10 @@ namespace YMM4McpPlugin
                             timescale = U32(header, header[0] == 1 ? 20 : 12);
                         }
                         else if (child.Type == "minf")
-                            ReadSampleTable(file, child.End, ref samples, ref ticks);
+                        {
+                            sampleTableStart = file.Position;
+                            sampleTableEnd = child.End;
+                        }
                         file.Position = child.End;
                     }
                 }
@@ -113,6 +117,21 @@ namespace YMM4McpPlugin
             {
                 video = true;
                 if (trackWidth > 0 && trackHeight > 0) { width = trackWidth; height = trackHeight; }
+                if (sampleTableStart >= 0)
+                {
+                    try
+                    {
+                        file.Position = sampleTableStart;
+                        ReadSampleTable(file, sampleTableEnd, ref samples, ref ticks);
+                    }
+                    catch (Exception ex) when (ex is InvalidDataException or OverflowException or EndOfStreamException)
+                    {
+                        // Frame timing is optional metadata; report it as unknown without
+                        // rejecting an otherwise inspectable MP4 container.
+                        samples = ticks = 0;
+                    }
+                    finally { file.Position = end; }
+                }
                 if (timescale > 0 && samples > 0 && ticks > 0)
                     fps = (double)samples * timescale / ticks;
             }
