@@ -48,6 +48,17 @@ class CompositeQaTests(unittest.IsolatedAsyncioTestCase):
             editing.combine_qa_reports(structural, {"visual": {
                 "success": True, "passed": False, "issues": []}}, {"visual": {"end_frame": 30}})
 
+    def test_moved_silence_does_not_look_stalled(self):
+        structural = editing.validate_timeline([])
+        criteria = {"audio": {"path": "C:/audio.wav"}}
+        def report(start):
+            return editing.combine_qa_reports(structural, {"audio": {
+                "success": True, "passed": False, "issues": [
+                    {"code": "LONG_SILENCE", "severity": "error",
+                     "startSeconds": start, "endSeconds": start + 3}]}}, criteria)
+        self.assertEqual(editing.evaluate_qa_gate(report(10), [report(0)])["reason_code"],
+                         "QA_ISSUES_REMAIN")
+
 
 if __name__ == "__main__":
     unittest.main()
