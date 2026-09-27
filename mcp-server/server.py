@@ -21,6 +21,7 @@ YMM4(ゆっくりMovieMaker4)をMCP経由でClaudeから操作するサーバー
 import asyncio
 import json
 import os
+import ntpath
 import sys
 from typing import Any
 from urllib.parse import quote
@@ -128,7 +129,8 @@ TOOLS = [
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
-            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング)を指定する。"
+            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
+            "'create_from_template'(テンプレートを開いて別名保存)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -136,7 +138,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
-                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa"],
+                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -148,7 +150,8 @@ TOOLS = [
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
                 },
-                "dry_run": {"type": "boolean", "description": "add_script/apply_edit: 検証と推定配置のみ。編集・音声合成なし"},
+                "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template: 検証と予定のみ。編集なし"},
+                "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
@@ -175,7 +178,7 @@ TOOLS = [
                 "step_frames": {"type": "integer", "minimum": 1, "description": "visual_qa: サンプリング間隔。既定30、最大40枚"},
                 "min_static_frames": {"type": "integer", "minimum": 1, "description": "visual_qa: 静止候補の最短観測区間。既定60フレーム"},
                 "black_as_error": {"type": "boolean", "description": "visual_qa: 黒画面候補をerrorにする。既定false"},
-                "path": {"type": "string", "description": "get_info/media/audio_qa/export_qa、video/audio/imageの素材、またはexport/open/save_asの絶対パス"},
+                "path": {"type": "string", "description": "get_info/media/audio_qa/export_qa、video/audio/imageの素材、export/open/save_as、またはcreate_from_templateの保存先絶対パス"},
                 "directory": {"type": "string", "description": "get_info/assets: YMM4 がアクセスできる素材フォルダの絶対パス"},
                 "query": {"type": "string", "description": "get_info/assets: ファイル名の部分一致検索"},
                 "recursive": {"type": "boolean", "description": "get_info/assets: サブフォルダを走査する"},
@@ -460,11 +463,85 @@ async def run_visual_qa(args: dict) -> dict:
     return result
 
 
+def _same_project_path(a: str, b: str) -> bool:
+    if len(a) >= 2 and a[1] == ":" or a.startswith("\\\\"):
+        return ntpath.normcase(ntpath.normpath(a)) == ntpath.normcase(ntpath.normpath(b))
+    return os.path.normpath(a) == os.path.normpath(b)
+
+
+async def create_from_template(args: dict) -> dict:
+    template = validate_project_path({"path": args.get("template_path")})
+    destination = validate_project_path(args)
+    if _same_project_path(template, destination):
+        raise ValueError("template_path and destination path must differ")
+    dry_run = args.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be boolean")
+    source = await ymm4_get(f"/media/info?path={quote(template, safe='')}")
+    target = await ymm4_get(f"/media/info?path={quote(destination, safe='')}")
+    if source.get("success") is not True or source.get("exists") is not True:
+        return {"success": False, "error_code": "TEMPLATE_NOT_FOUND", "details": source}
+    if target.get("success") is not True or target.get("exists") is not False:
+        return {"success": False, "error_code": "TEMPLATE_DESTINATION_UNAVAILABLE", "details": target}
+    current = await ymm4_get("/project")
+    if current.get("success") is not True or current.get("isSaved") is not True:
+        return {"success": False, "error_code": "CURRENT_PROJECT_NOT_SAVED", "details": current}
+    if dry_run:
+        return {"success": True, "dry_run": True, "template_path": template,
+                "destination_path": destination, "current_project_path": current.get("projectPath"),
+                "steps": ["open_template", "save_as_new_path", "verify_project_path"]}
+    try:
+        opened = await ymm4_post("/project/open", {"path": template})
+    except Exception as exc:
+        return {"success": False, "error_code": "TEMPLATE_OPEN_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "error": str(exc)}
+    if opened.get("success") is not True:
+        return {"success": False, "error_code": "TEMPLATE_OPEN_FAILED", "details": opened}
+    opened_state = None
+    for attempt in range(20):
+        try:
+            opened_state = await ymm4_get("/project")
+        except Exception as exc:
+            return {"success": False, "error_code": "TEMPLATE_OPEN_NOT_VERIFIED",
+                    "outcome_unknown": True, "error": str(exc), "opened_template_path": template}
+        if opened_state.get("success") is True and \
+                isinstance(opened_state.get("projectPath"), str) and \
+                _same_project_path(opened_state["projectPath"], template) and \
+                opened_state.get("isSaved") is True:
+            break
+        if attempt < 19:
+            await asyncio.sleep(0.15)
+    else:
+        return {"success": False, "error_code": "TEMPLATE_OPEN_NOT_VERIFIED",
+                "outcome_unknown": True, "details": opened_state, "opened_template_path": template}
+    try:
+        saved = await ymm4_post("/project/save-as", {"path": destination, "overwrite": False})
+    except Exception as exc:
+        return {"success": False, "error_code": "TEMPLATE_SAVE_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "error": str(exc), "opened_template_path": template}
+    if saved.get("success") is not True:
+        return {"success": False, "error_code": "TEMPLATE_SAVE_FAILED", "details": saved,
+                "opened_template_path": template}
+    try:
+        verified = await ymm4_get("/project")
+    except Exception as exc:
+        return {"success": False, "error_code": "TEMPLATE_VERIFY_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "error": str(exc), "destination_path": destination}
+    if verified.get("success") is not True or not isinstance(verified.get("projectPath"), str) or \
+            not _same_project_path(verified["projectPath"], destination) or verified.get("isSaved") is not True:
+        return {"success": False, "error_code": "TEMPLATE_VERIFY_FAILED", "outcome_unknown": True,
+                "details": verified, "destination_path": destination}
+    return {"success": True, "dry_run": False, "template_path": template,
+            "destination_path": destination, "verified": True}
+
+
 async def dispatch(args: dict) -> Any:
     action = args.get("action")
     sub_action = args.get("sub_action")
     
     match action:
+        case "create_from_template":
+            return await create_from_template(args)
         case "visual_qa":
             return await run_visual_qa(args)
         case "get_info":
