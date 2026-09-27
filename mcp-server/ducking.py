@@ -40,9 +40,10 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
         points[left - start] = low
         if right < end:
             points[right - start] = low
-            restore = min(end - 1, right + release_frames)
-            if restore > right:
-                points[restore - start] = base_volume
+            # Do not jump back to full volume at the final audible frame when
+            # there is not enough room for the requested release transition.
+            if right + release_frames < end:
+                points[right + release_frames - start] = base_volume
     if len(points) > 2000:
         raise ValueError("ducking plan exceeds 2000 keyframes")
     return [{"at": at, "value": value} for at, value in sorted(points.items())]
