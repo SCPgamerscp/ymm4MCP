@@ -39,6 +39,9 @@
                 <TextBlock Foreground="#cdd6f4" Margin="0,6,0,0">
                     <Hyperlink NavigateUri="https://github.com/SCPgamerscp/ymm4MCP" RequestNavigate="OpenRepository">リポジトリ・導入手順</Hyperlink>
                 </TextBlock>
+                <TextBlock Foreground="#cdd6f4" Margin="0,3,0,0">
+                    <Hyperlink NavigateUri="https://github.com/SCPgamerscp/ymm4MCP/releases" RequestNavigate="OpenRepository">最新版の .ymme をダウンロード</Hyperlink>
+                </TextBlock>
             </StackPanel>
         </Border>
 

@@ -29,7 +29,7 @@ namespace YMM4McpPlugin
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"リポジトリを開けませんでした: {ex.Message}", "YMM4 MCP");
+                MessageBox.Show($"リンクを開けませんでした: {ex.Message}", "YMM4 MCP");
             }
         }
     }
