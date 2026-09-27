@@ -75,6 +75,8 @@ namespace YMM4McpPlugin
                 long minSilenceFrames = (long)Math.Ceiling(minSilenceSeconds * rate);
                 var issues = new List<AudioQaIssue>();
                 double[] sumSquares = new double[channels];
+                double[] sumSamples = new double[channels];
+                double crossSamples = 0;
                 long clipped = 0, silentStart = -1;
                 double peak = 0;
                 file.Position = dataStart;
@@ -87,6 +89,7 @@ namespace YMM4McpPlugin
                     for (int i = 0; i < count; i++)
                     {
                         bool silent = true;
+                        double firstChannel = 0;
                         for (int ch = 0; ch < channels; ch++)
                         {
                             double normalized;
@@ -111,6 +114,9 @@ namespace YMM4McpPlugin
                             if (amplitude >= 32760.0 / 32768) clipped++;
                             if (amplitude > 104.0 / 32768) silent = false; // about -50 dBFS
                             sumSquares[ch] += normalized * normalized;
+                            sumSamples[ch] += normalized;
+                            if (ch == 0) firstChannel = normalized;
+                            else crossSamples += firstChannel * normalized;
                         }
                         long frame = current + i;
                         if (silent && silentStart < 0) silentStart = frame;
@@ -126,9 +132,24 @@ namespace YMM4McpPlugin
                 if (clipped > frames * channels * 0.001)
                     issues.Add(new("AUDIO_CLIPPING", "error", null, null, "フルスケール付近のサンプルが継続しています"));
                 var rmsByChannel = sumSquares.Select(sum => Math.Sqrt(sum / frames)).ToArray();
+                var means = sumSamples.Select(sum => sum / frames).ToArray();
+                for (int ch = 0; ch < channels; ch++)
+                    if (Math.Abs(means[ch]) > 0.1 && Math.Abs(means[ch]) > rmsByChannel[ch] * 0.5)
+                        issues.Add(new("DC_OFFSET", "warning", null, null,
+                            $"チャンネル {ch + 1} の直流成分が大きい可能性があります"));
                 if (channels == 2 && rmsByChannel.Max() > 0.01 &&
                     rmsByChannel.Min() * 4 < rmsByChannel.Max())
                     issues.Add(new("CHANNEL_IMBALANCE", "warning", null, null, "左右チャンネルの RMS に大きな差があります"));
+                if (channels == 2)
+                {
+                    double varianceLeft = sumSquares[0] / frames - means[0] * means[0];
+                    double varianceRight = sumSquares[1] / frames - means[1] * means[1];
+                    if (varianceLeft > 0.0001 && varianceRight > 0.0001 &&
+                        (crossSamples / frames - means[0] * means[1]) /
+                        Math.Sqrt(varianceLeft * varianceRight) < -0.95)
+                        issues.Add(new("CHANNEL_PHASE_INVERSION", "warning", null, null,
+                            "左右チャンネルがほぼ逆位相です"));
+                }
                 return new(true, !issues.Any(i => i.Severity == "error"), null, null, rate, channels,
                     (double)frames / rate, peak,
                     Math.Sqrt(sumSquares.Sum() / (frames * channels)), issues.ToArray());

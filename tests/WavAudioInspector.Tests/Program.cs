@@ -105,6 +105,20 @@ try
     }
     File.WriteAllBytes(path, Wave(clean));
     Check(WavAudioInspector.Inspect(path).Passed, "clean stereo should pass");
+    var inverted = new short[8000 * 2];
+    for (int frame = 0; frame < 8000; frame++)
+    {
+        inverted[frame * 2] = (short)(frame % 2 == 0 ? 8000 : -8000);
+        inverted[frame * 2 + 1] = (short)-inverted[frame * 2];
+    }
+    File.WriteAllBytes(path, Wave(inverted));
+    var phaseQa = WavAudioInspector.Inspect(path);
+    Check(phaseQa.Passed && phaseQa.Issues.Any(i => i.Code == "CHANNEL_PHASE_INVERSION"),
+        "opposite-phase stereo should be flagged as a warning");
+    Array.Fill(inverted, (short)12000);
+    File.WriteAllBytes(path, Wave(inverted));
+    Check(WavAudioInspector.Inspect(path).Issues.Any(i => i.Code == "DC_OFFSET"),
+        "large DC offset should be flagged");
     File.WriteAllBytes(path, Wave(clean)[..20]);
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID", "truncated WAV accepted");
     var unsupported = Wave(clean);
