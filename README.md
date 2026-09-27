@@ -217,6 +217,8 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 `open` は未保存変更がある場合 `UNSAVED_CHANGES`、保存状態を取得できない場合 `PROJECT_SAVE_STATE_UNKNOWN` を返して停止します。現在の内容を確認して保存した後に再実行するか、破棄を意図する場合は `force=True` を指定してください。YMM4本体の確認ダイアログが表示される場合は、その操作も必要です。
 
+テンプレートから新しい制作を始める場合は `ymm4_interact(action="create_from_template", template_path="C:/projects/template.ymmp", path="C:/projects/new.ymmp")` を使います。元の `.ymmp` の存在、保存先が未使用であること、現在開いているプロジェクトに未保存変更がないことを確認してから、テンプレートを開き、別名保存し、開いているパスと保存状態を再確認します。`dry_run=true` は事前確認のみです。保存に失敗するとテンプレートが開いた状態で残るため、`opened_template_path` とエラーを確認してください。保存先の上書きや未保存変更の強制破棄は行いません。YMM4 の起動は事前に必要です。
+
 `save` と `save_as` で既存の `.ymmp` を上書きする前に、以前の内容をローカルの `YMM4MCP/project-backups` にコピーします。応答の `backup_path` から退避先を確認できます。コピーに失敗した場合は `BACKUP_FAILED` で保存せず停止します。新規保存または現在のプロジェクトパスを取得できない場合はバックアップ先が `null` です。退避ファイルの整理は利用者が行ってください。
 
 `get_info/audio_qa` は YMM4 側の絶対パス `path` にある PCM 16-bit または IEEE float 32-bit WAV（モノラル/ステレオ、WAVE_FORMAT_EXTENSIBLE の float も対応）を検査します。`min_silence_seconds`（既定2秒）以上の無音、フルスケール付近のサンプルの継続、左右チャンネルの大きな RMS 差を `issues` に返します。`passed` は error が無いときだけ true です。対応外の形式は `AUDIO_FORMAT_UNSUPPORTED` を返します。映像に埋め込まれた音声や MP3 はこの検査の対象外です。
