@@ -46,6 +46,8 @@ Invoke-RestMethod -Uri "$($connection.api_base)/status" -Headers @{ 'X-Ymm4-Toke
 
 ## 📁 ファイル構成
 
+自律編集 API の現状と次の実装順は [API の優先順位](docs/api-priorities.md) を参照してください。
+
 ```
 ymm4プラグイン/
 ├── YMM4McpPlugin/              # YMM4に読み込まれるC#プラグイン
