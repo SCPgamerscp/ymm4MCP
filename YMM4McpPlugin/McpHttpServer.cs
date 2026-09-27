@@ -309,9 +309,11 @@ namespace YMM4McpPlugin
                 string? path = GetPropValue(vm, "ProjectFilePath")?.ToString() ?? (model == null ? null : GetPropObj(model, "ProjectFilePath")?.ToString());
                 object? savedValue = GetPropValue(vm, "IsSaved") ?? (model == null ? null : GetPropValue(model, "IsSaved"));
                 bool? isSaved = savedValue is bool saved ? saved : null;
+                var video = ReadProjectVideoInfo(vm);
                 return new { success = true, vmType = vm.GetType().FullName,
                     projectName = string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path),
-                    projectPath = path, isSaved, hasUnsavedChanges = isSaved.HasValue ? !isSaved.Value : (bool?)null };
+                    projectPath = path, isSaved, hasUnsavedChanges = isSaved.HasValue ? !isSaved.Value : (bool?)null,
+                    fps = video.fps, width = video.width, height = video.height };
             });
         }
 
@@ -2677,28 +2679,40 @@ namespace YMM4McpPlugin
             {
                 var vm = GetMainViewModel();
                 if (vm == null) return (object)new { success = false, error = "MainViewModel取得失敗" };
-
-                // Project / Scene / Video情報からFPS・解像度を探索
-                object? project = GetPropObj(vm, "Project") ?? GetPropObj(vm, "project") ?? GetPropObj(vm, "_project");
-                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
-
-                int? fps = null, width = null, height = null;
-                foreach (var src in new object?[] { project, tvm,
-                    tvm != null ? GetType_Field(tvm, "scene") : null,
-                    tvm != null ? GetType_Field(tvm, "timeline") : null })
-                {
-                    if (src == null) continue;
-                    foreach (var fpsName in new[] { "FPS", "Fps", "FrameRate", "VideoFPS", "VideoInfo" })
-                    {
-                        var v = GetNestedInt(src, fpsName);
-                        if (v.HasValue && v.Value > 0 && v.Value <= 240) { fps ??= v; }
-                    }
-                    foreach (var wn in new[] { "Width", "VideoWidth", "ScreenWidth" }) { var v = GetNestedInt(src, wn); if (v.HasValue && v > 0) width ??= v; }
-                    foreach (var hn in new[] { "Height", "VideoHeight", "ScreenHeight" }) { var v = GetNestedInt(src, hn); if (v.HasValue && v > 0) height ??= v; }
-                }
-
-                return (object)new { success = true, fps = fps ?? 30, width, height, note = fps == null ? "FPS自動検出失敗のため30を仮定" : null };
+                var video = ReadProjectVideoInfo(vm);
+                return (object)new { success = true, fps = video.fps ?? 30, video.width, video.height,
+                    detected = video.fps.HasValue,
+                    note = video.fps == null ? "FPS自動検出失敗のため30を仮定" : null };
             });
+        }
+
+        private static (int? fps, int? width, int? height) ReadProjectVideoInfo(object vm)
+        {
+            object? project = GetPropObj(vm, "Project") ?? GetPropObj(vm, "project") ?? GetPropObj(vm, "_project");
+            var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+            int? fps = null, width = null, height = null;
+            foreach (var src in new object?[] { project, project == null ? null : GetPropObj(project, "VideoInfo"), tvm,
+                tvm != null ? GetType_Field(tvm, "scene") : null,
+                tvm != null ? GetType_Field(tvm, "timeline") : null })
+            {
+                if (src == null) continue;
+                foreach (var name in new[] { "FPS", "Fps", "FrameRate", "VideoFPS", "VideoInfo" })
+                {
+                    var v = GetNestedInt(src, name);
+                    if (v is > 0 and <= 240) fps ??= v;
+                }
+                foreach (var name in new[] { "Width", "VideoWidth", "ScreenWidth" })
+                {
+                    var v = GetNestedInt(src, name);
+                    if (v is > 0 and <= 16384) width ??= v;
+                }
+                foreach (var name in new[] { "Height", "VideoHeight", "ScreenHeight" })
+                {
+                    var v = GetNestedInt(src, name);
+                    if (v is > 0 and <= 16384) height ??= v;
+                }
+            }
+            return (fps, width, height);
         }
 
         private static object? GetType_Field(object o, string name)
