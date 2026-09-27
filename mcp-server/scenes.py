@@ -37,8 +37,14 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         memberships = 0
         for scene in scenes:
             if frame < scene["end_frame"] and end > scene["start_frame"]:
+                visible_start = max(frame, scene["start_frame"])
+                visible_end = min(end, scene["end_frame"])
                 scene["items"].append({"item_id": identity, "frame": frame, "end_frame": end,
                                        "layer": raw.get("layer"), "type": raw.get("type"),
+                                       "visible_start_frame": visible_start,
+                                       "visible_end_frame": visible_end,
+                                       "relative_start_frame": visible_start - scene["start_frame"],
+                                       "relative_end_frame": visible_end - scene["start_frame"],
                                        "crosses_boundary": frame < scene["start_frame"] or end > scene["end_frame"]})
                 scene["item_count"] += 1
                 memberships += 1

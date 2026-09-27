@@ -19,6 +19,10 @@ class SceneIndexTests(unittest.TestCase):
         self.assertEqual([s["item_count"] for s in result["scenes"]], [2, 1])
         self.assertTrue(result["scenes"][0]["items"][1]["crosses_boundary"])
         self.assertTrue(result["scenes"][1]["items"][0]["crosses_boundary"])
+        self.assertEqual(result["scenes"][0]["items"][1]["visible_start_frame"], 25)
+        self.assertEqual(result["scenes"][0]["items"][1]["visible_end_frame"], 30)
+        self.assertEqual(result["scenes"][1]["items"][0]["relative_start_frame"], 0)
+        self.assertEqual(result["scenes"][1]["items"][0]["relative_end_frame"], 5)
         self.assertEqual(result["unassigned_item_ids"], ["c"])
 
     def test_rejects_overlap_and_duplicate_names(self):
