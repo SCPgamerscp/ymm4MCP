@@ -275,6 +275,8 @@ action="get_info", sub_action="edit_state"
 MCPからは `edit_item` / `keyframe`（`keyframe_action=set|remove|clear`）と `get_info` / `keyframes` で呼びます。
 YMM4内部の Animation API をリフレクションで叩くため、対象バージョンでメソッドが無い場合は `KEYFRAME_METHOD_UNAVAILABLE` になります。そのときは `inspect` で署名を確認してください。
 
+`ymm4_interact(action="duck_bgm", bgm_item_id="...")` は現在の VoiceItem 区間から指定 AudioItem の Volume キーフレームを計画します。既定は `dry_run=true` で編集しません。`duck_ratio`（既定0.3）、`attack_frames`（既定5）、`release_frames`（既定10）を指定できます。適用時は `dry_run=false` とし、保存済みプロジェクトのバックアップを作ってから revision を確認しながら打刻します。既存の Volume キーフレームがある場合は上書きせず拒否します。途中失敗は部分適用と `backup_path` を返します。軽量な自動復元は行わないため、必要ならバックアップを確認して開き直してください。YMM4の Volume Animation に対応する AudioItem が対象です。
+
 ### 全機能アクセス用 汎用API ★NEW
 個別エンドポイントで未対応のYMM4内部機能に、リフレクション経由で直接アクセスできます。
 
@@ -329,6 +331,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
 | `qa_gate` | —— | 現在のタイムラインQAと過去の検品結果から合格・修正継続・停止を判定（編集なし） |
 | `visual_qa` | —— | 指定区間のプレビューを最大40枚サンプリングし、黒画面・静止候補を報告 |
+| `duck_bgm` | —— | Voice区間に合わせて指定AudioItemのVolume変化を計画・適用（既定dry-run） |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
