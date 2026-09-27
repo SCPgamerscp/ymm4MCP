@@ -30,6 +30,7 @@ from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
+import ducking
 import visual_qa
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -130,7 +131,7 @@ TOOLS = [
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
             "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
-            "'create_from_template'(テンプレートを開いて別名保存)を指定する。"
+            "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -138,7 +139,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
-                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template"],
+                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -150,7 +151,11 @@ TOOLS = [
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
                 },
-                "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template: 検証と予定のみ。編集なし"},
+                "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template/duck_bgm: 検証と予定のみ。編集なし。duck_bgmの既定はtrue"},
+                "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
+                "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
+                "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
+                "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
@@ -535,11 +540,87 @@ async def create_from_template(args: dict) -> dict:
             "destination_path": destination, "verified": True}
 
 
+async def run_bgm_ducking(args: dict) -> dict:
+    item_id = args.get("bgm_item_id")
+    if not isinstance(item_id, str) or not item_id.strip():
+        raise ValueError("duck_bgm requires bgm_item_id")
+    dry_run = args.get("dry_run", True)
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be boolean")
+    snapshot = await ymm4_get("/items")
+    if snapshot.get("success") is False or "error" in snapshot or not isinstance(snapshot.get("items"), list):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    matches = [i for i in snapshot["items"] if isinstance(i, dict) and i.get("item_id") == item_id]
+    if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("audioitem"):
+        return {"success": False, "error_code": "BGM_ITEM_NOT_FOUND"}
+    bgm = matches[0]
+    revision = bgm.get("revision")
+    if not isinstance(revision, str) or not revision:
+        return {"success": False, "error_code": "BGM_REVISION_UNAVAILABLE"}
+    voices = [i for i in snapshot["items"] if isinstance(i, dict) and
+              str(i.get("type", "")).lower().endswith("voiceitem")]
+    key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
+    state = await ymm4_get(key_path)
+    if state.get("success") is not True or state.get("revision") != revision:
+        return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
+    animations = [a for a in (state.get("animations") or [])
+                  if isinstance(a, dict) and a.get("prop") == "Volume"]
+    if len(animations) != 1 or not isinstance(animations[0].get("keyframes"), list):
+        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+    keys = animations[0]["keyframes"]
+    if len(keys) != 1 or not isinstance(keys[0], dict) or keys[0].get("at") != 0:
+        return {"success": False, "error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
+    points = ducking.plan(bgm, voices, keys[0].get("value"),
+                          ratio=args.get("duck_ratio", .3),
+                          attack_frames=args.get("attack_frames", 5),
+                          release_frames=args.get("release_frames", 10))
+    result = {"success": True, "dry_run": dry_run, "bgm_item_id": item_id,
+              "voice_count": len(voices), "keyframes": points, "base_volume": keys[0]["value"]}
+    if dry_run or not points:
+        return result
+    project = await ymm4_get("/project")
+    if project.get("success") is not True or project.get("isSaved") is not True:
+        return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
+    checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
+    backup = checkpoint.get("backup_path")
+    if checkpoint.get("success") is not True or not isinstance(backup, str) or not backup:
+        return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
+    applied = []
+    for point in points:
+        payload = {"item_id": item_id, "expected_revision": revision,
+                   "prop": "Volume", "action": "set", **point}
+        try:
+            changed = await ymm4_post("/items/keyframe", payload)
+        except Exception as exc:
+            return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN", "error": str(exc),
+                    "applied": applied, "backup_path": backup, "outcome_unknown": True}
+        if changed.get("success") is not True or not isinstance(changed.get("revision"), str):
+            return {"success": False, "error_code": "BGM_DUCKING_PARTIAL",
+                    "applied": applied, "details": changed, "backup_path": backup}
+        applied.append(point)
+        revision = changed["revision"]
+    try:
+        checked = await ymm4_get(key_path)
+    except Exception as exc:
+        return {"success": False, "error_code": "BGM_DUCKING_VERIFY_UNKNOWN",
+                "error": str(exc), "applied": applied, "backup_path": backup,
+                "outcome_unknown": True}
+    found = next((a.get("keyframes", []) for a in (checked.get("animations") or [])
+                  if isinstance(a, dict) and a.get("prop") == "Volume"), []) if checked.get("success") is True else []
+    if not all(any(k.get("at") == p["at"] and isinstance(k.get("value"), (int, float)) and
+                   abs(k["value"] - p["value"]) < 1e-6 for k in found) for p in points):
+        return {"success": False, "error_code": "BGM_DUCKING_VERIFY_FAILED",
+                "applied": applied, "backup_path": backup, "details": checked}
+    return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
+
+
 async def dispatch(args: dict) -> Any:
     action = args.get("action")
     sub_action = args.get("sub_action")
     
     match action:
+        case "duck_bgm":
+            return await run_bgm_ducking(args)
         case "create_from_template":
             return await create_from_template(args)
         case "visual_qa":

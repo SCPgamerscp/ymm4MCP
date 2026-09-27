@@ -1,0 +1,48 @@
+"""Plan bounded Volume keyframes around the current voice spans."""
+
+from editing import finite_number, integer
+
+
+def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3,
+         attack_frames: int = 5, release_frames: int = 10) -> list[dict]:
+    ratio = finite_number(ratio, "duck_ratio")
+    if not 0 < ratio < 1:
+        raise ValueError("duck_ratio must be in (0, 1)")
+    attack_frames = integer(attack_frames, "attack_frames", 1, 300)
+    release_frames = integer(release_frames, "release_frames", 1, 300)
+    base_volume = finite_number(base_volume, "base_volume")
+    if base_volume <= 0:
+        raise ValueError("base_volume must be positive")
+    start = integer(bgm.get("frame"), "bgm.frame")
+    length = integer(bgm.get("length"), "bgm.length", 1)
+    end = integer(start + length, "bgm.end")
+    if not isinstance(voices, list) or len(voices) > 500:
+        raise ValueError("at most 500 voice items are supported")
+    spans = []
+    for voice in voices:
+        frame = integer(voice.get("frame"), "voice.frame")
+        duration = integer(voice.get("length"), "voice.length", 1)
+        tail = integer(frame + duration, "voice.end")
+        if frame < end and tail > start:
+            spans.append((max(frame, start), min(tail, end)))
+    merged = []
+    for left, right in sorted(spans):
+        if merged and left - merged[-1][1] <= attack_frames + release_frames:
+            merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+        else:
+            merged.append((left, right))
+    points = {}
+    low = base_volume * ratio
+    for left, right in merged:
+        attack = max(start, left - attack_frames)
+        if attack < left:
+            points[attack - start] = base_volume
+        points[left - start] = low
+        if right < end:
+            points[right - start] = low
+            restore = min(end - 1, right + release_frames)
+            if restore > right:
+                points[restore - start] = base_volume
+    if len(points) > 2000:
+        raise ValueError("ducking plan exceeds 2000 keyframes")
+    return [{"at": at, "value": value} for at, value in sorted(points.items())]
