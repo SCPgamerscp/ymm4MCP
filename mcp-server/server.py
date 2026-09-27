@@ -412,7 +412,12 @@ async def run_visual_qa(args: dict) -> dict:
     black_as_error = args.get("black_as_error", False)
     if not isinstance(black_as_error, bool):
         raise ValueError("black_as_error must be boolean")
-    if end < start or (end - start) // step + 1 > 40:
+    if end < start:
+        raise ValueError("visual_qa requires an ordered range")
+    frames = list(range(start, end + 1, step))
+    if frames[-1] != end:
+        frames.append(end)
+    if len(frames) > 40:
         raise ValueError("visual_qa requires an ordered range of at most 40 samples")
     position = await ymm4_get("/preview/position")
     if position.get("success") is False or "error" in position:
@@ -427,7 +432,7 @@ async def run_visual_qa(args: dict) -> dict:
     failure = None
     restoration = None
     try:
-        for frame in range(start, end + 1, step):
+        for frame in frames:
             data = await ymm4_post("/preview/seek", {"frame": frame}, timeout=PREVIEW_OVERHEAD_SECONDS)
             if data.get("success") is False or "error" in data:
                 failure = f"frame {frame}: プレビューを取得できません"
