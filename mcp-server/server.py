@@ -1161,6 +1161,25 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         if replay:
             return replay
     preview = editplan.diff_plan(plan, items, record, names)
+    media = {op["id"]: op["source"] for op in preview["ops"]
+             if op["op"] == "add" and op["kind"] in {"video", "audio", "image"}}
+    for logical_id, source in media.items():
+        try:
+            info = await ymm4_get(f"/media/info?path={quote(source, safe='')}")
+        except httpx.HTTPError:
+            info = None
+        preview["warnings"] = [w for w in preview["warnings"]
+                               if not (w.get("id") == logical_id and w.get("code") == "SOURCE_UNVERIFIED")]
+        if isinstance(info, dict) and info.get("success") is True and info.get("exists") is True:
+            continue
+        preview["warnings"].append({"code": "SOURCE_MISSING" if isinstance(info, dict) and
+                                    info.get("success") is True and info.get("exists") is False
+                                    else "SOURCE_CHECK_UNAVAILABLE",
+                                    "severity": "error" if isinstance(info, dict) and
+                                    info.get("success") is True and info.get("exists") is False
+                                    else "warning", "id": logical_id, "source": source,
+                                    "message": "YMM4側で素材ファイルの存在を確認できません"})
+    preview["passed"] = not any(w.get("severity") == "error" for w in preview["warnings"])
     if dry_run:
         if names is None:
             preview.setdefault("warnings", []).append({
@@ -1172,6 +1191,12 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if names is None:
         return characters if isinstance(characters, dict) else {
             "success": False, "error_code": "CHARACTERS_UNAVAILABLE", "error": "キャラ一覧を取得できません"}
+    source_problem = next((w for w in preview["warnings"]
+                           if w.get("code") in {"SOURCE_MISSING", "SOURCE_CHECK_UNAVAILABLE"}), None)
+    if source_problem:
+        return {"success": False, "error_code": source_problem["code"],
+                "error": source_problem["message"], "details": source_problem,
+                "rolled_back": False}
     unknown = next((w for w in preview["warnings"] if w.get("code") == "CHARACTER_UNKNOWN"), None)
     if unknown:
         raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {unknown.get('character')}")
