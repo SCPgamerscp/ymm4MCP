@@ -350,7 +350,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 素材検索は YMM4 が動く PC 上の絶対パスを対象にします。`recursive=True` でサブフォルダも検索します。返却は既定100件（最大500件）、走査は最大5000ファイルです。`truncated` が true の場合は検索条件を絞ってください。ハッシュ計算は1ファイル64 MiB、合計256 MiBまでで、省略された素材があれば `hashTruncated` が true になります。重複候補はハッシュを取得できた返却範囲内だけです。
 
-`get_info/project` の `isSaved` と `hasUnsavedChanges` は真偽値です。YMM4から保存状態を取得できない場合は両方とも `null` とし、未保存ではないと推測しません。
+`get_info/project` の `isSaved` と `hasUnsavedChanges` は真偽値です。YMM4から保存状態を取得できない場合は両方とも `null` とし、未保存ではないと推測しません。`fps`、`width`、`height` も現在のプロジェクトから検出して返し、取得できない値は `null` とします。旧 `GET /api/project/fps` の `fps=30` へのフォールバックを実測値として扱わないでください（`detected=false` が付きます）。
 
 編集対象は明示してください。`property` と `keyframe` は `item_id` または `frame` と `layer` の両方が必要です。`face_param` と `effect` は `frame` と `layer` の両方が必要です。`select` は `item_id`、`frame`、`layer` のいずれか、または `clear=true` が必要です。対象を省略しても先頭アイテムや全アイテムを暗黙に選ぶことはありません。
 
