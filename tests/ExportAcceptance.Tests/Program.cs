@@ -18,4 +18,13 @@ Check(!invalid.Success && !invalid.Passed && invalid.Issues[0].Code == "EXPORT_V
     "invalid MP4 should fail");
 try { ExportAcceptance.Evaluate("out.mp4", complete, double.NaN); throw new Exception("NaN accepted"); }
 catch (ArgumentException) { }
+var fpsInspection = complete with { AverageFps = 29.97 };
+Check(ExportAcceptance.Evaluate("out.mp4", fpsInspection, expectedFps: 30).Passed,
+    "fractional FPS within tolerance rejected");
+var fpsFail = ExportAcceptance.Evaluate("out.mp4", fpsInspection, expectedFps: 60);
+Check(!fpsFail.Passed && fpsFail.Issues[0].Code == "FPS_MISMATCH", "FPS mismatch not reported");
+Check(!ExportAcceptance.Evaluate("out.mp4", complete, expectedFps: 30).Passed,
+    "missing frame timing accepted as matching FPS");
+try { ExportAcceptance.Evaluate("out.mp4", fpsInspection, expectedFps: double.NaN); throw new Exception("NaN FPS accepted"); }
+catch (ArgumentException) { }
 Console.WriteLine("Export acceptance tests passed");

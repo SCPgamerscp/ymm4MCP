@@ -32,7 +32,13 @@ static byte[] Handler(string type)
     Encoding.ASCII.GetBytes(type).CopyTo(hdlr, 8);
     return Box("mdia", Box("hdlr", hdlr));
 }
-var video = Box("trak", Box("tkhd", tkhd), Handler("vide"));
+var mdhd = new byte[20];
+U32(mdhd, 12, 30000);
+var stts = new byte[16];
+U32(stts, 4, 1); U32(stts, 8, 60); U32(stts, 12, 1000);
+var timedMedia = Box("mdia", Box("hdlr", new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, (byte)'v', (byte)'i', (byte)'d', (byte)'e' }),
+    Box("mdhd", mdhd), Box("minf", Box("stbl", Box("stts", stts))));
+var video = Box("trak", Box("tkhd", tkhd), timedMedia);
 var audio = Box("trak", Handler("soun"));
 var moov = Box("moov", Box("mvhd", mvhd), video, audio);
 var mdat = Box("mdat", new byte[] { 1, 2, 3, 4 });
@@ -44,6 +50,16 @@ try
     var valid = Mp4FileInspector.Inspect(path);
     Check(valid.Verified && valid.HasAudio && valid.Brand == "isom", "valid MP4 rejected");
     Check(valid.DurationSeconds == 2 && valid.Width == 1920 && valid.Height == 1080, "metadata mismatch");
+    Check(valid.AverageFps == 30, "stts average FPS mismatch");
+
+    var badStts = (byte[])stts.Clone();
+    U32(badStts, 4, 2);
+    var badVideo = Box("trak", Box("tkhd", tkhd), Box("mdia", Box("hdlr", new byte[] {
+        0, 0, 0, 0, 0, 0, 0, 0, (byte)'v', (byte)'i', (byte)'d', (byte)'e' }),
+        Box("mdhd", mdhd), Box("minf", Box("stbl", Box("stts", badStts)))));
+    Write(ftyp, Box("moov", Box("mvhd", mvhd), badVideo), mdat);
+    var unknownFps = Mp4FileInspector.Inspect(path);
+    Check(unknownFps.Verified && unknownFps.AverageFps is null, "bad stts should leave FPS unknown");
 
     Write(ftyp, mdat);
     Check(!Mp4FileInspector.Inspect(path).Verified, "missing moov accepted");

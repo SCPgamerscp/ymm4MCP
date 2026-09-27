@@ -186,6 +186,8 @@ TOOLS = [
                 "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa: 尺の許容誤差。既定1秒"},
                 "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
                 "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
+                "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa: 期待する平均FPS"},
+                "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa: 平均FPSの許容誤差。既定0.1"},
                 "require_audio": {"type": "boolean", "description": "get_info/export_qa: 音声トラックを必須とする"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
@@ -532,7 +534,9 @@ async def dispatch(args: dict) -> Any:
                         raise ValueError("export_qa path must be an absolute .mp4 file path")
                     q = [f"path={quote(path.strip(), safe='')}"]
                     for key, lower, upper, strict in (("expected_duration_seconds", 0, None, True),
-                                                      ("duration_tolerance_seconds", 0, 60, False)):
+                                                      ("duration_tolerance_seconds", 0, 60, False),
+                                                      ("expected_fps", 0, 240, True),
+                                                      ("fps_tolerance", 0, 10, False)):
                         if key in args:
                             value = finite_number(args[key], key)
                             if (value <= lower if strict else value < lower) or (upper is not None and value > upper):
