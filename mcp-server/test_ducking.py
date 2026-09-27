@@ -26,6 +26,15 @@ class DuckingPlanTests(unittest.TestCase):
         planned = ducking.plan(bgm, voice, 80, attack_frames=5, release_frames=10)
         self.assertEqual(planned, [{"at": 0, "value": 24.0}])
 
+    def test_short_tail_stays_ducked_through_bgm_end(self):
+        bgm = {"frame": 0, "length": 100}
+        voices = [{"frame": 85, "length": 10}]
+        self.assertEqual(ducking.plan(bgm, voices, 100, release_frames=10),
+                         [{"at": 80, "value": 100.0}, {"at": 85, "value": 30.0},
+                          {"at": 95, "value": 30.0}])
+        self.assertEqual(ducking.plan(bgm, [{"frame": 75, "length": 10}], 100,
+                                      release_frames=10)[-1], {"at": 95, "value": 100.0})
+
     def test_rejects_invalid_ratios_and_items(self):
         for ratio in (0, 1, True, float("nan")):
             with self.subTest(ratio=ratio), self.assertRaises(ValueError):
