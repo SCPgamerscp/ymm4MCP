@@ -324,6 +324,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `apply_edit` | —— | 差分だけ適用。シーン失敗時はそのシーンの追加分をrollback。同じ `idempotency_key` は二重追加しない |
 | `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
 | `qa_gate` | —— | 現在のタイムラインQAと過去の検品結果から合格・修正継続・停止を判定（編集なし） |
+| `visual_qa` | —— | 指定区間のプレビューを最大40枚サンプリングし、黒画面・静止候補を報告 |
 | `add_item` | `voice` | セリフ1件追加（実音声長を返す） |
 | `add_script` | —— | 複数セリフ一括追加（**実音声長で重なり自動回避**） |
 | `edit_item` | `property` | `item_id`（推奨）またはframe+layerで変更。`expected_revision`対応 |
@@ -385,6 +386,8 @@ expected=[
 **修正ループの停止判定：** `action="qa_gate"` は同じ検査条件で現在の `validate` を実行し、`qa_history`（過去の `validate` 結果を古い順に並べた配列）と比較します。`decision` は `pass` / `repair` / `stop`、`reason_code` は `QA_PASSED` / `QA_ISSUES_REMAIN` / `QA_REGRESSED` / `QA_STALLED` / `REPAIR_LIMIT_REACHED` / `TIME_LIMIT_REACHED` / `API_LIMIT_REACHED` です。結果の `qa` を次回の `qa_history` に追加してください。既定では修正3回が上限で、同じ問題群が2回連続した場合も停止します。経過時間とAPI回数は呼び出し側が `elapsed_seconds` / `api_calls` を数え、必要に応じて `max_seconds` / `max_api_calls` を指定します。品質悪化時の `suggested_action: consider_checkpoint_rollback` は提案のみで、ロールバックは自動実行されません。映像・音声の品質判定は行いません。
 
 各 `validate` 結果の `criteria_hash` は期待アイテム・尺・空白・字幕レイヤーの検査条件を表します。`qa_gate` は現在と履歴の条件が異なる場合、品質の変化を誤判定しないよう入力エラーを返します。
+
+`visual_qa` は `start_frame`（既定0）から必須の `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
 
 ---
 
