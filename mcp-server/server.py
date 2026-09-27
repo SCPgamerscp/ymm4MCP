@@ -195,6 +195,8 @@ TOOLS = [
                 "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
                 "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
                 "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa: 期待する平均FPS"},
+                "expected_audio_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 384000, "description": "get_info/export_qa: 期待する音声サンプルレート (Hz)"},
+                "expected_audio_channels": {"type": "integer", "minimum": 1, "maximum": 8, "description": "get_info/export_qa: 期待する音声チャンネル数"},
                 "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa: 平均FPSの許容誤差。既定0.1"},
                 "require_audio": {"type": "boolean", "description": "get_info/export_qa: 音声トラックを必須とする"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
@@ -706,9 +708,12 @@ async def dispatch(args: dict) -> Any:
                             if (value <= lower if strict else value < lower) or (upper is not None and value > upper):
                                 raise ValueError(f"{key} is out of range")
                             q.append(f"{key}={value:g}")
-                    for key in ("expected_width", "expected_height"):
+                    for key, lower, upper in (("expected_width", 1, 16384),
+                                              ("expected_height", 1, 16384),
+                                              ("expected_audio_sample_rate", 8000, 384000),
+                                              ("expected_audio_channels", 1, 8)):
                         if key in args:
-                            integer(args[key], key, 1, 16384)
+                            integer(args[key], key, lower, upper)
                             q.append(f"{key}={args[key]}")
                     if "require_audio" in args:
                         if not isinstance(args["require_audio"], bool):

@@ -11,8 +11,9 @@ class ExportQaDispatchTests(unittest.IsolatedAsyncioTestCase):
             await server.dispatch({"action": "get_info", "sub_action": "export_qa", "path": "C:/完成/clip.mp4",
                                    "expected_duration_seconds": 120, "duration_tolerance_seconds": 0.5,
                                    "expected_width": 1920, "expected_height": 1080, "require_audio": True,
-                                   "expected_fps": 30, "fps_tolerance": 0.05})
-            get.assert_awaited_once_with("/media/export-qa?path=C%3A%2F%E5%AE%8C%E6%88%90%2Fclip.mp4&expected_duration_seconds=120&duration_tolerance_seconds=0.5&expected_fps=30&fps_tolerance=0.05&expected_width=1920&expected_height=1080&require_audio=true")
+                                   "expected_fps": 30, "fps_tolerance": 0.05,
+                                   "expected_audio_sample_rate": 48000, "expected_audio_channels": 2})
+            get.assert_awaited_once_with("/media/export-qa?path=C%3A%2F%E5%AE%8C%E6%88%90%2Fclip.mp4&expected_duration_seconds=120&duration_tolerance_seconds=0.5&expected_fps=30&fps_tolerance=0.05&expected_width=1920&expected_height=1080&expected_audio_sample_rate=48000&expected_audio_channels=2&require_audio=true")
 
     async def test_invalid_criteria_never_reach_ymm4(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
@@ -20,6 +21,8 @@ class ExportQaDispatchTests(unittest.IsolatedAsyncioTestCase):
                            {"path": "C:/clip.mp4", "expected_duration_seconds": 0},
                            {"path": "C:/clip.mp4", "expected_width": True},
                            {"path": "C:/clip.mp4", "expected_fps": float("nan")},
+                           {"path": "C:/clip.mp4", "expected_audio_sample_rate": 44100.5},
+                           {"path": "C:/clip.mp4", "expected_audio_channels": 0},
                            {"path": "C:/clip.mp4", "fps_tolerance": -1},
                            {"path": "C:/clip.mp4", "require_audio": "true"}):
                 with self.subTest(option=option), self.assertRaises(ValueError):

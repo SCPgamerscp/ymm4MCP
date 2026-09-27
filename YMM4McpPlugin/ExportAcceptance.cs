@@ -7,14 +7,16 @@ namespace YMM4McpPlugin
         object? Expected = null, object? Actual = null);
     internal sealed record ExportQaReport(bool Success, bool Passed, string OutputPath,
         string? Brand, double? DurationSeconds, int? Width, int? Height, bool HasAudio,
-        ExportQaIssue[] Issues, double? AverageFps = null);
+        ExportQaIssue[] Issues, double? AverageFps = null,
+        int? AudioSampleRate = null, int? AudioChannels = null);
 
     internal static class ExportAcceptance
     {
         public static ExportQaReport Evaluate(string path, Mp4Inspection inspection,
             double? expectedDuration = null, double tolerance = 1,
             int? expectedWidth = null, int? expectedHeight = null, bool requireAudio = false,
-            double? expectedFps = null, double fpsTolerance = 0.1)
+            double? expectedFps = null, double fpsTolerance = 0.1,
+            int? expectedAudioSampleRate = null, int? expectedAudioChannels = null)
         {
             if (expectedDuration is double duration && (!double.IsFinite(duration) || duration <= 0))
                 throw new ArgumentException("expected_duration_seconds must be positive and finite");
@@ -26,6 +28,10 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("expected_fps must be in (0, 240]");
             if (!double.IsFinite(fpsTolerance) || fpsTolerance < 0 || fpsTolerance > 10)
                 throw new ArgumentException("fps_tolerance must be in 0..10");
+            if (expectedAudioSampleRate.HasValue && expectedAudioSampleRate is < 8000 or > 384000)
+                throw new ArgumentException("expected_audio_sample_rate must be in 8000..384000");
+            if (expectedAudioChannels.HasValue && expectedAudioChannels is < 1 or > 8)
+                throw new ArgumentException("expected_audio_channels must be in 1..8");
             var issues = new List<ExportQaIssue>();
             if (!inspection.Verified)
                 issues.Add(new("EXPORT_VERIFY_FAILED", "error", inspection.Error));
@@ -46,10 +52,16 @@ namespace YMM4McpPlugin
                     Math.Abs(inspection.AverageFps.Value - expectedFps.Value) > fpsTolerance))
                     issues.Add(new("FPS_MISMATCH", "error", "平均FPSが期待値と異なるか、フレーム時刻を取得できません",
                         expectedFps, inspection.AverageFps));
+                if (expectedAudioSampleRate.HasValue && inspection.AudioSampleRate != expectedAudioSampleRate)
+                    issues.Add(new("AUDIO_SAMPLE_RATE_MISMATCH", "error", "音声サンプルレートが異なるか取得できません",
+                        expectedAudioSampleRate, inspection.AudioSampleRate));
+                if (expectedAudioChannels.HasValue && inspection.AudioChannels != expectedAudioChannels)
+                    issues.Add(new("AUDIO_CHANNELS_MISMATCH", "error", "音声チャンネル数が異なるか取得できません",
+                        expectedAudioChannels, inspection.AudioChannels));
             }
             return new(inspection.Verified, issues.Count == 0, path, inspection.Brand,
                 inspection.DurationSeconds, inspection.Width, inspection.Height, inspection.HasAudio, issues.ToArray(),
-                inspection.AverageFps);
+                inspection.AverageFps, inspection.AudioSampleRate, inspection.AudioChannels);
         }
     }
 }

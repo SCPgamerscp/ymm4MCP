@@ -5,7 +5,8 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
-var complete = new Mp4Inspection(true, "", "isom", 120.2, 1920, 1080, true);
+var complete = new Mp4Inspection(true, "", "isom", 120.2, 1920, 1080, true,
+    AudioSampleRate: 48000, AudioChannels: 2);
 var pass = ExportAcceptance.Evaluate("out.mp4", complete, 120, 0.5, 1920, 1080, true);
 Check(pass.Success && pass.Passed && pass.Issues.Length == 0, "valid export failed");
 
@@ -25,6 +26,16 @@ var fpsFail = ExportAcceptance.Evaluate("out.mp4", fpsInspection, expectedFps: 6
 Check(!fpsFail.Passed && fpsFail.Issues[0].Code == "FPS_MISMATCH", "FPS mismatch not reported");
 Check(!ExportAcceptance.Evaluate("out.mp4", complete, expectedFps: 30).Passed,
     "missing frame timing accepted as matching FPS");
+Check(ExportAcceptance.Evaluate("out.mp4", complete, expectedAudioSampleRate: 48000,
+    expectedAudioChannels: 2).Passed, "matching audio format rejected");
+var badAudio = ExportAcceptance.Evaluate("out.mp4", complete, expectedAudioSampleRate: 44100,
+    expectedAudioChannels: 1);
+Check(badAudio.Issues.Any(i => i.Code == "AUDIO_SAMPLE_RATE_MISMATCH") &&
+      badAudio.Issues.Any(i => i.Code == "AUDIO_CHANNELS_MISMATCH"), "audio mismatches missing");
+Check(!ExportAcceptance.Evaluate("out.mp4", complete with { AudioSampleRate = null },
+    expectedAudioSampleRate: 48000).Passed, "unknown audio rate accepted");
+try { ExportAcceptance.Evaluate("out.mp4", complete, expectedAudioChannels: 9); throw new Exception("invalid channels accepted"); }
+catch (ArgumentException) { }
 try { ExportAcceptance.Evaluate("out.mp4", fpsInspection, expectedFps: double.NaN); throw new Exception("NaN FPS accepted"); }
 catch (ArgumentException) { }
 Console.WriteLine("Export acceptance tests passed");

@@ -39,7 +39,14 @@ U32(stts, 4, 1); U32(stts, 8, 60); U32(stts, 12, 1000);
 var timedMedia = Box("mdia", Box("hdlr", new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, (byte)'v', (byte)'i', (byte)'d', (byte)'e' }),
     Box("mdhd", mdhd), Box("minf", Box("stbl", Box("stts", stts))));
 var video = Box("trak", Box("tkhd", tkhd), timedMedia);
-var audio = Box("trak", Handler("soun"));
+var sample = new byte[28];
+BinaryPrimitives.WriteUInt16BigEndian(sample.AsSpan(16, 2), 2);
+U32(sample, 24, 48000u << 16);
+var stsd = new byte[8];
+U32(stsd, 4, 1);
+var audio = Box("trak", Box("mdia", Box("hdlr", new byte[] {
+    0, 0, 0, 0, 0, 0, 0, 0, (byte)'s', (byte)'o', (byte)'u', (byte)'n' }),
+    Box("minf", Box("stbl", Box("stsd", stsd, Box("mp4a", sample))))));
 var moov = Box("moov", Box("mvhd", mvhd), video, audio);
 var mdat = Box("mdat", new byte[] { 1, 2, 3, 4 });
 var path = Path.GetTempFileName();
@@ -51,6 +58,12 @@ try
     Check(valid.Verified && valid.HasAudio && valid.Brand == "isom", "valid MP4 rejected");
     Check(valid.DurationSeconds == 2 && valid.Width == 1920 && valid.Height == 1080, "metadata mismatch");
     Check(valid.AverageFps == 30, "stts average FPS mismatch");
+    Check(valid.AudioSampleRate == 48000 && valid.AudioChannels == 2, "mp4a audio metadata mismatch");
+
+    Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd), video, Box("trak", Handler("soun"))));
+    var unknownAudio = Mp4FileInspector.Inspect(path);
+    Check(unknownAudio.Verified && unknownAudio.HasAudio && unknownAudio.AudioSampleRate is null,
+        "missing sample description should not invent audio metadata");
 
     var badStts = (byte[])stts.Clone();
     U32(badStts, 4, 2);
