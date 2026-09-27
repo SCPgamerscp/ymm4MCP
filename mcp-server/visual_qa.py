@@ -29,26 +29,28 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     black_start = None
     static_start = None
     previous = None
+    previous_frame = None
     for frame, pixels in samples:
         black = sum(p < 12 for p in pixels) >= len(pixels) * .99 and sum(pixels) / len(pixels) < 5
         if black and black_start is None:
             black_start = frame
         if not black and black_start is not None:
             issues.append({"code": "BLACK_FRAME", "severity": "error" if black_as_error else "warning",
-                           "start_frame": black_start, "end_frame": frame - step_frames,
+                           "start_frame": black_start, "end_frame": previous_frame,
                            "message": "サンプリングしたプレビューがほぼ黒です（意図的な暗転の可能性あり）"})
             black_start = None
         if previous is not None:
             unchanged = sum(abs(a - b) for a, b in zip(previous, pixels)) / len(pixels) < 1
             if unchanged and static_start is None:
-                static_start = frame - step_frames
+                static_start = previous_frame
             if not unchanged and static_start is not None:
-                if frame - step_frames - static_start >= min_static_frames:
+                if previous_frame - static_start >= min_static_frames:
                     issues.append({"code": "STATIC_PREVIEW", "severity": "warning",
-                                   "start_frame": static_start, "end_frame": frame - step_frames,
+                                   "start_frame": static_start, "end_frame": previous_frame,
                                    "message": "プレビューの変化がほとんどありません（静止画の可能性あり）"})
                 static_start = None
         previous = pixels
+        previous_frame = frame
     if samples:
         last = samples[-1][0]
         if black_start is not None:

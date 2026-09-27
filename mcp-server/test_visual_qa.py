@@ -44,9 +44,36 @@ class VisualQaTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_too_many_samples_before_seek(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
-            with self.assertRaises(ValueError):
-                await server.dispatch({"action": "visual_qa", "end_frame": 1200})
+            for end in (1200, 2_147_483_647):
+                with self.assertRaises(ValueError):
+                    await server.dispatch({"action": "visual_qa", "end_frame": end})
         get.assert_not_awaited()
+
+    async def test_always_samples_requested_final_frame(self):
+        requests = []
+        async def seek(_path, body, **_kwargs):
+            frame = body["frame"]
+            requests.append(frame)
+            return {"success": True, "image": png("black" if frame == 65 else "white")}
+
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True, "currentFrame": 10,
+                                                                        "totalFrames": 100})), \
+             patch.object(server, "ymm4_post", AsyncMock(side_effect=seek)):
+            result = await server.dispatch({"action": "visual_qa", "end_frame": 65,
+                                            "black_as_error": True})
+        self.assertEqual(requests, [0, 30, 60, 65, 10])
+        black_issue = next(issue for issue in result["issues"] if issue["code"] == "BLACK_FRAME")
+        self.assertEqual(black_issue["start_frame"], 65)
+        self.assertEqual(black_issue["end_frame"], 65)
+        self.assertFalse(result["passed"])
+
+    def test_irregular_last_sample_has_exact_observed_end(self):
+        black = visual_qa.thumbnail(png("black"))
+        white = visual_qa.thumbnail(png("white"))
+        result = visual_qa.inspect([(0, black), (30, black), (60, black), (65, white)],
+                                   step_frames=30, min_static_frames=60)
+        self.assertEqual(result["issues"][0]["end_frame"], 60)
+        self.assertEqual(result["issues"][1]["end_frame"], 60)
 
     def test_invalid_image(self):
         with self.assertRaises(ValueError):
