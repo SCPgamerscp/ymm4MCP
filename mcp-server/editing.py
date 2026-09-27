@@ -250,7 +250,10 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
     def signature(report):
         # Compare problem sets as a whole: one persistent issue does not block
         # progress if other issues were fixed in the same repair attempt.
-        return sorted((issue["code"], str(issue.get("source", "")), str(issue.get("item_ids", [])),
+        # Item ordering in a fresh timeline snapshot is not a change to the
+        # affected set. Keep severity so escalation is still visible.
+        return sorted((issue["code"], str(issue.get("severity", "")), str(issue.get("source", "")),
+                       str(sorted(issue.get("item_ids") or [])),
                        str(issue.get("frame_range", [])), str(issue.get("layer", "")),
                        str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")))
                       for issue in report["issues"])

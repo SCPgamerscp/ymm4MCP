@@ -59,6 +59,16 @@ class CompositeQaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(editing.evaluate_qa_gate(report(10), [report(0)])["reason_code"],
                          "QA_ISSUES_REMAIN")
 
+    def test_qa_stall_ignores_order_of_affected_item_ids(self):
+        structural = editing.validate_timeline([])
+        def report(item_ids):
+            return editing.combine_qa_reports(structural, {"visual": {
+                "success": True, "passed": False, "issues": [
+                    {"code": "OVERLAP", "severity": "error", "item_ids": item_ids}]}},
+                {"visual": {"end_frame": 30}})
+        decision = editing.evaluate_qa_gate(report(["b", "a"]), [report(["a", "b"])])
+        self.assertEqual(decision["reason_code"], "QA_STALLED")
+
 
 if __name__ == "__main__":
     unittest.main()
