@@ -7,7 +7,7 @@ namespace YMM4McpPlugin
 {
     internal sealed record Mp4Inspection(bool Verified, string Error, string? Brand = null,
         double? DurationSeconds = null, int? Width = null, int? Height = null, bool HasAudio = false,
-        double? AverageFps = null);
+        double? AverageFps = null, int? AudioSampleRate = null, int? AudioChannels = null);
 
     internal static class Mp4FileInspector
     {
@@ -23,6 +23,7 @@ namespace YMM4McpPlugin
                 double? duration = null;
                 int? width = null, height = null;
                 double? fps = null;
+                int? audioRate = null, audioChannels = null;
                 int boxes = 0;
                 while (file.Position < file.Length)
                 {
@@ -38,13 +39,14 @@ namespace YMM4McpPlugin
                     else if (box.Type == "moov")
                     {
                         moov = true;
-                        ReadMovie(file, box.End, ref duration, ref video, ref audio, ref width, ref height, ref fps);
+                        ReadMovie(file, box.End, ref duration, ref video, ref audio, ref width, ref height,
+                            ref fps, ref audioRate, ref audioChannels);
                     }
                     file.Position = box.End;
                 }
                 if (brand == null || !moov || !mdat || !video || duration is not > 0 || width is not > 0 || height is not > 0)
                     return new(false, "MP4 の映像トラック・尺・解像度・moov/mdat を確認できません");
-                return new(true, "", brand, duration, width, height, audio, fps);
+                return new(true, "", brand, duration, width, height, audio, fps, audioRate, audioChannels);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or OverflowException or ArgumentException)
             {
@@ -53,7 +55,8 @@ namespace YMM4McpPlugin
         }
 
         private static void ReadMovie(Stream file, long end, ref double? duration, ref bool video,
-            ref bool audio, ref int? width, ref int? height, ref double? fps)
+            ref bool audio, ref int? width, ref int? height, ref double? fps,
+            ref int? audioRate, ref int? audioChannels)
         {
             while (file.Position < end)
             {
@@ -65,13 +68,14 @@ namespace YMM4McpPlugin
                     ulong ticks = header[0] == 1 ? U64(header, 24) : U32(header, 16);
                     if (timescale > 0 && ticks > 0) duration = (double)ticks / timescale;
                 }
-                else if (box.Type == "trak") ReadTrack(file, box.End, ref video, ref audio, ref width, ref height, ref fps);
+                else if (box.Type == "trak") ReadTrack(file, box.End, ref video, ref audio, ref width, ref height,
+                    ref fps, ref audioRate, ref audioChannels);
                 file.Position = box.End;
             }
         }
 
         private static void ReadTrack(Stream file, long end, ref bool video, ref bool audio,
-            ref int? width, ref int? height, ref double? fps)
+            ref int? width, ref int? height, ref double? fps, ref int? audioRate, ref int? audioChannels)
         {
             string? handler = null;
             int trackWidth = 0, trackHeight = 0;
@@ -135,7 +139,63 @@ namespace YMM4McpPlugin
                 if (timescale > 0 && samples > 0 && ticks > 0)
                     fps = (double)samples * timescale / ticks;
             }
-            if (handler == "soun") audio = true;
+            if (handler == "soun")
+            {
+                audio = true;
+                if (sampleTableStart >= 0)
+                {
+                    try
+                    {
+                        file.Position = sampleTableStart;
+                        ReadAudioDescription(file, sampleTableEnd, ref audioRate, ref audioChannels);
+                    }
+                    catch (Exception ex) when (ex is InvalidDataException or OverflowException or EndOfStreamException)
+                    {
+                        // Keep the track visible; an unknown format cannot satisfy an audio-format expectation.
+                        audioRate = audioChannels = null;
+                    }
+                    finally { file.Position = end; }
+                }
+            }
+        }
+
+        private static void ReadAudioDescription(Stream file, long end, ref int? rate, ref int? channels)
+        {
+            while (file.Position < end)
+            {
+                var box = ReadBox(file, end);
+                if (box.Type == "stbl")
+                    while (file.Position < box.End)
+                    {
+                        var child = ReadBox(file, box.End);
+                        if (child.Type == "stsd")
+                        {
+                            var header = Read(file, 8, child.PayloadLength);
+                            uint count = U32(header, 4);
+                            if (header[0] != 0 || count is < 1 or > 128)
+                                throw new InvalidDataException("Invalid audio sample description");
+                            for (uint i = 0; i < count && file.Position < child.End; i++)
+                            {
+                                var entry = ReadBox(file, child.End);
+                                if (entry.Type == "mp4a" && entry.PayloadLength >= 28)
+                                {
+                                    var sample = Read(file, 28, entry.PayloadLength);
+                                    int foundChannels = BinaryPrimitives.ReadUInt16BigEndian(sample.AsSpan(16, 2));
+                                    int foundRate = (int)(U32(sample, 24) >> 16);
+                                    if (foundChannels is >= 1 and <= 8 && foundRate is >= 8000 and <= 384000)
+                                    {
+                                        channels = foundChannels;
+                                        rate = foundRate;
+                                        return;
+                                    }
+                                }
+                                file.Position = entry.End;
+                            }
+                        }
+                        file.Position = child.End;
+                    }
+                file.Position = box.End;
+            }
         }
 
         private static void ReadSampleTable(Stream file, long end, ref ulong samples, ref ulong ticks)

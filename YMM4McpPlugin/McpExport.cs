@@ -314,7 +314,7 @@ namespace YMM4McpPlugin
             double tolerance = 1;
             double? expectedFps = null;
             double fpsTolerance = 0.1;
-            int? width = null, height = null;
+            int? width = null, height = null, audioRate = null, audioChannels = null;
             bool requireAudio = false;
             var culture = System.Globalization.CultureInfo.InvariantCulture;
             if (req.QueryString["expected_duration_seconds"] is string durationText)
@@ -336,6 +336,16 @@ namespace YMM4McpPlugin
                 if (!int.TryParse(heightText, out int value)) throw new ArgumentException("expected_height must be an integer");
                 height = value;
             }
+            if (req.QueryString["expected_audio_sample_rate"] is string audioRateText)
+            {
+                if (!int.TryParse(audioRateText, out int value)) throw new ArgumentException("expected_audio_sample_rate must be an integer");
+                audioRate = value;
+            }
+            if (req.QueryString["expected_audio_channels"] is string channelsText)
+            {
+                if (!int.TryParse(channelsText, out int value)) throw new ArgumentException("expected_audio_channels must be an integer");
+                audioChannels = value;
+            }
             if (req.QueryString["require_audio"] is string audioText && !bool.TryParse(audioText, out requireAudio))
                 throw new ArgumentException("require_audio must be boolean");
             if (req.QueryString["expected_fps"] is string fpsText)
@@ -349,9 +359,9 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("fps_tolerance must be a number");
             // Validate expectations before accessing the file.
             ExportAcceptance.Evaluate(path, new Mp4Inspection(false, ""), expectedDuration,
-                tolerance, width, height, requireAudio, expectedFps, fpsTolerance);
+                tolerance, width, height, requireAudio, expectedFps, fpsTolerance, audioRate, audioChannels);
             return ExportAcceptance.Evaluate(path, Mp4FileInspector.Inspect(path), expectedDuration,
-                tolerance, width, height, requireAudio, expectedFps, fpsTolerance);
+                tolerance, width, height, requireAudio, expectedFps, fpsTolerance, audioRate, audioChannels);
         }
 
         private static object GetMediaFileInfo(HttpListenerRequest req)
@@ -600,6 +610,8 @@ namespace YMM4McpPlugin
                 return (true, "", "", new { output_path = path, bytes = info.Length, format = "mp4",
                     has_video = true, has_audio = inspected.HasAudio, brand = inspected.Brand,
                     duration_seconds = inspected.DurationSeconds, width = inspected.Width, height = inspected.Height,
+                    average_fps = inspected.AverageFps, audio_sample_rate = inspected.AudioSampleRate,
+                    audio_channels = inspected.AudioChannels,
                     verified = true });
             }
             if (format.Equals("wav", StringComparison.OrdinalIgnoreCase))
