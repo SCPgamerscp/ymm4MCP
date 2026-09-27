@@ -6,7 +6,8 @@ using System.Text;
 namespace YMM4McpPlugin
 {
     internal sealed record Mp4Inspection(bool Verified, string Error, string? Brand = null,
-        double? DurationSeconds = null, int? Width = null, int? Height = null, bool HasAudio = false);
+        double? DurationSeconds = null, int? Width = null, int? Height = null, bool HasAudio = false,
+        double? AverageFps = null);
 
     internal static class Mp4FileInspector
     {
@@ -21,6 +22,7 @@ namespace YMM4McpPlugin
                 bool moov = false, mdat = false, video = false, audio = false;
                 double? duration = null;
                 int? width = null, height = null;
+                double? fps = null;
                 int boxes = 0;
                 while (file.Position < file.Length)
                 {
@@ -36,13 +38,13 @@ namespace YMM4McpPlugin
                     else if (box.Type == "moov")
                     {
                         moov = true;
-                        ReadMovie(file, box.End, ref duration, ref video, ref audio, ref width, ref height);
+                        ReadMovie(file, box.End, ref duration, ref video, ref audio, ref width, ref height, ref fps);
                     }
                     file.Position = box.End;
                 }
                 if (brand == null || !moov || !mdat || !video || duration is not > 0 || width is not > 0 || height is not > 0)
                     return new(false, "MP4 の映像トラック・尺・解像度・moov/mdat を確認できません");
-                return new(true, "", brand, duration, width, height, audio);
+                return new(true, "", brand, duration, width, height, audio, fps);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or OverflowException or ArgumentException)
             {
@@ -51,7 +53,7 @@ namespace YMM4McpPlugin
         }
 
         private static void ReadMovie(Stream file, long end, ref double? duration, ref bool video,
-            ref bool audio, ref int? width, ref int? height)
+            ref bool audio, ref int? width, ref int? height, ref double? fps)
         {
             while (file.Position < end)
             {
@@ -63,16 +65,18 @@ namespace YMM4McpPlugin
                     ulong ticks = header[0] == 1 ? U64(header, 24) : U32(header, 16);
                     if (timescale > 0 && ticks > 0) duration = (double)ticks / timescale;
                 }
-                else if (box.Type == "trak") ReadTrack(file, box.End, ref video, ref audio, ref width, ref height);
+                else if (box.Type == "trak") ReadTrack(file, box.End, ref video, ref audio, ref width, ref height, ref fps);
                 file.Position = box.End;
             }
         }
 
         private static void ReadTrack(Stream file, long end, ref bool video, ref bool audio,
-            ref int? width, ref int? height)
+            ref int? width, ref int? height, ref double? fps)
         {
             string? handler = null;
             int trackWidth = 0, trackHeight = 0;
+            uint timescale = 0;
+            ulong samples = 0, ticks = 0;
             while (file.Position < end)
             {
                 var box = ReadBox(file, end);
@@ -93,6 +97,13 @@ namespace YMM4McpPlugin
                             var header = Read(file, 12, child.PayloadLength);
                             handler = Encoding.ASCII.GetString(header, 8, 4);
                         }
+                        else if (child.Type == "mdhd")
+                        {
+                            var header = Read(file, PeekVersion(file) == 1 ? 32 : 20, child.PayloadLength);
+                            timescale = U32(header, header[0] == 1 ? 20 : 12);
+                        }
+                        else if (child.Type == "minf")
+                            ReadSampleTable(file, child.End, ref samples, ref ticks);
                         file.Position = child.End;
                     }
                 }
@@ -102,8 +113,42 @@ namespace YMM4McpPlugin
             {
                 video = true;
                 if (trackWidth > 0 && trackHeight > 0) { width = trackWidth; height = trackHeight; }
+                if (timescale > 0 && samples > 0 && ticks > 0)
+                    fps = (double)samples * timescale / ticks;
             }
             if (handler == "soun") audio = true;
+        }
+
+        private static void ReadSampleTable(Stream file, long end, ref ulong samples, ref ulong ticks)
+        {
+            while (file.Position < end)
+            {
+                var box = ReadBox(file, end);
+                if (box.Type == "stbl")
+                {
+                    while (file.Position < box.End)
+                    {
+                        var child = ReadBox(file, box.End);
+                        if (child.Type == "stts")
+                        {
+                            var header = Read(file, 8, child.PayloadLength);
+                            if (header[0] != 0) throw new InvalidDataException("Unsupported stts version");
+                            uint count = U32(header, 4);
+                            if (count > 1_000_000 || (ulong)count * 8 > (ulong)(child.End - file.Position))
+                                throw new InvalidDataException("Invalid stts entries");
+                            for (uint i = 0; i < count; i++)
+                            {
+                                var entry = Read(file, 8);
+                                ulong frames = U32(entry, 0);
+                                samples = checked(samples + frames);
+                                ticks = checked(ticks + frames * U32(entry, 4));
+                            }
+                        }
+                        file.Position = child.End;
+                    }
+                }
+                file.Position = box.End;
+            }
         }
 
         private static Box ReadBox(Stream file, long parentEnd)

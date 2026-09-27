@@ -7,13 +7,14 @@ namespace YMM4McpPlugin
         object? Expected = null, object? Actual = null);
     internal sealed record ExportQaReport(bool Success, bool Passed, string OutputPath,
         string? Brand, double? DurationSeconds, int? Width, int? Height, bool HasAudio,
-        ExportQaIssue[] Issues);
+        ExportQaIssue[] Issues, double? AverageFps = null);
 
     internal static class ExportAcceptance
     {
         public static ExportQaReport Evaluate(string path, Mp4Inspection inspection,
             double? expectedDuration = null, double tolerance = 1,
-            int? expectedWidth = null, int? expectedHeight = null, bool requireAudio = false)
+            int? expectedWidth = null, int? expectedHeight = null, bool requireAudio = false,
+            double? expectedFps = null, double fpsTolerance = 0.1)
         {
             if (expectedDuration is double duration && (!double.IsFinite(duration) || duration <= 0))
                 throw new ArgumentException("expected_duration_seconds must be positive and finite");
@@ -21,6 +22,10 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("duration_tolerance_seconds must be in 0..60");
             if (expectedWidth is < 1 or > 16384 || expectedHeight is < 1 or > 16384)
                 throw new ArgumentException("expected_width/height must be in 1..16384");
+            if (expectedFps.HasValue && (!double.IsFinite(expectedFps.Value) || expectedFps.Value <= 0 || expectedFps.Value > 240))
+                throw new ArgumentException("expected_fps must be in (0, 240]");
+            if (!double.IsFinite(fpsTolerance) || fpsTolerance < 0 || fpsTolerance > 10)
+                throw new ArgumentException("fps_tolerance must be in 0..10");
             var issues = new List<ExportQaIssue>();
             if (!inspection.Verified)
                 issues.Add(new("EXPORT_VERIFY_FAILED", "error", inspection.Error));
@@ -37,9 +42,14 @@ namespace YMM4McpPlugin
                         expectedHeight, inspection.Height));
                 if (requireAudio && !inspection.HasAudio)
                     issues.Add(new("AUDIO_STREAM_MISSING", "error", "音声トラックがありません", true, false));
+                if (expectedFps.HasValue && (inspection.AverageFps is null ||
+                    Math.Abs(inspection.AverageFps.Value - expectedFps.Value) > fpsTolerance))
+                    issues.Add(new("FPS_MISMATCH", "error", "平均FPSが期待値と異なるか、フレーム時刻を取得できません",
+                        expectedFps, inspection.AverageFps));
             }
             return new(inspection.Verified, issues.Count == 0, path, inspection.Brand,
-                inspection.DurationSeconds, inspection.Width, inspection.Height, inspection.HasAudio, issues.ToArray());
+                inspection.DurationSeconds, inspection.Width, inspection.Height, inspection.HasAudio, issues.ToArray(),
+                inspection.AverageFps);
         }
     }
 }

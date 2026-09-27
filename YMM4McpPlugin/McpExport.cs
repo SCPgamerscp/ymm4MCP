@@ -312,6 +312,8 @@ namespace YMM4McpPlugin
             path = Path.GetFullPath(path);
             double? expectedDuration = null;
             double tolerance = 1;
+            double? expectedFps = null;
+            double fpsTolerance = 0.1;
             int? width = null, height = null;
             bool requireAudio = false;
             var culture = System.Globalization.CultureInfo.InvariantCulture;
@@ -336,11 +338,20 @@ namespace YMM4McpPlugin
             }
             if (req.QueryString["require_audio"] is string audioText && !bool.TryParse(audioText, out requireAudio))
                 throw new ArgumentException("require_audio must be boolean");
+            if (req.QueryString["expected_fps"] is string fpsText)
+            {
+                if (!double.TryParse(fpsText, System.Globalization.NumberStyles.Float, culture, out double value))
+                    throw new ArgumentException("expected_fps must be a number");
+                expectedFps = value;
+            }
+            if (req.QueryString["fps_tolerance"] is string fpsToleranceText &&
+                !double.TryParse(fpsToleranceText, System.Globalization.NumberStyles.Float, culture, out fpsTolerance))
+                throw new ArgumentException("fps_tolerance must be a number");
             // Validate expectations before accessing the file.
             ExportAcceptance.Evaluate(path, new Mp4Inspection(false, ""), expectedDuration,
-                tolerance, width, height, requireAudio);
+                tolerance, width, height, requireAudio, expectedFps, fpsTolerance);
             return ExportAcceptance.Evaluate(path, Mp4FileInspector.Inspect(path), expectedDuration,
-                tolerance, width, height, requireAudio);
+                tolerance, width, height, requireAudio, expectedFps, fpsTolerance);
         }
 
         private static object GetMediaFileInfo(HttpListenerRequest req)
