@@ -46,10 +46,15 @@ namespace YMM4McpPlugin
                         var fmt = Read(file, (int)Math.Min(size, 40));
                         format = U16(fmt, 0); channels = U16(fmt, 2); rate = checked((int)U32(fmt, 4));
                         align = U16(fmt, 12); bits = U16(fmt, 14);
-                        // WASAPI commonly writes IEEE float in WAVE_FORMAT_EXTENSIBLE.
-                        if (format == 0xfffe && size >= 40 && U16(fmt, 16) >= 22 && U16(fmt, 18) == 32 &&
-                            new Guid(fmt.AsSpan(24, 16)) == new Guid("00000003-0000-0010-8000-00aa00389b71"))
-                            format = 3;
+                        // WAVE_FORMAT_EXTENSIBLE carries the actual PCM/float format in its subtype GUID.
+                        if (format == 0xfffe && size >= 40 && U16(fmt, 16) >= 22 &&
+                            U16(fmt, 18) is > 0 && U16(fmt, 18) <= bits)
+                        {
+                            var subtype = new Guid(fmt.AsSpan(24, 16));
+                            if (subtype == new Guid("00000001-0000-0010-8000-00aa00389b71")) format = 1;
+                            else if (bits == 32 && U16(fmt, 18) == 32 &&
+                                subtype == new Guid("00000003-0000-0010-8000-00aa00389b71")) format = 3;
+                        }
                     }
                     else if (Text(header, 0) == "data" && dataStart < 0)
                     {
@@ -58,11 +63,11 @@ namespace YMM4McpPlugin
                     }
                     file.Position = next + (size & 1);
                 }
-                bool pcm = format == 1 && bits == 16;
+                bool pcm = format == 1 && bits is 16 or 24 or 32;
                 bool ieeeFloat = format == 3 && bits == 32;
                 if ((!pcm && !ieeeFloat) || channels is < 1 or > 2 || rate is < 1 or > 384000 ||
-                    align != channels * (pcm ? 2 : 4))
-                    return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 16-bit / IEEE float 32-bit mono/stereo WAV のみ検査できます");
+                    align != channels * (bits / 8))
+                    return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 16/24/32-bit / IEEE float 32-bit mono/stereo WAV のみ検査できます");
                 if (dataStart < 0 || dataSize == 0 || dataSize % align != 0)
                     return Fail("AUDIO_FILE_INVALID", "PCM データが不完全です");
 
@@ -85,12 +90,19 @@ namespace YMM4McpPlugin
                         for (int ch = 0; ch < channels; ch++)
                         {
                             double normalized;
+                            int offset = i * align + ch * (bits / 8);
                             if (pcm)
-                                normalized = BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(i * align + ch * 2, 2)) / 32768.0;
+                                normalized = bits switch
+                                {
+                                    16 => BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(offset, 2)) / 32768.0,
+                                    24 => (buffer[offset] | buffer[offset + 1] << 8 |
+                                        (sbyte)buffer[offset + 2] << 16) / 8388608.0,
+                                    _ => BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(offset, 4)) / 2147483648.0
+                                };
                             else
                             {
                                 normalized = BitConverter.Int32BitsToSingle(
-                                    BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(i * align + ch * 4, 4)));
+                                    BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(offset, 4)));
                                 if (!double.IsFinite(normalized))
                                     return Fail("AUDIO_FILE_INVALID", "非有限値の音声サンプルがあります");
                             }

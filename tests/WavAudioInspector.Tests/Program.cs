@@ -57,6 +57,34 @@ static byte[] FloatWave(float[] samples, bool extensible = false, int channels =
     return bytes;
 }
 
+static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate = 8000)
+{
+    int sampleBytes = bits / 8, fmtSize = extensible ? 40 : 16, offset = 20 + fmtSize;
+    var bytes = new byte[offset + 8 + samples.Length * sampleBytes];
+    Encoding.ASCII.GetBytes("RIFF").CopyTo(bytes, 0);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), (uint)(bytes.Length - 8));
+    Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(bytes, 8);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16, 4), (uint)fmtSize);
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(20, 2), (ushort)(extensible ? 0xfffe : 1));
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(22, 2), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24, 4), (uint)rate);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28, 4), (uint)(rate * sampleBytes));
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(32, 2), (ushort)sampleBytes);
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(34, 2), (ushort)bits);
+    if (extensible)
+    {
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(36, 2), 22);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(38, 2), (ushort)bits);
+        new Guid("00000001-0000-0010-8000-00aa00389b71").TryWriteBytes(bytes.AsSpan(44, 16));
+    }
+    Encoding.ASCII.GetBytes("data").CopyTo(bytes, offset);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4, 4), (uint)(samples.Length * sampleBytes));
+    for (int i = 0; i < samples.Length; i++)
+        for (int b = 0; b < sampleBytes; b++)
+            bytes[offset + 8 + i * sampleBytes + b] = (byte)(samples[i] >> (b * 8));
+    return bytes;
+}
+
 string path = Path.GetTempFileName();
 try
 {
@@ -83,6 +111,16 @@ try
     BinaryPrimitives.WriteUInt16LittleEndian(unsupported.AsSpan(20, 2), 3);
     File.WriteAllBytes(path, unsupported);
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FORMAT_UNSUPPORTED", "mismatched float format accepted");
+    foreach (int bits in new[] { 24, 32 })
+        foreach (bool extensible in new[] { false, true })
+        {
+            int halfScale = bits == 24 ? 4194304 : 1073741824;
+            var pcmSamples = Enumerable.Range(0, 8000).Select(i => i % 2 == 0 ? halfScale : -halfScale).ToArray();
+            File.WriteAllBytes(path, PcmWave(pcmSamples, bits, extensible));
+            var pcmQa = WavAudioInspector.Inspect(path);
+            Check(pcmQa.Passed && pcmQa.Peak == 0.5 && pcmQa.Rms == 0.5,
+                $"PCM {bits}-bit extensible={extensible} QA failed");
+        }
     var floatSamples = new float[8000 * 2];
     Array.Fill(floatSamples, 0.25f);
     foreach (bool extensible in new[] { false, true })
