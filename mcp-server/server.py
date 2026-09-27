@@ -31,6 +31,7 @@ from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import ducking
+import scenes
 import visual_qa
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -124,7 +125,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/media/assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/scenes/media/assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
@@ -145,7 +146,7 @@ TOOLS = [
                 "sub_action": {
                     "type": "string",
                     "description": (
-                        "情報取得(status,project,items,media,assets,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
+                        "情報取得(status,project,items,scenes,media,assets,characters,capabilities,effects_list,effect_metadata,selection,commands,effects,keyframes,jobs,job,edit_state,checkpoints)、"
                         "操作(play,stop,save,open,save_as,export,cancel_job,resume_job,checkpoint,rollback,undo,redo,split,align)、"
                         "アイテム追加(video,audio,image,text,voice,tachie,face)、"
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
@@ -168,6 +169,13 @@ TOOLS = [
                 "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
                                     "items": {"type": "integer", "minimum": 0},
                                     "description": "validate: 指定レイヤーのTextItemを字幕として扱い、各VoiceItemとの時間・本文一致を検査（省略時は検査しない）"},
+                "scene_ranges": {"type": "array", "minItems": 1, "maxItems": 200,
+                                 "items": {"type": "object", "required": ["id", "start_frame", "end_frame"],
+                                           "additionalProperties": False,
+                                           "properties": {"id": {"type": "string"},
+                                                          "start_frame": {"type": "integer", "minimum": 0},
+                                                          "end_frame": {"type": "integer", "minimum": 1}}},
+                                 "description": "get_info/scenes: 現在のアイテムを分類する非重複のシーン範囲"},
                 "qa_history": {"type": "array", "maxItems": 20, "items": {"type": "object"},
                                "description": "qa_gate: 同じ検査条件で得た過去のvalidate結果。古い順"},
                 "visual_check": {"type": "object", "description": "qa_gate: visual_qa の設定（end_frame必須）。指定時に現在のプレビューを検査"},
@@ -634,6 +642,16 @@ async def dispatch(args: dict) -> Any:
                 case "capabilities": return await ymm4_get("/capabilities")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
+                case "scenes":
+                    ranges = args.get("scene_ranges")
+                    # Validate before reading the host snapshot.
+                    scenes.index([], ranges)
+                    snapshot = await ymm4_get("/items")
+                    if not isinstance(snapshot, dict) or snapshot.get("success") is False or "error" in snapshot:
+                        return snapshot
+                    if not isinstance(snapshot.get("items"), list):
+                        return {"success": False, "error_code": "ITEMS_UNAVAILABLE"}
+                    return scenes.index(snapshot.get("items"), ranges)
                 case "audio_qa":
                     path = args.get("path")
                     if not is_absolute_media_path(path):
