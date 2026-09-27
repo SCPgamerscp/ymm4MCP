@@ -29,6 +29,34 @@ static byte[] Wave(short[] samples, int channels = 2, int rate = 8000)
     return bytes;
 }
 
+static byte[] FloatWave(float[] samples, bool extensible = false, int channels = 2, int rate = 8000)
+{
+    int fmtSize = extensible ? 40 : 16;
+    int offset = 20 + fmtSize;
+    byte[] bytes = new byte[offset + 8 + samples.Length * 4];
+    Encoding.ASCII.GetBytes("RIFF").CopyTo(bytes, 0);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), (uint)(bytes.Length - 8));
+    Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(bytes, 8);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16, 4), (uint)fmtSize);
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(20, 2), (ushort)(extensible ? 0xfffe : 3));
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(22, 2), (ushort)channels);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24, 4), (uint)rate);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28, 4), (uint)(rate * channels * 4));
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(32, 2), (ushort)(channels * 4));
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(34, 2), 32);
+    if (extensible)
+    {
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(36, 2), 22);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(38, 2), 32);
+        new Guid("00000003-0000-0010-8000-00aa00389b71").TryWriteBytes(bytes.AsSpan(44, 16));
+    }
+    Encoding.ASCII.GetBytes("data").CopyTo(bytes, offset);
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4, 4), (uint)(samples.Length * 4));
+    for (int i = 0; i < samples.Length; i++)
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(offset + 8 + i * 4, 4), BitConverter.SingleToInt32Bits(samples[i]));
+    return bytes;
+}
+
 string path = Path.GetTempFileName();
 try
 {
@@ -54,7 +82,19 @@ try
     var unsupported = Wave(clean);
     BinaryPrimitives.WriteUInt16LittleEndian(unsupported.AsSpan(20, 2), 3);
     File.WriteAllBytes(path, unsupported);
-    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FORMAT_UNSUPPORTED", "non-PCM accepted");
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FORMAT_UNSUPPORTED", "mismatched float format accepted");
+    var floatSamples = new float[8000 * 2];
+    Array.Fill(floatSamples, 0.25f);
+    foreach (bool extensible in new[] { false, true })
+    {
+        File.WriteAllBytes(path, FloatWave(floatSamples, extensible));
+        var floatQa = WavAudioInspector.Inspect(path);
+        Check(floatQa.Passed && floatQa.Peak == 0.25 && floatQa.Rms == 0.25,
+            "IEEE float mono/stereo QA failed");
+    }
+    floatSamples[0] = float.NaN;
+    File.WriteAllBytes(path, FloatWave(floatSamples));
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID", "NaN float accepted");
 }
 finally { File.Delete(path); }
 
