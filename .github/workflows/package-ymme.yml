@@ -61,6 +61,11 @@ jobs:
       - name: Build .ymme
         shell: pwsh
         run: dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
+      - name: Bundle Python MCP server
+        shell: pwsh
+        run: |
+          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          Compress-Archive -Path mcp-server -DestinationPath "artifacts/YMM4McpServer-$version.zip" -Force
       - name: Validate release package and tag
         shell: pwsh
         run: |
@@ -79,10 +84,22 @@ jobs:
             }
           }
           finally { $zip.Dispose() }
+          $serverPackage = "artifacts/YMM4McpServer-$version.zip"
+          if (-not (Test-Path -LiteralPath $serverPackage)) { throw "Missing server package: $serverPackage" }
+          $serverZip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $serverPackage).Path)
+          try {
+            $paths = @($serverZip.Entries | ForEach-Object { $_.FullName })
+            foreach ($required in @('mcp-server/server.py', 'mcp-server/requirements.txt', 'mcp-server/skills/ymm4-jikkyou/SKILL.md')) {
+              if ($paths -notcontains $required) { throw "Missing Python server file: $required" }
+            }
+          }
+          finally { $serverZip.Dispose() }
       - uses: actions/upload-artifact@v4
         with:
           name: ymm4mcp-ymme
-          path: artifacts/*.ymme
+          path: |
+            artifacts/*.ymme
+            artifacts/YMM4McpServer-*.zip
           if-no-files-found: error
 
   release:
@@ -114,4 +131,6 @@ jobs:
           $package = @(Get-ChildItem -LiteralPath release -Filter '*.ymme' -File)
           if ($package.Count -ne 1) { throw "Expected one .ymme; found $($package.Count)" }
           $packagePath = $package[0].FullName
-          gh release create $env:GITHUB_REF_NAME $packagePath --verify-tag --title $env:GITHUB_REF_NAME --notes 'YMM4プラグインの .ymme をダウンロードし、ダブルクリックしてインストールしてください。Python MCPサーバーは README の手順で設定してください。'
+          $serverPackage = @(Get-ChildItem -LiteralPath release -Filter 'YMM4McpServer-*.zip' -File)
+          if ($serverPackage.Count -ne 1) { throw "Expected one Python server zip; found $($serverPackage.Count)" }
+          gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'

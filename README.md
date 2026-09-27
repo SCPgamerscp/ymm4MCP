@@ -13,7 +13,7 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
 1. [Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) から最新版の `YMM4McpPlugin-*.ymme` をダウンロードします。YMM4を閉じて `.ymme` をダブルクリックし、YMM4の案内に従ってインストールします。利用者は `YMM4_PATH` や .NET SDK を設定する必要はありません。
 2. YMM4を起動します。新規インストールではプラグインのHTTPサーバーが自動起動します。「ツール」→「MCP連携サーバー」で状態を確認できます。既に自動起動を無効にしている場合は、この画面の「▶ 起動」を押します。
-3. PythonのMCPサーバー用に、このリポジトリの[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)を取得し、`mcp-server` で依存関係をインストールします（Pythonが必要です）。`.ymme` にPythonサーバーは含まれません。
+3. 同じ Release の `YMM4McpServer-*.zip` を展開し、`mcp-server` で依存関係をインストールします（Pythonが必要です）。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
 
    ```powershell
    cd C:\path\to\ymm4MCP\mcp-server
