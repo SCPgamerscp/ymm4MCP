@@ -352,7 +352,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 `get_info/project` の `isSaved` と `hasUnsavedChanges` は真偽値です。YMM4から保存状態を取得できない場合は両方とも `null` とし、未保存ではないと推測しません。
 
-編集対象は明示してください。`property` と `keyframe` は `item_id` または `frame` と `layer` の両方が必要です。`face_param` と `effect` は `frame` と `layer` の両方が必要です。`select` は `item_id`、`frame`、`layer` のいずれか、または `clear=true` が必要です。対象を省略しても先頭アイテムや全アイテムを暗黙に選ぶことはありません。
+編集対象は明示してください。`property`、`keyframe`、`face_param` は `item_id` または `frame` と `layer` の両方が必要です。`face_param` は `item_id` とともに `expected_revision` を指定すると競合を検出し、指定した顔アイテムのプロパティが一部しか更新できなかった場合も失敗として報告します。`effect` は `frame` と `layer` の両方が必要です。`select` は `item_id`、`frame`、`layer` のいずれか、または `clear=true` が必要です。対象を省略しても先頭アイテムや全アイテムを暗黙に選ぶことはありません。
 
 `edit_item/property` は設定後に同じプロパティを読み直し、要求値と一致したときだけ `verified: true` を返します。YMM4側で値が丸められた、または拒否された場合は `PROPERTY_VERIFY_FAILED` と実際の値を返します。setterの例外や読み取り失敗は `outcome_unknown: true` です。失敗後は再送前に `items` で現在状態を確認してください。
 

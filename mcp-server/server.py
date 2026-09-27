@@ -836,10 +836,19 @@ async def dispatch(args: dict) -> Any:
 
             match sub_action:
                 case "face_param":
-                    require_edit_target(args, item_id_allowed=False)
-                    payload = args.get("params", {})
+                    if "expected_revision" in args and not args.get("item_id"):
+                        raise ValueError("expected_revision を使う場合は item_id も指定してください")
+                    require_edit_target(args)
+                    params = args.get("params")
+                    if not isinstance(params, dict) or not params or len(params) > 50:
+                        raise ValueError("params must be an object with 1 to 50 face properties")
+                    if any(key in {"frame", "layer", "item_id", "expected_revision"} for key in params):
+                        raise ValueError("params cannot contain target selector fields")
+                    payload = dict(params)
                     if "frame" in args: payload["frame"] = args["frame"]
                     if "layer" in args: payload["layer"] = args["layer"]
+                    if "item_id" in args: payload["item_id"] = args["item_id"]
+                    if "expected_revision" in args: payload["expected_revision"] = args["expected_revision"]
                     return await ymm4_post("/items/face/param", payload)
                 case "property":
                     if "expected_revision" in args and not args.get("item_id"):

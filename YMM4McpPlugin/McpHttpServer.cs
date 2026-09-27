@@ -1091,21 +1091,24 @@ namespace YMM4McpPlugin
         private async Task<object> SetFaceParam(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
-            TimelineInputValidation.RequireCoordinates(b);
-            int tf = GetInt(b, "frame", 0); int tl = GetInt(b, "layer", 0);
+            TimelineInputValidation.RequireItemTarget(b);
+            int tf = GetInt(b, "frame", -1); int tl = GetInt(b, "layer", -1);
+            string itemId = GetStr(b, "item_id", "");
+            string expectedRevision = GetStr(b, "expected_revision", "");
+            if (expectedRevision.Length > 0 && itemId.Length == 0)
+                return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
+            if (!b.Keys.Any(k => k is not ("frame" or "layer" or "item_id" or "expected_revision")))
+                throw new ArgumentException("at least one face parameter is required");
             // keyValuePairs: { "FacePath": "...", etc. }
             return Application.Current.Dispatcher.Invoke(() =>
             {
-                var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
-                var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
-                var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
-                object? targetItem = null;
-                foreach (var iv in rawItems)
-                {
-                    var item = GetPropObj(iv, "Item") ?? iv;
-                    try { int f2 = (int)(item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); int l2 = (int)(item.GetType().GetProperty("Layer", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(item) ?? -1); if (f2 == tf && l2 == tl && item.GetType().Name.Contains("Face")) { targetItem = item; break; } } catch { }
-                }
-                if (targetItem == null) return (object)new { success = false, error = $"FaceItem未発見 f={tf} l={tl}" };
+                var located = LocateTimelineItem(itemId, tf, tl);
+                if (located.error != null) return located.error;
+                var targetItem = located.item!;
+                if (!targetItem.GetType().Name.Contains("Face", StringComparison.OrdinalIgnoreCase))
+                    return Failure("FACE_ITEM_REQUIRED", "対象はFaceItemではありません");
+                var conflict = RevisionConflict(targetItem, expectedRevision);
+                if (conflict != null) return conflict;
                 // FaceParameterを探して設定
                 var fpProp = targetItem.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                     .FirstOrDefault(p => p.Name.Contains("FaceParameter") || p.Name.Contains("FaceParam"));
@@ -1113,7 +1116,7 @@ namespace YMM4McpPlugin
                 var results = new System.Collections.Generic.List<string>();
                 foreach (var kv in b)
                 {
-                    if (kv.Key == "frame" || kv.Key == "layer") continue;
+                    if (kv.Key is "frame" or "layer" or "item_id" or "expected_revision") continue;
                     // アイテム直接のプロパティ
                     var directProp = targetItem.GetType().GetProperty(kv.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     if (directProp != null) { try { directProp.SetValue(targetItem, Convert.ChangeType(kv.Value.GetString() ?? kv.Value.ToString(), directProp.PropertyType)); results.Add($"{kv.Key}=OK(item)"); } catch (Exception ex) { results.Add($"{kv.Key}=NG({ex.Message})"); } continue; }
@@ -1126,8 +1129,18 @@ namespace YMM4McpPlugin
                     results.Add($"{kv.Key}=NOTFOUND");
                 }
                 bool changed = results.Any(result => result.Contains("=OK(", StringComparison.Ordinal));
-                if (changed) MarkItemChanged(targetItem);
-                return (object)new { success = true, changed, revision = GetItemRevision(targetItem), results };
+                if (changed)
+                {
+                    MarkItemChanged(targetItem);
+                    var vm = GetMainViewModel();
+                    var model = vm == null ? null : GetMainModel(vm);
+                    if (model != null) TryRecordHistory(model);
+                }
+                bool complete = changed && results.All(result => result.Contains("=OK(", StringComparison.Ordinal));
+                return (object)new { success = complete, changed, item_id = GetItemIdentity(targetItem).id,
+                    revision = GetItemRevision(targetItem), results,
+                    error_code = complete ? null : changed ? "FACE_PARAM_PARTIAL" : "FACE_PARAM_UNCHANGED",
+                    outcome_unknown = changed && !complete };
             });
         }
 
