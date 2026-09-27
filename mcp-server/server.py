@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
-from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, finite_number
+from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import visual_qa
@@ -162,6 +162,8 @@ TOOLS = [
                                     "description": "validate: 指定レイヤーのTextItemを字幕として扱い、各VoiceItemとの時間・本文一致を検査（省略時は検査しない）"},
                 "qa_history": {"type": "array", "maxItems": 20, "items": {"type": "object"},
                                "description": "qa_gate: 同じ検査条件で得た過去のvalidate結果。古い順"},
+                "visual_check": {"type": "object", "description": "qa_gate: visual_qa の設定（end_frame必須）。指定時に現在のプレビューを検査"},
+                "audio_check": {"type": "object", "description": "qa_gate: get_info/audio_qa の設定（path必須）。指定時に現在のWAVを検査"},
                 "max_repairs": {"type": "integer", "minimum": 0, "maximum": 20, "description": "qa_gate: 最大修正回数。既定3"},
                 "repeat_limit": {"type": "integer", "minimum": 2, "maximum": 10, "description": "qa_gate: 同じ問題群が連続したら停止。既定2"},
                 "elapsed_seconds": {"type": "number", "minimum": 0, "description": "qa_gate: 呼び出し側で計測した修正ループ経過秒数"},
@@ -758,6 +760,26 @@ async def dispatch(args: dict) -> Any:
                                    args.get("include_gaps", True), args.get("subtitle_layers"))
             if action == "validate":
                 return qa
+            checks, criteria = {}, {}
+            for name, option, task in (("visual", "visual_check", "visual_qa"),
+                                       ("audio", "audio_check", "audio_qa")):
+                if option not in args:
+                    continue
+                config = args[option]
+                allowed = ({"start_frame", "end_frame", "step_frames", "min_static_frames", "black_as_error"}
+                           if name == "visual" else {"path", "min_silence_seconds"})
+                if not isinstance(config, dict) or set(config) - allowed or \
+                        ("end_frame" if name == "visual" else "path") not in config:
+                    raise ValueError(f"{option} requires a valid configuration")
+                criteria[name] = config
+                report = await (run_visual_qa(config) if name == "visual" else
+                                dispatch({"action": "get_info", "sub_action": task, **config}))
+                if report.get("success") is not True:
+                    return {"success": False, "passed": False, "error_code": "QA_CHECK_FAILED",
+                            "check": name, "details": report}
+                checks[name] = report
+            if checks:
+                qa = combine_qa_reports(qa, checks, criteria)
             return evaluate_qa_gate(
                 qa, args.get("qa_history"), max_repairs=args.get("max_repairs", 3),
                 repeat_limit=args.get("repeat_limit", 2), elapsed_seconds=args.get("elapsed_seconds", 0),

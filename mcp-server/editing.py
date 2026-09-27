@@ -250,8 +250,9 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
     def signature(report):
         # Compare problem sets as a whole: one persistent issue does not block
         # progress if other issues were fixed in the same repair attempt.
-        return sorted((issue["code"], str(issue.get("item_ids", [])),
-                       str(issue.get("frame_range", [])), str(issue.get("layer", "")))
+        return sorted((issue["code"], str(issue.get("source", "")), str(issue.get("item_ids", [])),
+                       str(issue.get("frame_range", [])), str(issue.get("layer", "")),
+                       str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")))
                       for issue in report["issues"])
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
@@ -278,3 +279,35 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             "repair_attempts": len(history), "score_delta": scores[-1] - scores[-2] if history else None,
             "suggested_action": "consider_checkpoint_rollback" if reason == "QA_REGRESSED" else None,
             "qa": current}
+
+
+def combine_qa_reports(structural, checks, criteria):
+    """Fold freshly run quality checks into the existing gate's score and history scope."""
+    if not isinstance(checks, dict) or not isinstance(criteria, dict):
+        raise ValueError("QA checks and criteria must be objects")
+    problems = list(structural["issues"])
+    for source, report in checks.items():
+        if not isinstance(report, dict) or report.get("success") is not True or \
+                not isinstance(report.get("passed"), bool) or not isinstance(report.get("issues"), list) or \
+                len(report["issues"]) > 1000:
+            raise ValueError(f"{source} did not return a complete QA report")
+        for issue in report["issues"]:
+            if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"] or \
+                    issue.get("severity") not in ("error", "warning"):
+                raise ValueError(f"{source} returned an invalid QA issue")
+            normalized = {**issue, "source": source}
+            if source == "visual" and "start_frame" in issue and "end_frame" in issue:
+                normalized["frame_range"] = [issue["start_frame"], issue["end_frame"]]
+            problems.append(normalized)
+        if not report["passed"] and not any(i["severity"] == "error" for i in report["issues"]):
+            raise ValueError(f"{source} failed without an error issue")
+    errors = sum(i["severity"] == "error" for i in problems)
+    warnings = sum(i["severity"] == "warning" for i in problems)
+    digest = hashlib.sha256(json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
+                                     sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                                     allow_nan=False).encode("utf-8")).hexdigest()
+    return {**structural, "passed": errors == 0, "valid": errors == 0,
+            "score": max(0, 100 - errors * 20 - warnings * 5),
+            "issue_count": len(problems), "summary": {"errors": errors, "warnings": warnings},
+            "issues": problems, "problems": problems, "criteria_hash": digest,
+            "checks": checks, "scope": "Timeline structure and requested visual/audio checks."}
