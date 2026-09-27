@@ -414,11 +414,12 @@ async def run_visual_qa(args: dict) -> dict:
         raise ValueError("black_as_error must be boolean")
     if end < start:
         raise ValueError("visual_qa requires an ordered range")
+    count = (end - start) // step + 1 + int((end - start) % step != 0)
+    if count > 40:
+        raise ValueError("visual_qa requires an ordered range of at most 40 samples")
     frames = list(range(start, end + 1, step))
     if frames[-1] != end:
         frames.append(end)
-    if len(frames) > 40:
-        raise ValueError("visual_qa requires an ordered range of at most 40 samples")
     position = await ymm4_get("/preview/position")
     if position.get("success") is False or "error" in position:
         return {"success": False, "passed": False, "error": "プレビュー位置を取得できません", "details": position}

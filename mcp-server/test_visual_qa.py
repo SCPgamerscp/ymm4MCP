@@ -44,8 +44,9 @@ class VisualQaTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_too_many_samples_before_seek(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
-            with self.assertRaises(ValueError):
-                await server.dispatch({"action": "visual_qa", "end_frame": 1200})
+            for end in (1200, 2_147_483_647):
+                with self.assertRaises(ValueError):
+                    await server.dispatch({"action": "visual_qa", "end_frame": end})
         get.assert_not_awaited()
 
     async def test_always_samples_requested_final_frame(self):
