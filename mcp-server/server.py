@@ -160,6 +160,7 @@ TOOLS = [
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
+                "check_project_settings": {"type": "boolean", "description": "plan_edit/apply_edit: 計画のFPS・解像度が現在のYMM4プロジェクトと一致することを確認する"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
                 "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
                 "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
@@ -1161,6 +1162,9 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
 async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     """Validate an EditPlan, optionally replay an idempotent apply, otherwise add only missing items."""
     plan = editplan.parse_plan(args)
+    check_project = args.get("check_project_settings", False)
+    if not isinstance(check_project, bool):
+        raise ValueError("check_project_settings must be boolean")
     characters = await ymm4_get("/characters")
     names = None
     if isinstance(characters, dict) and characters.get("success") is not False and "error" not in characters:
@@ -1207,6 +1211,24 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                                     else "warning", "id": logical_id, "source": source,
                                     "message": "YMM4側で素材ファイルの存在を確認できません"})
     preview["passed"] = not any(w.get("severity") == "error" for w in preview["warnings"])
+    if check_project:
+        try:
+            current_project = await ymm4_get("/project")
+        except httpx.HTTPError:
+            current_project = None
+        expected = plan["project"]
+        actual = {key: current_project.get(key) for key in expected} if isinstance(current_project, dict) else {}
+        if not isinstance(current_project, dict) or current_project.get("success") is not True or \
+                any(isinstance(value, bool) or not isinstance(value, int) or value != expected[key]
+                    for key, value in actual.items()) or len(actual) != len(expected):
+            problem = {"code": "PROJECT_SETTINGS_MISMATCH", "severity": "error",
+                       "expected": expected, "actual": actual,
+                       "message": "EditPlanのFPS・解像度とYMM4の現在の設定が一致しないか、確認できません"}
+            preview["warnings"].append(problem)
+            preview["passed"] = False
+            if not dry_run:
+                return {"success": False, "error_code": problem["code"], "details": problem,
+                        "rolled_back": False}
     if dry_run:
         if names is None:
             preview.setdefault("warnings", []).append({

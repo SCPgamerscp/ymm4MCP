@@ -229,6 +229,8 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 #### 宣言的EditPlan（dry-run / 差分適用 / シーン単位transaction）
 
+`check_project_settings=true` を指定すると、計画の FPS（および指定した幅・高さ）を現在開いている YMM4 プロジェクトと照合します。`plan_edit` は差異を `PROJECT_SETTINGS_MISMATCH` として表示し、`apply_edit` はアイテム追加前に停止します。設定を取得できない場合も停止します。
+
 LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
 
 `apply_edit` はシーンをtransactionにします。あるシーンの追加が失敗すると、**そのシーンで追加したアイテムだけ削除**し、先に完了したシーンは残します。`atomic_scenes=false` で旧来どおり部分追加を残すこともできます。通信失敗（追加できたか不明）では自動削除しません。
