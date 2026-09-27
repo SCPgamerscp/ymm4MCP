@@ -24,6 +24,7 @@ class TemplateProjectTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
                 {"success": True, "exists": True}, {"success": True, "exists": False},
                 {"success": True, "isSaved": True},
+                {"success": True, "isSaved": True, "projectPath": "C:/projects/template.ymmp"},
                 {"success": True, "isSaved": True, "projectPath": "c:\\projects\\new.ymmp"}])), \
              patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
             result = await server.dispatch(ARGS)
@@ -48,12 +49,26 @@ class TemplateProjectTests(unittest.IsolatedAsyncioTestCase):
     async def test_save_failure_reports_opened_template(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
                 {"success": True, "exists": True}, {"success": True, "exists": False},
-                {"success": True, "isSaved": True}])), \
+                {"success": True, "isSaved": True},
+                {"success": True, "isSaved": True, "projectPath": "C:/projects/template.ymmp"}])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                  {"success": True}, {"success": False, "error_code": "DIRECTORY_NOT_FOUND"}])):
             result = await server.dispatch(ARGS)
         self.assertEqual(result["error_code"], "TEMPLATE_SAVE_FAILED")
         self.assertEqual(result["opened_template_path"], ARGS["template_path"])
+
+    async def test_open_without_verified_template_never_saves_previous_project(self):
+        states = iter([{"success": True, "exists": True}, {"success": True, "exists": False},
+                       {"success": True, "isSaved": True}])
+        async def get(_path):
+            return next(states, {"success": True, "isSaved": True,
+                                 "projectPath": "C:/projects/old.ymmp"})
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), \
+             patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post, \
+             patch.object(server.asyncio, "sleep", new_callable=AsyncMock):
+            result = await server.dispatch(ARGS)
+        self.assertEqual(result["error_code"], "TEMPLATE_OPEN_NOT_VERIFIED")
+        self.assertEqual(post.await_count, 1)
 
     async def test_same_path_rejected_before_host_call(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:

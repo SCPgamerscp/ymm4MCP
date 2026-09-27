@@ -491,6 +491,23 @@ async def create_from_template(args: dict) -> dict:
                 "outcome_unknown": True, "error": str(exc)}
     if opened.get("success") is not True:
         return {"success": False, "error_code": "TEMPLATE_OPEN_FAILED", "details": opened}
+    opened_state = None
+    for attempt in range(20):
+        try:
+            opened_state = await ymm4_get("/project")
+        except Exception as exc:
+            return {"success": False, "error_code": "TEMPLATE_OPEN_NOT_VERIFIED",
+                    "outcome_unknown": True, "error": str(exc), "opened_template_path": template}
+        if opened_state.get("success") is True and \
+                isinstance(opened_state.get("projectPath"), str) and \
+                _same_project_path(opened_state["projectPath"], template) and \
+                opened_state.get("isSaved") is True:
+            break
+        if attempt < 19:
+            await asyncio.sleep(0.15)
+    else:
+        return {"success": False, "error_code": "TEMPLATE_OPEN_NOT_VERIFIED",
+                "outcome_unknown": True, "details": opened_state, "opened_template_path": template}
     try:
         saved = await ymm4_post("/project/save-as", {"path": destination, "overwrite": False})
     except Exception as exc:
