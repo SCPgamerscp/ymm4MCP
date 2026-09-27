@@ -357,12 +357,14 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             get.assert_awaited_once_with("/items/keyframes?item_id=native%3Aitem%2Fwith%20spaces&prop=X")
 
     async def test_revision_requires_item_id_before_http_request(self):
-        for sub_action in ("property", "delete", "keyframe"):
+        for sub_action in ("property", "delete", "keyframe", "face_param"):
             args = {"action": "edit_item", "sub_action": sub_action, "expected_revision": "stale"}
             if sub_action == "property":
                 args.update(prop="Length", value=90, frame=10, layer=2)
             if sub_action == "keyframe":
                 args.update(prop="X", value=1, at=0)
+            if sub_action == "face_param":
+                args.update(params={"FacePath": "a"}, frame=10, layer=2)
             with self.subTest(sub_action=sub_action), patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
                 with self.assertRaisesRegex(ValueError, "item_id"):
                     await server.dispatch(args)
@@ -383,6 +385,21 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             for edit in invalid:
                 with self.subTest(edit=edit), self.assertRaises(ValueError):
                     await server.dispatch({"action": "edit_item", **edit})
+            post.assert_not_awaited()
+
+    async def test_face_param_identity_and_parameter_validation(self):
+        params = {"FacePath": "smile"}
+        with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            await server.dispatch({"action": "edit_item", "sub_action": "face_param",
+                                   "item_id": "native:face", "expected_revision": "rev1", "params": params})
+            post.assert_awaited_once_with("/items/face/param", {
+                "FacePath": "smile", "item_id": "native:face", "expected_revision": "rev1"})
+            self.assertEqual(params, {"FacePath": "smile"})
+            post.reset_mock()
+            for invalid in ({}, {"item_id": "different"}, []):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    await server.dispatch({"action": "edit_item", "sub_action": "face_param",
+                                           "item_id": "native:face", "params": invalid})
             post.assert_not_awaited()
             await server.dispatch({"action": "edit_item", "sub_action": "select", "clear": True})
             post.assert_awaited_once_with("/items/select", {"clear": True})
