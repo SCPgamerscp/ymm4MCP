@@ -153,6 +153,7 @@ TOOLS = [
                     )
                 },
                 "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template/duck_bgm: 検証と予定のみ。編集なし。duck_bgmの既定はtrue"},
+                "check_characters": {"type": "boolean", "description": "add_script dry_run: YMM4の登録キャラ名との一致を読み取り検査する"},
                 "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
@@ -1005,15 +1006,21 @@ async def dispatch(args: dict) -> Any:
 async def add_script(args: dict) -> dict:
     """Validate the entire script first; never continue after failed/unknown synthesis."""
     plan = plan_script(args)
-    if args.get("dry_run", False):
+    check_characters = args.get("check_characters", False)
+    if not isinstance(check_characters, bool):
+        raise ValueError("check_characters must be boolean")
+    if args.get("dry_run", False) and not check_characters:
         return plan
     characters = await ymm4_get("/characters")
     if characters.get("success") is False or "error" in characters:
         return characters
     names = [c["name"] for c in characters.get("characters", [])]
-    for line in plan["details"]:
-        if names.count(line["character"]) != 1:
-            raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {line['character']}")
+    unknown = sorted({line["character"] for line in plan["details"] if names.count(line["character"]) != 1})
+    if args.get("dry_run", False):
+        return {**plan, "character_check": {"passed": not unknown, "unknown": unknown,
+                                           "available": names}, "passed": not unknown}
+    if unknown:
+        raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {unknown[0]}")
     frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
     results = []

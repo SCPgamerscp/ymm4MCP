@@ -362,6 +362,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 `edit_item/property` は設定後に同じプロパティを読み直し、要求値と一致したときだけ `verified: true` を返します。YMM4側で値が丸められた、または拒否された場合は `PROPERTY_VERIFY_FAILED` と実際の値を返します。setterの例外や読み取り失敗は `outcome_unknown: true` です。失敗後は再送前に `items` で現在状態を確認してください。
 
 **add_scriptのパラメータ：**
+`dry_run=true, check_characters=true` を指定すると、YMM4のキャラ一覧を読み取り、各セリフの名前が一意に存在するか `character_check` と `passed` に返します。アイテムは追加しません。
 ```python
 action="add_script",
 start_frame=0,       # 開始フレーム

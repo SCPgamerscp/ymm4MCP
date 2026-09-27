@@ -235,6 +235,17 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             get.assert_not_awaited()
             post.assert_not_awaited()
 
+    async def test_script_dry_run_can_check_host_character_names(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={
+                "characters": [{"name": "霊夢"}]})) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.add_script({"dry_run": True, "check_characters": True,
+                                             "lines": [{"character": "魔理沙", "text": "説明"}]})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["character_check"]["unknown"], ["魔理沙"])
+        get.assert_awaited_once_with("/characters")
+        post.assert_not_awaited()
+
     async def test_script_preflight_and_actual_duration(self):
         lines = [{"character": "A", "text": "one"}, {"character": "A", "text": "two"}]
         added = [{"success": True, "item_id": "native:one", "revision": "r1", "frame": 10, "layer": 0, "length": 95},
