@@ -2006,9 +2006,10 @@ namespace YMM4McpPlugin
 
         private static object? GetMainViewModel()
         {
-            return Application.Current.Windows.OfType<Window>()
-                .Select(w => { var dc = w.DataContext; if (dc == null) return (dc, -1); int idx = -1; try { idx = (int)(dc.GetType().GetProperty("Index")?.GetValue(dc) ?? -1); } catch { } return (dc, idx); })
-                .Where(x => x.Item2 == 0).Select(x => x.Item1).FirstOrDefault();
+            var application = Application.Current;
+            if (application == null) return null;
+            return MainViewModelSelector.Select(application.Windows.OfType<Window>()
+                .Select(w => (Context: w.DataContext, Active: w.IsActive, Visible: w.IsVisible)));
         }
 
         private static object? GetPropObj(object o, string n) { try { var t = o.GetType(); return (t.GetProperty(n) ?? t.GetProperty(n, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))?.GetValue(o) ?? (t.GetField(n) ?? t.GetField(n, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))?.GetValue(o); } catch { return null; } }
