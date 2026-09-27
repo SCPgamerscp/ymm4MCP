@@ -255,6 +255,7 @@ action="get_info", sub_action="edit_state"
 ```
 
 対応タイプ: `video` / `audio` / `bgm` / `se` / `image` / `text` / `subtitle` / `dialogue` / `voice` / `tachie` / `face`。
+追加予定のメディア素材は `plan_edit` 時に YMM4 側の `/api/media/info` で存在を確認します。存在しなければ `SOURCE_MISSING` で計画を不合格とし、`apply_edit` は編集前に停止します。YMM4 側で確認できない場合は `SOURCE_CHECK_UNAVAILABLE` を返し、適用は安全のため停止します。
 映像・音声QAと修正回数制限はこのスライスの対象外です。
 
 #### キーフレーム

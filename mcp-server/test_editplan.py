@@ -225,6 +225,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 return {"success": True, "items": items() if callable(items) else items}
             if path == "/edits/state":
                 return {"success": True, "bindings": []}
+            if path.startswith("/media/info?path="):
+                return {"success": True, "exists": True}
             raise AssertionError(path)
 
         return patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
@@ -280,6 +282,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 return {"success": True, "items": current}
             if path == "/edits/state":
                 return {"success": True, "bindings": [record]}
+            if path.startswith("/media/info?path="):
+                return {"success": True, "exists": True}
             raise AssertionError(path)
 
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=get_replay)), patch.object(
@@ -295,6 +299,27 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await server.dispatch({"action": "plan_edit", "plan": {"scenes": []}})
             get.assert_not_awaited()
+            post.assert_not_awaited()
+
+    async def test_missing_host_source_is_reported_before_any_mutation(self):
+        async def get(path):
+            if path == "/characters":
+                return {"success": True, "characters": [{"name": "ゆっくり霊夢"}]}
+            if path == "/items":
+                return {"success": True, "items": []}
+            if path == "/edits/state":
+                return {"success": True, "bindings": []}
+            if path.startswith("/media/info?path="):
+                return {"success": True, "exists": False}
+            raise AssertionError(path)
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            preview = await server.dispatch({"action": "plan_edit", **sample_plan()})
+            self.assertFalse(preview["passed"])
+            self.assertTrue(any(w["code"] == "SOURCE_MISSING" for w in preview["warnings"]))
+            applied = await server.dispatch({"action": "apply_edit", **sample_plan()})
+            self.assertEqual(applied["error_code"], "SOURCE_MISSING")
             post.assert_not_awaited()
 
     async def test_unknown_character_is_rejected_before_add(self):
