@@ -177,7 +177,8 @@ TOOLS = [
                                            "properties": {"id": {"type": "string"},
                                                           "start_frame": {"type": "integer", "minimum": 0},
                                                           "end_frame": {"type": "integer", "minimum": 1}}},
-                                 "description": "get_info/scenes: 現在のアイテムを分類する非重複のシーン範囲"},
+                                 "description": "get_info/scenes または visual_qa: 非重複のシーン範囲"},
+                "scene_id": {"type": "string", "description": "visual_qa: scene_ranges 内の検査対象ID"},
                 "qa_history": {"type": "array", "maxItems": 20, "items": {"type": "object"},
                                "description": "qa_gate: 同じ検査条件で得た過去のvalidate結果。古い順"},
                 "visual_check": {"type": "object", "description": "qa_gate: visual_qa の設定（end_frame必須）。指定時に現在のプレビューを検査"},
@@ -423,10 +424,20 @@ def require_edit_target(args: dict, *, item_id_allowed: bool = True, partial: bo
 
 
 async def run_visual_qa(args: dict) -> dict:
-    start = integer(args.get("start_frame", 0), "start_frame", minimum=0)
-    if "end_frame" not in args:
-        raise ValueError("visual_qa requires end_frame")
-    end = integer(args["end_frame"], "end_frame", minimum=0)
+    scene_id = args.get("scene_id")
+    if scene_id is not None:
+        if "start_frame" in args or "end_frame" in args:
+            raise ValueError("scene_id cannot be combined with explicit frame bounds")
+        scene_ranges = scenes.index([], args.get("scene_ranges"))["scenes"]
+        selected = [scene for scene in scene_ranges if scene["id"] == scene_id]
+        if len(selected) != 1:
+            raise ValueError("scene_id must identify one scene range")
+        start, end = selected[0]["start_frame"], selected[0]["end_frame"] - 1
+    else:
+        start = integer(args.get("start_frame", 0), "start_frame", minimum=0)
+        if "end_frame" not in args:
+            raise ValueError("visual_qa requires end_frame or scene_id")
+        end = integer(args["end_frame"], "end_frame", minimum=0)
     step = integer(args.get("step_frames", 30), "step_frames", minimum=1)
     minimum = integer(args.get("min_static_frames", 60), "min_static_frames", minimum=1)
     black_as_error = args.get("black_as_error", False)
@@ -477,6 +488,8 @@ async def run_visual_qa(args: dict) -> dict:
     result.update({"start_frame": start, "end_frame": end, "step_frames": step,
                    "restored_position": True,
                    "note": "サンプリング位置の候補です。未検査フレームや意図的な暗転・静止画は判断できません。"})
+    if scene_id is not None:
+        result["scene_id"] = scene_id
     return result
 
 
@@ -968,10 +981,11 @@ async def dispatch(args: dict) -> Any:
                 if option not in args:
                     continue
                 config = args[option]
-                allowed = ({"start_frame", "end_frame", "step_frames", "min_static_frames", "black_as_error"}
+                allowed = ({"start_frame", "end_frame", "scene_id", "scene_ranges", "step_frames", "min_static_frames", "black_as_error"}
                            if name == "visual" else {"path", "min_silence_seconds"})
                 if not isinstance(config, dict) or set(config) - allowed or \
-                        ("end_frame" if name == "visual" else "path") not in config:
+                        (("end_frame" not in config and "scene_id" not in config) if name == "visual"
+                         else "path" not in config):
                     raise ValueError(f"{option} requires a valid configuration")
                 criteria[name] = config
                 report = await (run_visual_qa(config) if name == "visual" else

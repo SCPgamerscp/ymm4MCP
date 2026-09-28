@@ -17,6 +17,28 @@ def png(color):
 
 
 class VisualQaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scene_range_samples_only_half_open_scene_and_restores_position(self):
+        requested = []
+        async def seek(_path, body, **_kwargs):
+            requested.append(body["frame"])
+            return {"success": True, "image": png("white")}
+        ranges = [{"id": "intro", "start_frame": 30, "end_frame": 65}]
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={
+                "success": True, "currentFrame": 8, "totalFrames": 100})), \
+             patch.object(server, "ymm4_post", AsyncMock(side_effect=seek)):
+            result = await server.dispatch({"action": "visual_qa", "scene_ranges": ranges,
+                                            "scene_id": "intro"})
+        self.assertEqual(requested, [30, 60, 64, 8])
+        self.assertEqual((result["start_frame"], result["end_frame"], result["scene_id"]),
+                         (30, 64, "intro"))
+
+    async def test_invalid_scene_is_rejected_before_host_call(self):
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
+            with self.assertRaisesRegex(ValueError, "scene_id"):
+                await server.dispatch({"action": "visual_qa", "scene_id": "missing",
+                                       "scene_ranges": [{"id": "intro", "start_frame": 0, "end_frame": 30}]})
+            get.assert_not_awaited()
+
     async def test_black_static_and_restore_position(self):
         images = {0: png("black"), 30: png("black"), 60: png("black"),
                   90: png("white")}

@@ -406,7 +406,7 @@ expected=[
 
 `qa_gate` に `visual_check={"end_frame":90,"step_frames":30,"black_as_error":true}` や `audio_check={"path":"C:/audio.wav"}` を渡すと、現在の構造検査に映像・音声の検査を加えて合否と修正停止条件を判定します。両方を指定することもできます。各結果は `qa.checks` に含まれ、`qa.issues` には検査元 `source` が付きます。取得失敗時は `QA_CHECK_FAILED` となり、合格扱いにしません。履歴の `criteria_hash` には検査設定も含まれるため、同じ設定の `qa` を次の `qa_history` に渡してください。映像は指定したサンプル位置、音声は指定した WAV ファイルに限る検査です。
 
-`visual_qa` は `start_frame`（既定0）から必須の `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
+`visual_qa` は `start_frame`（既定0）から `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。代わりに `scene_ranges` と `scene_id` を指定すると、該当シーンの半開区間内を検査します。`qa_gate` の `visual_check` でも同じ指定が可能です。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
 
 ---
 
