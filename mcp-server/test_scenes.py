@@ -26,6 +26,11 @@ class SceneIndexTests(unittest.TestCase):
         self.assertEqual(result["unassigned_item_ids"], ["c"])
         self.assertEqual([(s["covered_frames"], s["uncovered_frames"])
                           for s in result["scenes"]], [(15, 15), (5, 25)])
+        self.assertEqual(result["scenes"][0]["uncovered_ranges"],
+                         [{"start_frame": 0, "end_frame": 10},
+                          {"start_frame": 20, "end_frame": 25}])
+        self.assertEqual(result["scenes"][1]["uncovered_ranges"],
+                         [{"start_frame": 35, "end_frame": 60}])
 
     def test_multiple_layers_cover_same_frames_only_once(self):
         items = [{"item_id": "x", "frame": 0, "length": 20},
@@ -35,6 +40,8 @@ class SceneIndexTests(unittest.TestCase):
                                                 "end_frame": 70}])
         self.assertEqual([(s["covered_frames"], s["uncovered_frames"])
                           for s in result["scenes"]], [(30, 0), (0, 30), (0, 10)])
+        self.assertEqual(result["scenes"][2]["uncovered_ranges"],
+                         [{"start_frame": 60, "end_frame": 70}])
 
     def test_rejects_overlap_and_duplicate_names(self):
         for ranges in ([RANGES[0], {"id": "body", "start_frame": 29, "end_frame": 60}],

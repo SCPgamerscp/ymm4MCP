@@ -53,16 +53,16 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
     for scene in scenes:
         intervals = sorted((item["visible_start_frame"], item["visible_end_frame"])
                            for item in scene["items"])
-        covered = 0
-        start = end = 0
+        cursor = scene["start_frame"]
+        gaps = []
         for left, right in intervals:
-            if left > end:
-                covered += end - start
-                start, end = left, right
-            else:
-                end = max(end, right)
-        covered += end - start
-        scene["covered_frames"] = covered
-        scene["uncovered_frames"] = scene["end_frame"] - scene["start_frame"] - covered
+            if left > cursor:
+                gaps.append({"start_frame": cursor, "end_frame": left})
+            cursor = max(cursor, right)
+        if cursor < scene["end_frame"]:
+            gaps.append({"start_frame": cursor, "end_frame": scene["end_frame"]})
+        scene["uncovered_ranges"] = gaps
+        scene["uncovered_frames"] = sum(g["end_frame"] - g["start_frame"] for g in gaps)
+        scene["covered_frames"] = scene["end_frame"] - scene["start_frame"] - scene["uncovered_frames"]
     return {"success": True, "scenes": scenes, "unassigned_item_ids": unassigned,
             "item_count": len(items), "note": "Scene ranges are caller-defined and are not saved in YMM4"}
