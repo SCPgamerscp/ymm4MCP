@@ -312,6 +312,29 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result["outcome_unknown"])
             post.assert_awaited_once()
 
+    async def test_script_can_append_after_existing_items_on_its_layers(self):
+        added = {"success": True, "item_id": "new", "revision": "r2", "frame": 55,
+                 "layer": 0, "length": 20}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"characters": [{"name": "A"}]},
+                {"items": [{"frame": 10, "layer": 0, "length": 40},
+                           {"frame": 100, "layer": 2, "length": 40}]},
+                {"items": [added]}])), \
+             patch.object(server, "ymm4_post", AsyncMock(return_value=added)) as post:
+            result = await server.add_script({"lines": [{"character": "A", "text": "one"}],
+                                              "append_after_existing": True, "gap": 5})
+        self.assertEqual(result["start_frame_used"], 55)
+        self.assertEqual(post.await_args.args[1]["frame"], 55)
+
+    async def test_script_append_rejects_unreadable_snapshot(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"characters": [{"name": "A"}]}, {"error": "unavailable"}])), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.add_script({"lines": [{"character": "A", "text": "one"}],
+                                              "append_after_existing": True})
+        self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+        post.assert_not_awaited()
+
     async def test_script_verification_unavailable_does_not_retry_voice(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
             {"characters": [{"name": "A"}]}, httpx.ReadTimeout(""),
