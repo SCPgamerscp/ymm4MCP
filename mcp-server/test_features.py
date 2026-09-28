@@ -326,6 +326,29 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["start_frame_used"], 55)
         self.assertEqual(post.await_args.args[1]["frame"], 55)
 
+    async def test_append_dry_run_reads_items_and_shifts_estimated_plan(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={
+                "items": [{"frame": 10, "layer": 0, "length": 40}]})) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.add_script({"lines": [{"character": "A", "text": "one"}],
+                                              "append_after_existing": True, "dry_run": True, "gap": 5})
+        self.assertEqual(result["start_frame_used"], 55)
+        self.assertEqual(result["details"][0]["frame"], 55)
+        get.assert_awaited_once_with("/items")
+        post.assert_not_awaited()
+
+    async def test_append_dry_run_uses_live_project_fps(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"success": True, "fps": 60}, {"items": [{"frame": 0, "layer": 0, "length": 20}]}])), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.add_script({"lines": [{"character": "A", "text": "one"}],
+                                              "append_after_existing": True, "dry_run": True,
+                                              "use_project_fps": True})
+        self.assertEqual(result["fps_used"], 60)
+        self.assertEqual(result["details"][0]["frame"], 20)
+        self.assertEqual(result["details"][0]["length"], 60)
+        post.assert_not_awaited()
+
     async def test_script_append_rejects_unreadable_snapshot(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
                 {"characters": [{"name": "A"}]}, {"error": "unavailable"}])), \

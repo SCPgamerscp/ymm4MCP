@@ -1224,6 +1224,27 @@ async def dispatch(args: dict) -> Any:
             raise ValueError(f"Unknown action: {action}")
 
 
+async def _script_append_start(plan: dict, args: dict) -> int | dict:
+    snapshot = await ymm4_get("/items")
+    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
+            not isinstance(snapshot.get("items"), list):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    frame = args.get("start_frame", 0)
+    gap = args.get("gap", 0)
+    layers = {line["layer"] for line in plan["details"]}
+    try:
+        for item in snapshot["items"]:
+            if not isinstance(item, dict):
+                raise ValueError("invalid item")
+            if item.get("layer") in layers:
+                end = integer(integer(item.get("frame"), "item frame") +
+                              integer(item.get("length"), "item length", 1), "item end")
+                frame = max(frame, end + gap)
+        return integer(frame, "append frame")
+    except ValueError:
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+
+
 async def add_script(args: dict) -> dict:
     """Validate the entire script first; never continue after failed/unknown synthesis."""
     use_project_fps = args.get("use_project_fps", False)
@@ -1249,7 +1270,16 @@ async def add_script(args: dict) -> dict:
     if not isinstance(append, bool):
         raise ValueError("append_after_existing must be boolean")
     if append and args.get("dry_run", False):
-        raise ValueError("append_after_existing requires a live apply; use get_info/items before dry_run")
+        start = await _script_append_start(plan, args)
+        if isinstance(start, dict):
+            return start
+        planning_args = {**args, "start_frame": start}
+        if "fps_used" in plan:
+            planning_args["fps"] = plan["fps_used"]
+        plan = plan_script(planning_args)
+        if args.get("use_project_fps"):
+            plan["fps_used"] = planning_args["fps"]
+        plan["start_frame_used"] = start
     if args.get("dry_run", False) and not check_characters:
         return plan
     characters = await ymm4_get("/characters")
@@ -1265,22 +1295,10 @@ async def add_script(args: dict) -> dict:
     frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
     if append:
-        snapshot = await ymm4_get("/items")
-        if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
-                not isinstance(snapshot.get("items"), list):
-            return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
-        layers = {line["layer"] for line in plan["details"]}
-        try:
-            for item in snapshot["items"]:
-                if not isinstance(item, dict):
-                    raise ValueError("invalid item")
-                if item.get("layer") in layers:
-                    end = integer(integer(item.get("frame"), "item frame") +
-                                  integer(item.get("length"), "item length", 1), "item end")
-                    frame = max(frame, end + gap)
-            integer(frame, "append frame")
-        except ValueError:
-            return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+        start = await _script_append_start(plan, args)
+        if isinstance(start, dict):
+            return start
+        frame = start
     start_frame_used = frame
     results = []
     for index, line in enumerate(plan["details"]):
