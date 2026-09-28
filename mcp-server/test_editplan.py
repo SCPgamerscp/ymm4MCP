@@ -217,6 +217,27 @@ class DiffAndReplayTests(unittest.TestCase):
 
 
 class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_actual_voice_length_stops_next_scene_before_overlap(self):
+        args = {"action": "apply_edit", "plan": {"scenes": [
+            {"id": "intro", "items": [{"id": "voice", "type": "voice",
+                                       "character": "A", "text": "hi", "frame": 0}]},
+            {"id": "next", "items": [{"id": "title", "type": "text",
+                                      "text": "next", "length": 10}]},
+        ]}}
+        async def get(path):
+            if path == "/characters": return {"success": True, "characters": [{"name": "A"}]}
+            if path == "/items": return {"success": True, "items": []}
+            raise AssertionError(path)
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), \
+             patch.object(server, "ymm4_post", AsyncMock(return_value={
+                 "success": True, "item_id": "native:voice", "revision": "r1",
+                 "frame": 0, "layer": 0, "length": 100})) as post:
+            result = await server.dispatch(args)
+        self.assertEqual(result["error_code"], "SCENE_BOUNDARY_CONFLICT")
+        self.assertEqual(result["committed_scenes"], ["intro"])
+        self.assertEqual((result["actual_end_frame"], result["next_start_frame"]), (100, 30))
+        post.assert_awaited_once()
+
     async def test_project_settings_gate_blocks_wrong_fps_before_edit(self):
         async def get(path):
             if path == "/characters": return {"success": True, "characters": []}
