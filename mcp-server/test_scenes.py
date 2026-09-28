@@ -43,11 +43,26 @@ class SceneIndexTests(unittest.TestCase):
         self.assertEqual(result["scenes"][2]["uncovered_ranges"],
                          [{"start_frame": 60, "end_frame": 70}])
 
+    def test_layer_occupancy_keeps_overlaps_on_other_layers_separate(self):
+        items = [{"item_id": "a", "frame": 0, "length": 15, "layer": 1},
+                 {"item_id": "b", "frame": 10, "length": 10, "layer": 1},
+                 {"item_id": "c", "frame": 0, "length": 30, "layer": 2}]
+        scene = scenes.index(items, RANGES)["scenes"][0]
+        self.assertEqual(scene["covered_frames"], 30)
+        self.assertEqual([(r["layer"], r["covered_frames"], r["item_ids"])
+                          for r in scene["layer_occupancy"]], [(1, 20, ["a", "b"]), (2, 30, ["c"])])
+        self.assertEqual(scene["layer_occupancy"][0]["uncovered_ranges"],
+                         [{"start_frame": 20, "end_frame": 30}])
+
     def test_rejects_overlap_and_duplicate_names(self):
         for ranges in ([RANGES[0], {"id": "body", "start_frame": 29, "end_frame": 60}],
                        [RANGES[0], {"id": "intro", "start_frame": 30, "end_frame": 60}]):
             with self.subTest(ranges=ranges), self.assertRaises(ValueError):
                 scenes.index([], ranges)
+
+    def test_rejects_unhashable_layer_as_invalid_snapshot(self):
+        with self.assertRaises(ValueError):
+            scenes.index([{"item_id": "bad", "frame": 0, "length": 1, "layer": []}], RANGES)
 
 
 class SceneDispatchTests(unittest.IsolatedAsyncioTestCase):
