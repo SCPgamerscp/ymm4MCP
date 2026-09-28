@@ -129,6 +129,11 @@ namespace YMM4McpPlugin
                     current += count;
                 }
                 if (silentStart >= 0) AddSilence(issues, silentStart, frames, minSilenceFrames, rate);
+                // A completely silent short clip must not pass merely because it
+                // is shorter than the configured minimum silence interval.
+                if (peak <= 104.0 / 32768 && !issues.Any(i => i.Code == "LONG_SILENCE"))
+                    issues.Add(new("AUDIO_SILENT", "error", 0, (double)frames / rate,
+                        "音声全体が無音または極めて小さい音量です"));
                 if (clipped > frames * channels * 0.001)
                     issues.Add(new("AUDIO_CLIPPING", "error", null, null, "フルスケール付近のサンプルが継続しています"));
                 var rmsByChannel = sumSquares.Select(sum => Math.Sqrt(sum / frames)).ToArray();

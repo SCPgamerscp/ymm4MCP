@@ -105,6 +105,11 @@ try
     }
     File.WriteAllBytes(path, Wave(clean));
     Check(WavAudioInspector.Inspect(path).Passed, "clean stereo should pass");
+    File.WriteAllBytes(path, Wave(new short[8000 * 2]));
+    var shortSilence = WavAudioInspector.Inspect(path, 2);
+    Check(shortSilence.Success && !shortSilence.Passed &&
+        shortSilence.Issues.Any(i => i.Code == "AUDIO_SILENT"),
+        "a fully silent clip shorter than min_silence_seconds must fail");
     var inverted = new short[8000 * 2];
     for (int frame = 0; frame < 8000; frame++)
     {
