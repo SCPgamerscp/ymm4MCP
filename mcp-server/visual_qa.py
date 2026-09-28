@@ -17,7 +17,7 @@ def thumbnail(image_b64: str) -> bytes:
             if image.format != "PNG" or image.width * image.height > 32_000_000:
                 raise ValueError("preview must be a PNG of at most 32 megapixels")
             image.load()
-            return image.convert("RGB").resize((64, 36)).convert("L").tobytes()
+            return image.convert("RGB").resize((64, 36)).tobytes()
     except (ValueError, UnidentifiedImageError, OSError) as exc:
         raise ValueError("invalid preview PNG") from exc
 
@@ -31,7 +31,8 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     previous = None
     previous_frame = None
     for frame, pixels in samples:
-        black = sum(p < 12 for p in pixels) >= len(pixels) * .99 and sum(pixels) / len(pixels) < 5
+        black = (sum(max(pixels[i:i + 3]) < 12 for i in range(0, len(pixels), 3)) >=
+                 len(pixels) / 3 * .99 and sum(pixels) / len(pixels) < 5)
         if black and black_start is None:
             black_start = frame
         if not black and black_start is not None:

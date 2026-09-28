@@ -101,6 +101,14 @@ class VisualQaTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             visual_qa.thumbnail(base64.b64encode(b"not png").decode())
 
+    def test_color_change_with_similar_luminance_is_not_static(self):
+        red = visual_qa.thumbnail(png((255, 0, 0)))
+        green = visual_qa.thumbnail(png((0, 130, 0)))
+        self.assertNotEqual(red, green)
+        result = visual_qa.inspect([(0, red), (30, green), (60, red), (90, green)],
+                                   step_frames=30, min_static_frames=60)
+        self.assertNotIn("STATIC_PREVIEW", [i["code"] for i in result["issues"]])
+
 
 if __name__ == "__main__":
     unittest.main()
