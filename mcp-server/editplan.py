@@ -241,6 +241,18 @@ def plan_hash(plan):
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def snapshot_hash(items):
+    """Fingerprint the observable timeline state regardless of item ordering."""
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise ValueError("items must be an array of objects")
+    fields = ("item_id", "revision", "frame", "layer", "length", "type", "text", "source_path")
+    rows = [{key: item[key] for key in fields if key in item} for item in items]
+    encoded_rows = sorted(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                          for row in rows)
+    return hashlib.sha256(json.dumps(encoded_rows, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def flatten_items(plan):
     items = []
     for scene in plan["scenes"]:

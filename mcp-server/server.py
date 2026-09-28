@@ -168,6 +168,7 @@ TOOLS = [
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "expected_plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: 確認済みplan_editのplan_hash。異なる場合は編集前に停止"},
+                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: plan_edit時点のタイムラインハッシュ。状態が変わった場合は編集前に停止"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
                 "check_project_settings": {"type": "boolean", "description": "plan_edit/apply_edit: 計画のFPS・解像度が現在のYMM4プロジェクトと一致することを確認する"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
@@ -1372,6 +1373,10 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
             return {"success": False, "error_code": "PLAN_HASH_MISMATCH",
                     "expected_plan_hash": expected_hash, "actual_plan_hash": actual_hash,
                     "rolled_back": False}
+    expected_snapshot = args.get("expected_snapshot_hash")
+    if expected_snapshot is not None and (not isinstance(expected_snapshot, str) or
+            re.fullmatch(r"[0-9a-f]{64}", expected_snapshot) is None):
+        raise ValueError("expected_snapshot_hash must be a lowercase SHA-256 hex digest")
     check_project = args.get("check_project_settings", False)
     if not isinstance(check_project, bool):
         raise ValueError("check_project_settings must be boolean")
@@ -1389,6 +1394,11 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if not isinstance(items, list):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
                 "error": "タイムラインの状態を取得できません。編集せず停止しました"}
+    current_snapshot_hash = editplan.snapshot_hash(items)
+    if expected_snapshot is not None and expected_snapshot != current_snapshot_hash:
+        return {"success": False, "error_code": "SNAPSHOT_HASH_MISMATCH",
+                "expected_snapshot_hash": expected_snapshot, "actual_snapshot_hash": current_snapshot_hash,
+                "rolled_back": False}
     try:
         record = await _load_edit_binding(plan.get("idempotency_key"))
     except (httpx.HTTPError, ValueError):
@@ -1402,6 +1412,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         if replay:
             return replay
     preview = editplan.diff_plan(plan, items, record, names)
+    preview["snapshot_hash"] = current_snapshot_hash
     media = {op["id"]: op["source"] for op in preview["ops"]
              if op["op"] == "add" and op["kind"] in {"video", "audio", "image"}}
     for logical_id, source in media.items():
