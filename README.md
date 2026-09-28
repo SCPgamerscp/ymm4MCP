@@ -414,7 +414,7 @@ expected=[
 | `capture` | 現在フレームをPNG取得 |
 | `seek_capture` | 指定フレームへ移動してPNG取得 |
 | `position` | 現在の再生位置取得 |
-| `record` | 音声のみ録音（WAV保存） |
+| `record` | 音声のみ録音（30 MB以下のWAVを一時ファイルへ保存。呼び出しごとに別ファイル） |
 | `watch` | 映像キャプチャ＋音声録音を同時実行 ★ |
 
 **watchのパラメータ：**

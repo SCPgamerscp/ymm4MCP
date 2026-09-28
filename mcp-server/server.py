@@ -1575,18 +1575,23 @@ async def dispatch_preview(args: dict) -> CallToolResult:
             )
             if data.get("success") is False or "error" in data:
                 return CallToolResult(content=[TextContent(type="text", text=format_result(data))], isError=True)
-            audio_b64 = data.pop("audio", None)
-            summary = format_result(data)
+            audio_b64 = data.get("audio")
+            summary = format_result({key: value for key, value in data.items() if key != "audio"})
             contents: list = [TextContent(type="text", text=summary)]
             if audio_b64:
-                import tempfile, os, base64
-                wav_bytes = base64.b64decode(audio_b64)
-                # 固定パスに保存（上書き）してClaudeが参照しやすくする
-                save_dir = os.path.dirname(os.path.abspath(__file__))
-                wav_path = os.path.join(save_dir, "..", "record_result.wav")
-                wav_path = os.path.normpath(wav_path)
-                with open(wav_path, "wb") as f:
-                    f.write(wav_bytes)
+                import tempfile, base64, binascii
+                if not isinstance(audio_b64, str) or len(audio_b64) > 42_000_000:
+                    return CallToolResult(content=[TextContent(type="text", text="録音データが大きすぎます")], isError=True)
+                try:
+                    wav_bytes = base64.b64decode(audio_b64, validate=True)
+                except (ValueError, binascii.Error):
+                    return CallToolResult(content=[TextContent(type="text", text="録音データの形式が不正です")], isError=True)
+                if len(wav_bytes) > 30_000_000 or wav_bytes[:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
+                    return CallToolResult(content=[TextContent(type="text", text="録音データは30MB以下のWAVが必要です")], isError=True)
+                # 並行した録音結果を上書きしないよう、一意のファイルに保存する。
+                with tempfile.NamedTemporaryFile(prefix="ymm4-record-", suffix=".wav", delete=False) as output:
+                    output.write(wav_bytes)
+                    wav_path = output.name
                 has_audio = data.get("has_audio", False)
                 rms = data.get("rms_level", 0)
                 contents.append(TextContent(
