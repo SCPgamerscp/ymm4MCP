@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/WavAudioInspector.cs" Link="WavAudioInspector.cs" />
+    <Compile Include="../../YMM4McpPlugin/OrderedAudioChunks.cs" Link="OrderedAudioChunks.cs" />
   </ItemGroup>
 </Project>
