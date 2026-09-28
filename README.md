@@ -434,7 +434,7 @@ action="watch",
 frame=0,                   # 開始フレーム
 duration_ms=5000,          # 録音時間（推奨: 最大8000ms）
 capture_interval_ms=2000   # 画像取得間隔（推奨: 2000ms以上）
-# → 音声: watch_result.wav に保存
+# → 音声: 一意な一時WAV（ymm4-watch-*.wav）に保存
 # → 画像: PNGとしてレスポンスに含まれる
 ```
 

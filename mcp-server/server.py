@@ -1764,12 +1764,18 @@ async def dispatch_preview(args: dict) -> CallToolResult:
             # 音声WAVを保存
             audio_b64 = audio.get("data")
             if audio_b64:
-                import base64, os
-                wav_bytes = base64.b64decode(audio_b64)
-                save_dir = os.path.dirname(os.path.abspath(__file__))
-                wav_path = os.path.normpath(os.path.join(save_dir, "..", "watch_result.wav"))
-                with open(wav_path, "wb") as f:
-                    f.write(wav_bytes)
+                import base64, binascii, tempfile
+                if not isinstance(audio_b64, str) or len(audio_b64) > 42_000_000:
+                    return CallToolResult(content=[TextContent(type="text", text="watch録音データが大きすぎます")], isError=True)
+                try:
+                    wav_bytes = base64.b64decode(audio_b64, validate=True)
+                except (ValueError, binascii.Error):
+                    return CallToolResult(content=[TextContent(type="text", text="watch録音データの形式が不正です")], isError=True)
+                if len(wav_bytes) > 30_000_000 or wav_bytes[:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
+                    return CallToolResult(content=[TextContent(type="text", text="watch録音は30MB以下のWAVが必要です")], isError=True)
+                with tempfile.NamedTemporaryFile(prefix="ymm4-watch-", suffix=".wav", delete=False) as output:
+                    output.write(wav_bytes)
+                    wav_path = output.name
                 contents.append(TextContent(type="text", text=f"💾 音声保存: {wav_path}"))
             # 各フレーム画像
             for frame_data in data.get("frames", []):
