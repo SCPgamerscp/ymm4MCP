@@ -39,6 +39,13 @@ def one_text_record(revision="r1"):
 
 
 class ParsePlanTests(unittest.TestCase):
+    def test_snapshot_hash_ignores_item_order_but_detects_revision_changes(self):
+        items = [{"item_id": "a", "revision": "r1", "frame": 0},
+                 {"item_id": "b", "revision": "r1", "frame": 10}]
+        self.assertEqual(editplan.snapshot_hash(items), editplan.snapshot_hash(list(reversed(items))))
+        self.assertNotEqual(editplan.snapshot_hash(items),
+                            editplan.snapshot_hash([{**items[0], "revision": "r2"}, items[1]]))
+
     def test_assigns_sequential_frames_and_hashes_stably(self):
         parsed = editplan.parse_plan(sample_plan())
         items = editplan.flatten_items(parsed)
@@ -217,6 +224,17 @@ class DiffAndReplayTests(unittest.TestCase):
 
 
 class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expected_snapshot_hash_stops_stale_apply_before_post(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"characters": [{"name": "ゆっくり霊夢"}]},
+                {"items": [{"item_id": "changed", "revision": "r2"}]}])) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "apply_edit", **sample_plan(),
+                                            "expected_snapshot_hash": editplan.snapshot_hash([])})
+        self.assertEqual(result["error_code"], "SNAPSHOT_HASH_MISMATCH")
+        self.assertEqual(get.await_count, 2)
+        post.assert_not_awaited()
+
     async def test_expected_plan_hash_mismatch_stops_before_host_call(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
