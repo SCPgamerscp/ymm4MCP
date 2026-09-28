@@ -1,4 +1,4 @@
-param([switch]$ConfigureClaudeDesktop)
+param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection)
 $ErrorActionPreference = 'Stop'
 $serverDir = $PSScriptRoot
 $venvDir = Join-Path $serverDir '.venv'
@@ -61,3 +61,7 @@ if (-not $ConfigureClaudeDesktop) {
 }
 Write-Output ($entry | ConvertTo-Json -Depth 3)
 Write-Output '接続トークンは YMM4 プラグインの接続ファイルから自動取得します。'
+if ($CheckConnection) {
+    & $venvPython (Join-Path $serverDir 'check_connection.py')
+    if ($LASTEXITCODE -ne 0) { throw 'YMM4プラグインへの接続確認に失敗しました。' }
+}
