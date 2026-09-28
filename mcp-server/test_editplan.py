@@ -217,6 +217,16 @@ class DiffAndReplayTests(unittest.TestCase):
 
 
 class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expected_plan_hash_mismatch_stops_before_host_call(self):
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "apply_edit", **sample_plan(),
+                                            "expected_plan_hash": "0" * 64})
+        self.assertEqual(result["error_code"], "PLAN_HASH_MISMATCH")
+        self.assertEqual(len(result["actual_plan_hash"]), 64)
+        get.assert_not_awaited()
+        post.assert_not_awaited()
+
     async def test_actual_voice_length_stops_next_scene_before_overlap(self):
         args = {"action": "apply_edit", "plan": {"scenes": [
             {"id": "intro", "items": [{"id": "voice", "type": "voice",
