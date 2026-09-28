@@ -1272,8 +1272,22 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     scene_reports = []
     added = 0
     op_index = -1
+    previous_scene_id = None
+    planned_starts = {scene["id"]: scene["start_frame"] for scene in plan["scenes"]}
     for scene in editplan.group_ops_by_scene(preview["ops"]):
         scene_id = scene["id"]
+        if previous_scene_id is not None and cursor[previous_scene_id] > planned_starts[scene_id]:
+            binding_error = await _persist_edit_bindings(plan, bindings)
+            result = {"success": False, "error_code": "SCENE_BOUNDARY_CONFLICT",
+                      "error": "前のシーンの実尺が次のシーンの開始位置を越えました。次のシーンは追加していません",
+                      "previous_scene": previous_scene_id, "next_scene": scene_id,
+                      "actual_end_frame": cursor[previous_scene_id],
+                      "next_start_frame": planned_starts[scene_id], "added": added,
+                      "details": details, "committed_scenes": committed,
+                      "scenes": scene_reports, "rolled_back": False}
+            if binding_error:
+                result["binding_error"] = binding_error
+            return result
         scene_added_ids = []
         scene_bindings = []
         scene_details = []
@@ -1345,6 +1359,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         scene_reports.append({
             "id": scene_id, "status": "committed", "added": scene_added, "kept": scene_kept,
         })
+        previous_scene_id = scene_id
 
     try:
         verified_snapshot = await ymm4_get("/items")
