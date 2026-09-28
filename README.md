@@ -13,20 +13,20 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
 1. [Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) から最新版の `YMM4McpPlugin-*.ymme` をダウンロードします。YMM4を閉じて `.ymme` をダブルクリックし、YMM4の案内に従ってインストールします。利用者は `YMM4_PATH` や .NET SDK を設定する必要はありません。
 2. YMM4を起動します。新規インストールではプラグインのHTTPサーバーが自動起動します。「ツール」→「MCP連携サーバー」で状態を確認できます。既に自動起動を無効にしている場合は、この画面の「▶ 起動」を押します。
-3. 同じ Release の `YMM4McpServer-*.zip` を展開し、`mcp-server` で依存関係をインストールします（Pythonが必要です）。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
+3. 同じ Release の `YMM4McpServer-*.zip` を展開し、`mcp-server` の `setup.ps1` を実行します（Python 3 が必要です）。専用の仮想環境に依存関係を入れ、MCP設定に使う実際のパスを表示します。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
 
    ```powershell
    cd C:\path\to\ymm4MCP\mcp-server
-   python -m pip install -r requirements.txt
+   .\setup.ps1
    ```
 
-4. Claude Desktopの `%APPDATA%\Claude\claude_desktop_config.json` にMCPサーバーを追加します。`args` は取得したソースコードの実際の場所に置き換えてください。
+4. Claude Desktopの `%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示した JSON を設定します。手動設定する場合は、展開したフォルダ内の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定します。
 
    ```json
    {
      "mcpServers": {
        "ymm4": {
-         "command": "python",
+         "command": "C:/path/to/ymm4MCP/mcp-server/.venv/Scripts/python.exe",
          "args": ["C:/path/to/ymm4MCP/mcp-server/server.py"]
        }
      }
