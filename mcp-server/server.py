@@ -154,6 +154,7 @@ TOOLS = [
                 },
                 "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template/duck_bgm: 検証と予定のみ。編集なし。duck_bgmの既定はtrue"},
                 "check_characters": {"type": "boolean", "description": "add_script dry_run: YMM4の登録キャラ名との一致を読み取り検査する"},
+                "use_project_fps": {"type": "boolean", "description": "add_script: YMM4プロジェクトから検出したFPSで仮尺を算出する。取得不能時は停止"},
                 "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
@@ -1006,7 +1007,22 @@ async def dispatch(args: dict) -> Any:
 
 async def add_script(args: dict) -> dict:
     """Validate the entire script first; never continue after failed/unknown synthesis."""
-    plan = plan_script(args)
+    use_project_fps = args.get("use_project_fps", False)
+    if not isinstance(use_project_fps, bool):
+        raise ValueError("use_project_fps must be boolean")
+    if use_project_fps and "fps" in args:
+        raise ValueError("fps and use_project_fps cannot be combined")
+    if use_project_fps:
+        plan_script(args)  # Reject malformed lines before accessing the host.
+        project = await ymm4_get("/project")
+        fps = project.get("fps") if isinstance(project, dict) and project.get("success") is True else None
+        if isinstance(fps, bool) or not isinstance(fps, int) or not 1 <= fps <= 240:
+            return {"success": False, "error_code": "PROJECT_FPS_UNAVAILABLE",
+                    "error": "プロジェクトのFPSを確認できません。編集前に設定を確認してください", "details": project}
+        plan = plan_script({**args, "fps": fps})
+        plan["fps_used"] = fps
+    else:
+        plan = plan_script(args)
     check_characters = args.get("check_characters", False)
     if not isinstance(check_characters, bool):
         raise ValueError("check_characters must be boolean")

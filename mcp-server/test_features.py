@@ -246,6 +246,24 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
         get.assert_awaited_once_with("/characters")
         post.assert_not_awaited()
 
+    async def test_script_can_use_verified_project_fps_without_editing(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True, "fps": 60})) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.add_script({"dry_run": True, "use_project_fps": True,
+                                             "lines": [{"character": "霊夢", "text": "hi"}]})
+        self.assertEqual(result["fps_used"], 60)
+        self.assertEqual(result["details"][0]["length"], 60)
+        get.assert_awaited_once_with("/project")
+        post.assert_not_awaited()
+
+    async def test_script_unknown_fps_stops_before_mutation(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True, "fps": None})), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.add_script({"use_project_fps": True,
+                                             "lines": [{"character": "霊夢", "text": "hi"}]})
+        self.assertEqual(result["error_code"], "PROJECT_FPS_UNAVAILABLE")
+        post.assert_not_awaited()
+
     async def test_script_preflight_and_actual_duration(self):
         lines = [{"character": "A", "text": "one"}, {"character": "A", "text": "two"}]
         added = [{"success": True, "item_id": "native:one", "revision": "r1", "frame": 10, "layer": 0, "length": 95},
