@@ -156,6 +156,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 > **重なり防止の核心**: `POST /api/items/voice`（およびadd_script）は、`AddVoiceItemAsync`完了後に
 > タイムラインを走査して**実際の音声長(`length`/フレーム数)と`endFrame`を取得して返す**ようになりました。
 > add_scriptはこの実長を使って次のセリフ開始位置を決めるため、文字数推定のズレによる重なりが根絶されます。
+> 各追加結果の `item_id`、`revision`、`frame`、`layer`、実音声長を次のセリフ追加前に確認し、確定できないときは停止します。
 
 #### 安定したアイテム参照と競合防止
 

@@ -300,6 +300,18 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result["outcome_unknown"])
                 post.assert_awaited_once()
 
+    async def test_script_stops_before_next_voice_on_unverified_placement(self):
+        for response in ({"item_id": "id", "revision": "r", "frame": 1, "layer": 0, "length": 30},
+                         {"item_id": "id", "revision": "r", "frame": 0, "layer": 2, "length": 30},
+                         {"frame": 0, "layer": 0, "length": 30}):
+            with self.subTest(response=response), \
+                 patch.object(server, "ymm4_get", AsyncMock(return_value={"characters": [{"name": "A"}]})), \
+                 patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True, **response})) as post:
+                result = await server.add_script({"lines": [{"character": "A", "text": "one"}] * 2})
+            self.assertEqual(result["error_code"], "VOICE_PLACEMENT_UNVERIFIED")
+            self.assertTrue(result["outcome_unknown"])
+            post.assert_awaited_once()
+
     async def test_script_verification_unavailable_does_not_retry_voice(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
             {"characters": [{"name": "A"}]}, httpx.ReadTimeout(""),
@@ -315,7 +327,7 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_failure_and_unknown_length_stop(self):
         for failure in ({"success": False, "error": "failed"}, {"success": True, "frame": 10, "length": -1}, httpx.ReadTimeout("")):
             with self.subTest(failure=failure), patch.object(server, "ymm4_get", AsyncMock(return_value={"characters": [{"name": "A"}]})), patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-                {"success": True, "frame": 0, "length": 10}, failure,
+                {"success": True, "item_id": "native:first", "revision": "r1", "frame": 0, "layer": 0, "length": 10}, failure,
             ])) as post:
                 result = await server.add_script({"lines": [{"character": "A", "text": "x"}] * 3})
                 self.assertFalse(result["success"])

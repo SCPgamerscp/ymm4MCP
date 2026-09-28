@@ -1112,6 +1112,7 @@ async def add_script(args: dict) -> dict:
     gap = args.get("gap", 0)
     results = []
     for index, line in enumerate(plan["details"]):
+        requested_frame = frame
         try:
             res = await ymm4_post("/items/voice", {
                 "text": line["text"], "character": line["character"],
@@ -1130,12 +1131,21 @@ async def add_script(args: dict) -> dict:
         try:
             length = integer(res.get("length"), "actual voice length", 1)
             actual_frame = integer(res.get("frame"), "actual frame")
+            actual_layer = integer(res.get("layer"), "actual layer")
             frame = integer(actual_frame + length + gap, "next frame")
         except ValueError:
             return {"success": False, "error_code": "VOICE_LENGTH_UNKNOWN",
                     "error": "追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
                     "added": len(results), "failed_line": index, "details": results,
                     "rolled_back": False}
+        if actual_frame != requested_frame or \
+                actual_layer != line["layer"] or \
+                not isinstance(res.get("item_id"), str) or not res["item_id"] or \
+                not isinstance(res.get("revision"), str) or not res["revision"]:
+            return {"success": False, "error_code": "VOICE_PLACEMENT_UNVERIFIED",
+                    "error": "追加結果の位置またはIDを確認できません。itemsを確認してください",
+                    "added": len(results), "failed_line": index, "details": results,
+                    "outcome_unknown": True, "rolled_back": False}
     try:
         snapshot = await ymm4_get("/items")
     except httpx.HTTPError as exc:
