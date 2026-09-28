@@ -11,6 +11,50 @@ Y = {"success": True, "revision": "r1", "animations": [
 
 
 class JumpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shake_uses_x_axis_and_bounded_five_point_pattern(self):
+        x = {"success": True, "revision": "r1", "animations": [
+            {"prop": "X", "keyframes": [{"at": 0, "value": 100}]}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, x])) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "shake_tachie", "item_id": "tachie:1",
+                                            "at": 20, "duration_frames": 8, "shake_distance": 25})
+        self.assertEqual(result["keyframes"], [
+            {"at": 20, "value": 100}, {"at": 22, "value": 125},
+            {"at": 24, "value": 75}, {"at": 26, "value": 125},
+            {"at": 28, "value": 100}])
+        self.assertIn("prop=X", get.await_args_list[1].args[0])
+        post.assert_not_awaited()
+
+    async def test_shake_rejects_existing_x_animation(self):
+        x = {"success": True, "revision": "r1", "animations": [
+            {"prop": "X", "keyframes": [{"at": 0, "value": 100}, {"at": 3, "value": 120}]}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, x])), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "shake_tachie", "item_id": "tachie:1",
+                                            "dry_run": False})
+        self.assertEqual(result["error_code"], "TACHIE_HAS_EXISTING_X_KEYFRAMES")
+        post.assert_not_awaited()
+
+    async def test_shake_applies_five_x_keys_with_revision_chain(self):
+        x = {"success": True, "revision": "r1", "animations": [
+            {"prop": "X", "keyframes": [{"at": 0, "value": 100}]}]}
+        points = [{"at": at, "value": value} for at, value in
+                  [(20, 100), (22, 125), (24, 75), (26, 125), (28, 100)]]
+        checked = {"success": True, "revision": "r6", "animations": [
+            {"prop": "X", "keyframes": [{"at": 0, "value": 100}, *points]}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                ITEMS, x, {"success": True, "isSaved": True}, checked])), \
+             patch.object(server, "ymm4_post", AsyncMock(side_effect=[
+                 {"success": True, "backup_path": "C:/backup.ymmp"},
+                 *({"success": True, "revision": f"r{i}"} for i in range(2, 7))])) as post:
+            result = await server.dispatch({"action": "shake_tachie", "item_id": "tachie:1",
+                                            "at": 20, "duration_frames": 8,
+                                            "shake_distance": 25, "dry_run": False})
+        self.assertTrue(result["verified"])
+        self.assertEqual([call.args[1]["expected_revision"] for call in post.await_args_list[1:]],
+                         ["r1", "r2", "r3", "r4", "r5"])
+        self.assertTrue(all(call.args[1]["prop"] == "X" for call in post.await_args_list[1:]))
+
     async def test_dry_run_plans_without_mutation(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, Y])) as get, \
              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
