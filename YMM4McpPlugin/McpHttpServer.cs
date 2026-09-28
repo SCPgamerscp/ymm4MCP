@@ -1116,21 +1116,38 @@ namespace YMM4McpPlugin
                     .FirstOrDefault(p => p.Name.Contains("FaceParameter") || p.Name.Contains("FaceParam"));
                 var faceParam = fpProp?.GetValue(targetItem);
                 var results = new System.Collections.Generic.List<string>();
+                var pending = new System.Collections.Generic.List<(PropertyInfo property, object owner, object? value, string name)>();
+                // Resolve and convert every requested parameter before setting any of them.
+                // A typo or invalid value must not leave a partially edited face item.
                 foreach (var kv in b)
                 {
                     if (kv.Key is "frame" or "layer" or "item_id" or "expected_revision") continue;
-                    // アイテム直接のプロパティ
                     var directProp = targetItem.GetType().GetProperty(kv.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (directProp != null) { try { directProp.SetValue(targetItem, Convert.ChangeType(kv.Value.GetString() ?? kv.Value.ToString(), directProp.PropertyType)); results.Add($"{kv.Key}=OK(item)"); } catch (Exception ex) { results.Add($"{kv.Key}=NG({ex.Message})"); } continue; }
-                    // FaceParameter内のプロパティ
-                    if (faceParam != null)
+                    var nestedProp = faceParam?.GetType().GetProperty(kv.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    var prop = directProp ?? nestedProp;
+                    var owner = directProp != null ? targetItem : faceParam;
+                    if (prop == null || owner == null || !prop.CanWrite || prop.GetIndexParameters().Length != 0)
                     {
-                        var fp2 = faceParam.GetType().GetProperty(kv.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        if (fp2 != null) { try { fp2.SetValue(faceParam, Convert.ChangeType(kv.Value.GetString() ?? kv.Value.ToString(), fp2.PropertyType)); results.Add($"{kv.Key}=OK(faceParam)"); } catch (Exception ex) { results.Add($"{kv.Key}=NG({ex.Message})"); } continue; }
+                        results.Add($"{kv.Key}=NOTFOUND");
+                        continue;
                     }
-                    results.Add($"{kv.Key}=NOTFOUND");
+                    try
+                    {
+                        var raw = kv.Value.ValueKind == JsonValueKind.String ? kv.Value.GetString() : kv.Value.ToString();
+                        var type = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                        object? value = type.IsEnum ? Enum.Parse(type, raw ?? "", true) : Convert.ChangeType(raw, type);
+                        pending.Add((prop, owner, value, kv.Key));
+                    }
+                    catch (Exception ex) { results.Add($"{kv.Key}=NG({ex.Message})"); }
                 }
-                bool changed = results.Any(result => result.Contains("=OK(", StringComparison.Ordinal));
+                if (results.Count > 0)
+                    return (object)new { success = false, changed = false, error_code = "FACE_PARAM_INVALID", results };
+                foreach (var change in pending)
+                {
+                    try { change.property.SetValue(change.owner, change.value); results.Add($"{change.name}=OK"); }
+                    catch (Exception ex) { results.Add($"{change.name}=NG({ex.Message})"); break; }
+                }
+                bool changed = results.Any(result => result.EndsWith("=OK", StringComparison.Ordinal));
                 if (changed)
                 {
                     MarkItemChanged(targetItem);
@@ -1138,7 +1155,8 @@ namespace YMM4McpPlugin
                     var model = vm == null ? null : GetMainModel(vm);
                     if (model != null) TryRecordHistory(model);
                 }
-                bool complete = changed && results.All(result => result.Contains("=OK(", StringComparison.Ordinal));
+                bool complete = changed && results.Count == pending.Count &&
+                    results.All(result => result.EndsWith("=OK", StringComparison.Ordinal));
                 return (object)new { success = complete, changed, item_id = GetItemIdentity(targetItem).id,
                     revision = GetItemRevision(targetItem), results,
                     error_code = complete ? null : changed ? "FACE_PARAM_PARTIAL" : "FACE_PARAM_UNCHANGED",
