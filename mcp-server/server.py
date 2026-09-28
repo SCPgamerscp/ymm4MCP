@@ -134,7 +134,7 @@ TOOLS = [
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
             "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
             "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御), "
-            "'set_expression'(表情名からFacePathへ安全に変換)、'jump_tachie'(立ち絵のY座標リアクション)を指定する。"
+            "'set_expression'(表情名からFacePathへ安全に変換)、'jump_tachie'/'shake_tachie'(立ち絵のリアクション)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -142,7 +142,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
-                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression", "jump_tachie"],
+                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression", "jump_tachie", "shake_tachie"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -162,6 +162,7 @@ TOOLS = [
                 "expression_map": {"type": "object", "description": "set_expression: 表情名からYMM4のFacePathへの明示的な対応表"},
                 "duration_frames": {"type": "integer", "minimum": 2, "maximum": 120, "description": "jump_tachie: ジャンプの長さ"},
                 "jump_height": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "jump_tachie: Y座標の上方向の移動量"},
+                "shake_distance": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "shake_tachie: X座標の左右移動量"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
@@ -699,15 +700,26 @@ async def set_expression(args: dict) -> dict:
 
 
 async def jump_tachie(args: dict) -> dict:
-    """Plan a three-point Y reaction on a tachie with an untouched Y animation."""
+    return await _tachie_reaction(args, shake=False)
+
+
+async def shake_tachie(args: dict) -> dict:
+    return await _tachie_reaction(args, shake=True)
+
+
+async def _tachie_reaction(args: dict, *, shake: bool) -> dict:
+    """Plan a bounded reaction on an untouched axis, then verify the applied points."""
+    action_name = "shake_tachie" if shake else "jump_tachie"
+    prop = "X" if shake else "Y"
+    distance_name = "shake_distance" if shake else "jump_height"
     item_id = args.get("item_id")
     if not isinstance(item_id, str) or not item_id.strip():
-        raise ValueError("jump_tachie requires item_id")
+        raise ValueError(f"{action_name} requires item_id")
     at = integer(args.get("at", 0), "at")
-    duration = integer(args.get("duration_frames", 12), "duration_frames", 2, 120)
-    height = finite_number(args.get("jump_height", 40), "jump_height")
-    if not 0 < height <= 500:
-        raise ValueError("jump_height must be in (0, 500]")
+    duration = integer(args.get("duration_frames", 12), "duration_frames", 4 if shake else 2, 120)
+    distance = finite_number(args.get(distance_name, 30 if shake else 40), distance_name)
+    if not 0 < distance <= 500:
+        raise ValueError(f"{distance_name} must be in (0, 500]")
     dry_run = args.get("dry_run", True)
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
@@ -730,20 +742,26 @@ async def jump_tachie(args: dict) -> dict:
     length = integer(item.get("length"), "tachie length", 1)
     if at + duration >= length:
         return {"success": False, "error_code": "JUMP_OUTSIDE_ITEM"}
-    key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Y"
+    key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop={prop}"
     state = await ymm4_get(key_path)
     if not isinstance(state, dict) or state.get("success") is not True or state.get("revision") != revision:
         return {"success": False, "error_code": "TACHIE_KEYFRAMES_UNAVAILABLE", "details": state}
-    animations = [a for a in (state.get("animations") or []) if isinstance(a, dict) and a.get("prop") == "Y"]
+    animations = [a for a in (state.get("animations") or []) if isinstance(a, dict) and a.get("prop") == prop]
     if len(animations) != 1:
-        return {"success": False, "error_code": "TACHIE_Y_UNSUPPORTED"}
+        return {"success": False, "error_code": f"TACHIE_{prop}_UNSUPPORTED"}
     keys = animations[0].get("keyframes")
     if not isinstance(keys, list) or len(keys) != 1 or not isinstance(keys[0], dict) or keys[0].get("at") != 0:
-        return {"success": False, "error_code": "TACHIE_HAS_EXISTING_Y_KEYFRAMES"}
-    baseline = finite_number(keys[0].get("value"), "baseline Y")
-    points = [{"at": at, "value": baseline},
-              {"at": at + duration // 2, "value": baseline - height},
-              {"at": at + duration, "value": baseline}]
+        return {"success": False, "error_code": f"TACHIE_HAS_EXISTING_{prop}_KEYFRAMES"}
+    baseline = finite_number(keys[0].get("value"), f"baseline {prop}")
+    points = ([{"at": at, "value": baseline},
+               {"at": at + duration // 4, "value": baseline + distance},
+               {"at": at + duration // 2, "value": baseline - distance},
+               {"at": at + duration * 3 // 4, "value": baseline + distance},
+               {"at": at + duration, "value": baseline}]
+              if shake else
+              [{"at": at, "value": baseline},
+               {"at": at + duration // 2, "value": baseline - distance},
+               {"at": at + duration, "value": baseline}])
     result = {"success": True, "dry_run": dry_run, "item_id": item_id,
               "revision": revision, "keyframes": points}
     if dry_run:
@@ -751,7 +769,7 @@ async def jump_tachie(args: dict) -> dict:
     project = await ymm4_get("/project")
     if not isinstance(project, dict) or project.get("success") is not True or project.get("isSaved") is not True:
         return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
-    checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before tachie jump"})
+    checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": f"Before tachie {'shake' if shake else 'jump'}"})
     backup = checkpoint.get("backup_path") if isinstance(checkpoint, dict) else None
     if not isinstance(checkpoint, dict) or checkpoint.get("success") is not True or not isinstance(backup, str) or not backup:
         return {"success": False, "error_code": "TACHIE_BACKUP_REQUIRED", "details": checkpoint}
@@ -759,7 +777,7 @@ async def jump_tachie(args: dict) -> dict:
     for point in points:
         try:
             changed = await ymm4_post("/items/keyframe", {"item_id": item_id, "expected_revision": revision,
-                                                           "prop": "Y", "action": "set", **point})
+                                                           "prop": prop, "action": "set", **point})
         except httpx.HTTPError as exc:
             return {"success": False, "error_code": "TACHIE_JUMP_OUTCOME_UNKNOWN", "error": str(exc),
                     "applied": applied, "backup_path": backup, "outcome_unknown": True}
@@ -775,12 +793,12 @@ async def jump_tachie(args: dict) -> dict:
         return {"success": False, "error_code": "TACHIE_JUMP_VERIFY_UNKNOWN", "error": str(exc),
                 "applied": applied, "backup_path": backup, "outcome_unknown": True}
     found = next((a.get("keyframes", []) for a in (checked.get("animations") or [])
-                  if isinstance(a, dict) and a.get("prop") == "Y"), []) if isinstance(checked, dict) and checked.get("success") is True else []
+                  if isinstance(a, dict) and a.get("prop") == prop), []) if isinstance(checked, dict) and checked.get("success") is True else []
     def matches_point(key, point):
         if not isinstance(key, dict) or key.get("at") != point["at"]:
             return False
         try:
-            return abs(finite_number(key.get("value"), "Y value") - point["value"]) < 1e-6
+            return abs(finite_number(key.get("value"), f"{prop} value") - point["value"]) < 1e-6
         except ValueError:
             return False
     if checked.get("revision") != revision or not all(
@@ -795,6 +813,8 @@ async def dispatch(args: dict) -> Any:
     sub_action = args.get("sub_action")
     
     match action:
+        case "shake_tachie":
+            return await shake_tachie(args)
         case "jump_tachie":
             return await jump_tachie(args)
         case "set_expression":
