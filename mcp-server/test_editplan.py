@@ -217,6 +217,23 @@ class DiffAndReplayTests(unittest.TestCase):
 
 
 class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_project_settings_gate_blocks_wrong_fps_before_edit(self):
+        async def get(path):
+            if path == "/characters": return {"success": True, "characters": []}
+            if path == "/items": return {"success": True, "items": []}
+            if path == "/edits/state": return {"success": True, "bindings": []}
+            if path == "/project": return {"success": True, "fps": 60}
+            raise AssertionError(path)
+        args = {**one_text_plan(), "check_project_settings": True}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            preview = await server.dispatch({"action": "plan_edit", **args})
+            applied = await server.dispatch({"action": "apply_edit", **args})
+        self.assertFalse(preview["passed"])
+        self.assertEqual(preview["warnings"][-1]["code"], "PROJECT_SETTINGS_MISMATCH")
+        self.assertEqual(applied["error_code"], "PROJECT_SETTINGS_MISMATCH")
+        post.assert_not_awaited()
+
     def _patches(self, items, characters, posts):
         async def get(path):
             if path == "/characters":
