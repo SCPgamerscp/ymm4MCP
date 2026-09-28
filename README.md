@@ -309,7 +309,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 ### `ymm4_interact`（操作系）
 
-`get_info/scenes` は `scene_ranges=[{"id":"intro","start_frame":0,"end_frame":300}, ...]` を指定し、現在のタイムラインをシーン範囲ごとに読み取ります。境界をまたぐアイテムは両側に `crosses_boundary=true` で現れ、どの範囲にも入らないアイテムは `unassigned_item_ids` に含まれます。範囲は呼び出し側が定義し、YMM4プロジェクトには保存されません。
+`get_info/scenes` は `scene_ranges=[{"id":"intro","start_frame":0,"end_frame":300}, ...]` を指定し、現在のタイムラインをシーン範囲ごとに読み取ります。境界をまたぐアイテムは両側に `crosses_boundary=true` で現れ、シーン内で見える半開区間を `visible_start_frame` / `visible_end_frame` とシーン相対位置で返します。どの範囲にも入らないアイテムは `unassigned_item_ids` に含まれます。範囲は呼び出し側が定義し、YMM4プロジェクトには保存されません。
 
 | action | sub_action | 説明 |
 |---|---|---|
