@@ -58,7 +58,9 @@ ymm4プラグイン/
 │   ├── McpHttpServer.cs        # HTTPサーバー (port 8765)
 │   ├── McpJobs.cs              # ジョブ状態・cancel/resume
 │   ├── McpExport.cs            # 完成動画書き出し・プロジェクトopen/save-as
-│   ├── McpPreview.cs           # プレビュー撮影・録音・watch・クリップ書き出し\n│   ├── McpEdits.cs             # EditPlan状態・idempotencyバインディング・checkpoint
+│   ├── McpPreview.cs           # プレビュー撮影・録音・watch・クリップ書き出し
+│   ├── McpReflectionApi.cs     # 高度なReflection APIとコマンド探索
+│   ├── McpEdits.cs             # EditPlan状態・idempotencyバインディング・checkpoint
 │   ├── McpKeyframes.cs         # Animationキーフレーム
 │   ├── McpEditing.cs           # 安定ID・revision・素材追加
 │   ├── McpViewModel.cs         # ViewModel (起動/停止UI)
