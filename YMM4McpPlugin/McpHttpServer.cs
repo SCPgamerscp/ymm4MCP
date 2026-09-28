@@ -2551,16 +2551,14 @@ namespace YMM4McpPlugin
 
                 using var capture = new NAudio.Wave.WasapiLoopbackCapture();
                 var waveFormat = capture.WaveFormat;
-                var buffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
+                var buffer = new OrderedAudioChunks();
                 var tcs = new TaskCompletionSource<bool>();
 
                 capture.DataAvailable += (s, e) =>
                 {
                     if (e.BytesRecorded > 0)
                     {
-                        var chunk = new byte[e.BytesRecorded];
-                        Buffer.BlockCopy(e.Buffer, 0, chunk, 0, e.BytesRecorded);
-                        buffer.Add(chunk);
+                        buffer.Add(e.Buffer, e.BytesRecorded);
                     }
                 };
                 capture.RecordingStopped += (s, e) => tcs.TrySetResult(true);
@@ -2575,7 +2573,7 @@ namespace YMM4McpPlugin
                     await Task.WhenAny(tcs.Task, Task.Delay(2000));
 
                     // バッファを結合
-                    var allBytes = buffer.SelectMany(b => b).ToArray();
+                    var allBytes = buffer.ToArray();
 
                     // WAVヘッダーを付けてbase64化
                     using var ms = new MemoryStream();
@@ -2629,15 +2627,13 @@ namespace YMM4McpPlugin
                 // 2) 録音・再生・キャプチャを並行実行
                 using var capture = new NAudio.Wave.WasapiLoopbackCapture();
                 var waveFormat = capture.WaveFormat;
-                var audioBuffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
+                var audioBuffer = new OrderedAudioChunks();
                 var recordTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 capture.DataAvailable += (s, e) =>
                 {
                     if (e.BytesRecorded > 0)
                     {
-                        var chunk = new byte[e.BytesRecorded];
-                        Buffer.BlockCopy(e.Buffer, 0, chunk, 0, e.BytesRecorded);
-                        audioBuffer.Add(chunk);
+                        audioBuffer.Add(e.Buffer, e.BytesRecorded);
                     }
                 };
                 capture.RecordingStopped += (s, e) => recordTcs.TrySetResult(true);
@@ -2669,7 +2665,7 @@ namespace YMM4McpPlugin
                     await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
                     await captureTask;
 
-                    var allBytes = audioBuffer.SelectMany(b => b).ToArray();
+                    var allBytes = audioBuffer.ToArray();
                     using var ms = new MemoryStream();
                     using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
                         writer.Write(allBytes, 0, allBytes.Length);
@@ -2816,7 +2812,7 @@ namespace YMM4McpPlugin
                 try { var f = GetProjectFps(); var fp = f.GetType().GetProperty("fps")?.GetValue(f); if (fp != null) int.TryParse(fp.ToString(), out fps); } catch { }
                 if (fps <= 0) fps = 30;
 
-                System.Collections.Concurrent.ConcurrentBag<byte[]>? audioBuffer = null;
+                OrderedAudioChunks? audioBuffer = null;
                 NAudio.Wave.WaveFormat? waveFormat = null;
                 string? wavPath = null;
 
@@ -2829,15 +2825,13 @@ namespace YMM4McpPlugin
                     await Task.Delay(200);
                     capture = new NAudio.Wave.WasapiLoopbackCapture();
                     waveFormat = capture.WaveFormat;
-                    audioBuffer = new System.Collections.Concurrent.ConcurrentBag<byte[]>();
+                    audioBuffer = new OrderedAudioChunks();
                     recordTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     capture.DataAvailable += (s, e) =>
                     {
                         if (e.BytesRecorded > 0)
                         {
-                            var chunk = new byte[e.BytesRecorded];
-                            Buffer.BlockCopy(e.Buffer, 0, chunk, 0, e.BytesRecorded);
-                            audioBuffer.Add(chunk);
+                            audioBuffer.Add(e.Buffer, e.BytesRecorded);
                         }
                     };
                     capture.RecordingStopped += (s, e) => recordTcs.TrySetResult(true);
@@ -2883,7 +2877,7 @@ namespace YMM4McpPlugin
                     try { await InvokeAsyncMethod(preview, "StopAsync"); } catch { }
                     try { capture.StopRecording(); } catch { }
                     await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
-                    var allBytes = audioBuffer.SelectMany(b => b).ToArray();
+                    var allBytes = audioBuffer.ToArray();
                     wavPath = System.IO.Path.Combine(outputDir, "audio.wav");
                     using (var fs = new FileStream(wavPath, FileMode.Create))
                     using (var writer = new NAudio.Wave.WaveFileWriter(fs, waveFormat))

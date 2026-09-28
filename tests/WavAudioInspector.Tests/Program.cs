@@ -7,6 +7,14 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+var chunks = new OrderedAudioChunks();
+var reusedBuffer = new byte[] { 1, 2, 9 };
+chunks.Add(reusedBuffer, 2);
+reusedBuffer[0] = 8;
+chunks.Add(new byte[] { 3, 4 }, 2);
+Check(chunks.ToArray().SequenceEqual(new byte[] { 1, 2, 3, 4 }),
+    "WASAPI chunks must preserve callback order and copy reusable buffers");
+
 static byte[] Wave(short[] samples, int channels = 2, int rate = 8000)
 {
     byte[] data = new byte[samples.Length * 2];
