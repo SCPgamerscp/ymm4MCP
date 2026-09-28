@@ -363,6 +363,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 複数の `face_param` を同時に送る場合、名前と値の変換をすべて事前検証します。不明な名前や変換できない値があれば `FACE_PARAM_INVALID` を返し、どの値も変更しません。YMM4 側の setter が実行中に失敗した場合は変更済みの可能性があるため、戻り値の `changed` と `outcome_unknown` を確認してください。
 
+`action="set_expression"` は `item_id`、`expression`（例: `angry`）、`expression_map={"angry":"C:/faces/angry.png"}` を受け取ります。現在の FaceItem と revision を確認し、表情名を明示した `FacePath` に変換します。既定の `dry_run=true` では編集しません。`dry_run=false` と `expected_revision` を指定すると、競合を検出して一つの顔アイテムを変更します。表情素材の対応表はプロジェクトごとに指定してください。
+
 `edit_item/property` は設定後に同じプロパティを読み直し、要求値と一致したときだけ `verified: true` を返します。YMM4側で値が丸められた、または拒否された場合は `PROPERTY_VERIFY_FAILED` と実際の値を返します。setterの例外や読み取り失敗は `outcome_unknown: true` です。失敗後は再送前に `items` で現在状態を確認してください。
 
 **add_scriptのパラメータ：**

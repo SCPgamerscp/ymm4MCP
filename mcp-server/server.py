@@ -132,7 +132,8 @@ TOOLS = [
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
             "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
-            "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御)を指定する。"
+            "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御), "
+            "'set_expression'(表情名からFacePathへ安全に変換)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -140,7 +141,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
-                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm"],
+                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -152,9 +153,11 @@ TOOLS = [
                         "編集(face_param,property,effect,delete,duration,move,select,resolve_overlaps,shift,keyframe)のいずれか"
                     )
                 },
-                "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template/duck_bgm: 検証と予定のみ。編集なし。duck_bgmの既定はtrue"},
+                "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template/duck_bgm/set_expression: 検証と予定のみ。duck_bgm/set_expressionの既定はtrue"},
                 "check_characters": {"type": "boolean", "description": "add_script dry_run: YMM4の登録キャラ名との一致を読み取り検査する"},
                 "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
+                "expression": {"type": "string", "description": "set_expression: expression_map 内の表情名"},
+                "expression_map": {"type": "object", "description": "set_expression: 表情名からYMM4のFacePathへの明示的な対応表"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
@@ -626,11 +629,64 @@ async def run_bgm_ducking(args: dict) -> dict:
     return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
 
 
+async def set_expression(args: dict) -> dict:
+    """Resolve a caller-supplied expression label to one FaceItem update."""
+    item_id = args.get("item_id")
+    expression = args.get("expression")
+    mapping = args.get("expression_map")
+    dry_run = args.get("dry_run", True)
+    if not isinstance(item_id, str) or not item_id.strip():
+        raise ValueError("set_expression requires item_id")
+    if not isinstance(expression, str) or not 1 <= len(expression) <= 64:
+        raise ValueError("expression must be a nonempty label of at most 64 characters")
+    if not isinstance(mapping, dict) or not 1 <= len(mapping) <= 50 or any(
+            not isinstance(k, str) or not k or len(k) > 64 or
+            not isinstance(v, str) or not v.strip() or len(v) > 1024
+            for k, v in mapping.items()):
+        raise ValueError("expression_map must contain 1..50 valid label-to-FacePath entries")
+    if expression not in mapping:
+        raise ValueError("expression is not defined in expression_map")
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be boolean")
+    expected = args.get("expected_revision")
+    if expected is not None and (not isinstance(expected, str) or not expected):
+        raise ValueError("expected_revision must be a nonempty string")
+    snapshot = await ymm4_get("/items")
+    if not isinstance(snapshot, dict) or snapshot.get("success") is False or "error" in snapshot or \
+            not isinstance(snapshot.get("items"), list):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    matches = [item for item in snapshot["items"] if isinstance(item, dict) and item.get("item_id") == item_id]
+    if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("faceitem"):
+        return {"success": False, "error_code": "FACE_ITEM_NOT_FOUND", "item_id": item_id}
+    revision = matches[0].get("revision")
+    if not isinstance(revision, str) or not revision:
+        return {"success": False, "error_code": "FACE_REVISION_UNAVAILABLE", "item_id": item_id}
+    if expected is not None and expected != revision:
+        return {"success": False, "error_code": "REVISION_CONFLICT", "item_id": item_id}
+    result = {"success": True, "dry_run": dry_run, "item_id": item_id,
+              "expression": expression, "face_path": mapping[expression], "revision": revision}
+    if dry_run:
+        return result
+    try:
+        changed = await ymm4_post("/items/face/param", {
+            "item_id": item_id, "expected_revision": revision, "FacePath": mapping[expression]})
+    except httpx.HTTPError as exc:
+        return {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
+                "item_id": item_id, "outcome_unknown": True, "error": str(exc)}
+    if not isinstance(changed, dict) or changed.get("success") is not True:
+        return {"success": False, "error_code": "EXPRESSION_UPDATE_FAILED",
+                "item_id": item_id, "details": changed}
+    return {**result, "dry_run": False, "revision": changed.get("revision"),
+            "host_result": changed}
+
+
 async def dispatch(args: dict) -> Any:
     action = args.get("action")
     sub_action = args.get("sub_action")
     
     match action:
+        case "set_expression":
+            return await set_expression(args)
         case "duck_bgm":
             return await run_bgm_ducking(args)
         case "create_from_template":
