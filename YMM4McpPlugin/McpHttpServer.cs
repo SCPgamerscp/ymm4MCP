@@ -344,6 +344,7 @@ namespace YMM4McpPlugin
                             endFrame = (long)info.frame + info.length,
                             type = info.type,
                             text = info.text,
+                            source_path = GetPropObj(info.item, "FilePath")?.ToString(),
                         });
                     }
                 }

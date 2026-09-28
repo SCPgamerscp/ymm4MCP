@@ -329,7 +329,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `project` | プロジェクト情報と未保存変更の状態を取得 |
 | `get_info` | `items` | タイムライン全アイテム取得 |
 | `get_info` | `media` | YMM4側の素材ファイルの存在・サイズ・拡張子・最終更新日時を取得。絶対パス `path` を指定 |
-| `get_info` | `assets` | `directory` 内の画像・動画・音声を検索。`query` はファイル名の部分一致、`hash=True` は SHA-256 と重複候補を返す |
+| `get_info` | `assets` | `directory` 内の画像・動画・音声を検索。`query` はファイル名の部分一致、`hash=True` は SHA-256 と重複候補を返す。`include_usage=true` で現在のタイムラインにある素材の `in_use` と `used_by_item_ids` を返す |
 
 | `get_info` | `effects_list` | エフェクト一覧 |
 | `get_info` | `effect_metadata` | `name` でエフェクトの公開設定項目と属性メタデータを取得 |

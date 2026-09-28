@@ -877,7 +877,36 @@ async def dispatch(args: dict) -> Any:
                     if "max_results" in args:
                         integer(args["max_results"], "max_results", 1, 500)
                         params.append(f"max_results={args['max_results']}")
-                    return await ymm4_get("/media/assets?" + "&".join(params))
+                    include_usage = args.get("include_usage", False)
+                    if not isinstance(include_usage, bool):
+                        raise ValueError("include_usage must be boolean")
+                    result = await ymm4_get("/media/assets?" + "&".join(params))
+                    if not include_usage or not isinstance(result, dict) or result.get("success") is not True:
+                        return result
+                    snapshot = await ymm4_get("/items")
+                    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
+                            not isinstance(snapshot.get("items"), list):
+                        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+                    def key(path):
+                        return ntpath.normcase(ntpath.normpath(path.replace("/", "\\")))
+                    used = {}
+                    unknown_media = False
+                    for item in snapshot["items"]:
+                        if isinstance(item, dict) and isinstance(item.get("source_path"), str) and item["source_path"]:
+                            used.setdefault(key(item["source_path"]), []).append(item.get("item_id"))
+                        elif isinstance(item, dict) and str(item.get("type", "")).lower().endswith(
+                                ("videoitem", "audioitem", "imageitem")):
+                            unknown_media = True
+                    assets = result.get("assets")
+                    if not isinstance(assets, list):
+                        return {"success": False, "error_code": "ASSETS_UNAVAILABLE", "details": result}
+                    for asset in assets:
+                        if not isinstance(asset, dict) or not isinstance(asset.get("path"), str):
+                            return {"success": False, "error_code": "ASSETS_UNAVAILABLE", "details": result}
+                        asset["used_by_item_ids"] = used.get(key(asset["path"]), [])
+                        asset["in_use"] = True if asset["used_by_item_ids"] else None if unknown_media else False
+                    result["usage_complete"] = not unknown_media
+                    return result
                 case "effects_list": return await ymm4_get("/effects/list")
                 case "effect_metadata":
                     name = args.get("name")

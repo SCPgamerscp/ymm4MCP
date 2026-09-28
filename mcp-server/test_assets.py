@@ -6,6 +6,33 @@ import server
 
 
 class AssetDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_usage_joins_host_paths_case_insensitively(self):
+        scan = {"success": True, "assets": [{"path": "C:/Media/clip.mp4"},
+                                             {"path": "C:/Media/unused.wav"}]}
+        items = {"items": [{"item_id": "native:1", "source_path": "c:\\media\\CLIP.mp4"}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[scan, items])) as get:
+            result = await server.dispatch({"action": "get_info", "sub_action": "assets",
+                                            "directory": "C:/Media", "include_usage": True})
+        self.assertEqual(get.await_count, 2)
+        self.assertEqual(result["assets"][0]["used_by_item_ids"], ["native:1"])
+        self.assertFalse(result["assets"][1]["in_use"])
+
+    async def test_usage_does_not_claim_unused_when_items_unavailable(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"success": True, "assets": []}, {"error": "unavailable"}])):
+            result = await server.dispatch({"action": "get_info", "sub_action": "assets",
+                                            "directory": "C:/Media", "include_usage": True})
+        self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+
+    async def test_unknown_media_source_does_not_claim_asset_unused(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"success": True, "assets": [{"path": "C:/Media/clip.mp4"}]},
+                {"items": [{"item_id": "native:1", "type": "VideoItem"}]}])):
+            result = await server.dispatch({"action": "get_info", "sub_action": "assets",
+                                            "directory": "C:/Media", "include_usage": True})
+        self.assertIsNone(result["assets"][0]["in_use"])
+        self.assertFalse(result["usage_complete"])
+
     async def test_encoded_query_and_options(self):
         with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True})) as get:
             await server.dispatch({"action": "get_info", "sub_action": "assets",
