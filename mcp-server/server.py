@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import ntpath
+import re
 import sys
 from typing import Any
 from urllib.parse import quote
@@ -164,6 +165,7 @@ TOOLS = [
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
+                "expected_plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: 確認済みplan_editのplan_hash。異なる場合は編集前に停止"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
                 "check_project_settings": {"type": "boolean", "description": "plan_edit/apply_edit: 計画のFPS・解像度が現在のYMM4プロジェクトと一致することを確認する"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
@@ -1255,6 +1257,15 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
 async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     """Validate an EditPlan, optionally replay an idempotent apply, otherwise add only missing items."""
     plan = editplan.parse_plan(args)
+    expected_hash = args.get("expected_plan_hash")
+    if expected_hash is not None:
+        if not isinstance(expected_hash, str) or re.fullmatch(r"[0-9a-f]{64}", expected_hash) is None:
+            raise ValueError("expected_plan_hash must be a lowercase SHA-256 hex digest")
+        actual_hash = editplan.plan_hash(plan)
+        if expected_hash != actual_hash:
+            return {"success": False, "error_code": "PLAN_HASH_MISMATCH",
+                    "expected_plan_hash": expected_hash, "actual_plan_hash": actual_hash,
+                    "rolled_back": False}
     check_project = args.get("check_project_settings", False)
     if not isinstance(check_project, bool):
         raise ValueError("check_project_settings must be boolean")

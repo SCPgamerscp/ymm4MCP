@@ -235,7 +235,7 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
 
-`apply_edit` はシーンをtransactionにします。あるシーンの追加が失敗すると、**そのシーンで追加したアイテムだけ削除**し、先に完了したシーンは残します。`atomic_scenes=false` で旧来どおり部分追加を残すこともできます。通信失敗（追加できたか不明）では自動削除しません。
+`apply_edit` / `reconcile_edit` に `expected_plan_hash` を指定すると、事前に確認した `plan_edit` の SHA-256 と一致しない計画はホストへの通信前に拒否します。\n\n`apply_edit` はシーンをtransactionにします。あるシーンの追加が失敗すると、**そのシーンで追加したアイテムだけ削除**し、先に完了したシーンは残します。`atomic_scenes=false` で旧来どおり部分追加を残すこともできます。通信失敗（追加できたか不明）では自動削除しません。
 Voice の実際の長さが計画より伸びて次のシーンの開始位置を越えた場合は、`SCENE_BOUNDARY_CONFLICT` で次のシーンを追加せず停止します。先に完了したシーンの `details` と実終端を返すので、計画の区間を調整してから再適用してください。
 
 同じキーで計画を変えると `IDEMPOTENCY_KEY_CONFLICT`、適用済みアイテムの revision が変わると `EDIT_STATE_CONFLICT` で編集前に停止します。全シーンが通ったあとは `/api/items` の実状態を照合し、不一致や取得失敗は `EDIT_VERIFY_FAILED`、バインディング保存失敗は `BINDINGS_NOT_SAVED` を返します。これらは追加済みアイテムを巻き戻さないため、`details` と最新の `items` を確認してから再実行してください。再適用情報を読み取れない場合は `BINDINGS_UNAVAILABLE` で編集せず停止します。
