@@ -881,6 +881,9 @@ async def dispatch(args: dict) -> Any:
                     include_usage = args.get("include_usage", False)
                     if not isinstance(include_usage, bool):
                         raise ValueError("include_usage must be boolean")
+                    unused_only = args.get("unused_only", False)
+                    if not isinstance(unused_only, bool) or (unused_only and not include_usage):
+                        raise ValueError("unused_only requires include_usage=true and must be boolean")
                     result = await ymm4_get("/media/assets?" + "&".join(params))
                     if not include_usage or not isinstance(result, dict) or result.get("success") is not True:
                         return result
@@ -907,6 +910,12 @@ async def dispatch(args: dict) -> Any:
                         asset["used_by_item_ids"] = used.get(key(asset["path"]), [])
                         asset["in_use"] = True if asset["used_by_item_ids"] else None if unknown_media else False
                     result["usage_complete"] = not unknown_media
+                    if unused_only:
+                        if unknown_media:
+                            return {"success": False, "error_code": "ASSET_USAGE_UNVERIFIED",
+                                    "error": "素材パス不明のメディア項目があるため未使用と断定できません"}
+                        result["assets"] = [asset for asset in assets if asset["in_use"] is False]
+                        result["unused_only"] = True
                     return result
                 case "effects_list": return await ymm4_get("/effects/list")
                 case "effect_metadata":
