@@ -134,7 +134,7 @@ TOOLS = [
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
             "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
             "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御), "
-            "'set_expression'(表情名からFacePathへ安全に変換)を指定する。"
+            "'set_expression'(表情名からFacePathへ安全に変換)、'jump_tachie'(立ち絵のY座標リアクション)を指定する。"
         ),
         inputSchema={
             "type": "object",
@@ -142,7 +142,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
-                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression"],
+                             "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression", "jump_tachie"],
                     "description": "実行するアクションの種類"
                 },
                 "sub_action": {
@@ -160,6 +160,8 @@ TOOLS = [
                 "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
                 "expression": {"type": "string", "description": "set_expression: expression_map 内の表情名"},
                 "expression_map": {"type": "object", "description": "set_expression: 表情名からYMM4のFacePathへの明示的な対応表"},
+                "duration_frames": {"type": "integer", "minimum": 2, "maximum": 120, "description": "jump_tachie: ジャンプの長さ"},
+                "jump_height": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "jump_tachie: Y座標の上方向の移動量"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
@@ -696,11 +698,105 @@ async def set_expression(args: dict) -> dict:
             "host_result": changed}
 
 
+async def jump_tachie(args: dict) -> dict:
+    """Plan a three-point Y reaction on a tachie with an untouched Y animation."""
+    item_id = args.get("item_id")
+    if not isinstance(item_id, str) or not item_id.strip():
+        raise ValueError("jump_tachie requires item_id")
+    at = integer(args.get("at", 0), "at")
+    duration = integer(args.get("duration_frames", 12), "duration_frames", 2, 120)
+    height = finite_number(args.get("jump_height", 40), "jump_height")
+    if not 0 < height <= 500:
+        raise ValueError("jump_height must be in (0, 500]")
+    dry_run = args.get("dry_run", True)
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be boolean")
+    expected = args.get("expected_revision")
+    if expected is not None and (not isinstance(expected, str) or not expected):
+        raise ValueError("expected_revision must be a nonempty string")
+    snapshot = await ymm4_get("/items")
+    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
+            not isinstance(snapshot.get("items"), list):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    matches = [item for item in snapshot["items"] if isinstance(item, dict) and item.get("item_id") == item_id]
+    if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("tachieitem"):
+        return {"success": False, "error_code": "TACHIE_ITEM_NOT_FOUND"}
+    item = matches[0]
+    revision = item.get("revision")
+    if not isinstance(revision, str) or not revision:
+        return {"success": False, "error_code": "TACHIE_REVISION_UNAVAILABLE"}
+    if expected is not None and expected != revision:
+        return {"success": False, "error_code": "REVISION_CONFLICT"}
+    length = integer(item.get("length"), "tachie length", 1)
+    if at + duration >= length:
+        return {"success": False, "error_code": "JUMP_OUTSIDE_ITEM"}
+    key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Y"
+    state = await ymm4_get(key_path)
+    if not isinstance(state, dict) or state.get("success") is not True or state.get("revision") != revision:
+        return {"success": False, "error_code": "TACHIE_KEYFRAMES_UNAVAILABLE", "details": state}
+    animations = [a for a in (state.get("animations") or []) if isinstance(a, dict) and a.get("prop") == "Y"]
+    if len(animations) != 1:
+        return {"success": False, "error_code": "TACHIE_Y_UNSUPPORTED"}
+    keys = animations[0].get("keyframes")
+    if not isinstance(keys, list) or len(keys) != 1 or not isinstance(keys[0], dict) or keys[0].get("at") != 0:
+        return {"success": False, "error_code": "TACHIE_HAS_EXISTING_Y_KEYFRAMES"}
+    baseline = finite_number(keys[0].get("value"), "baseline Y")
+    points = [{"at": at, "value": baseline},
+              {"at": at + duration // 2, "value": baseline - height},
+              {"at": at + duration, "value": baseline}]
+    result = {"success": True, "dry_run": dry_run, "item_id": item_id,
+              "revision": revision, "keyframes": points}
+    if dry_run:
+        return result
+    project = await ymm4_get("/project")
+    if not isinstance(project, dict) or project.get("success") is not True or project.get("isSaved") is not True:
+        return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
+    checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before tachie jump"})
+    backup = checkpoint.get("backup_path") if isinstance(checkpoint, dict) else None
+    if not isinstance(checkpoint, dict) or checkpoint.get("success") is not True or not isinstance(backup, str) or not backup:
+        return {"success": False, "error_code": "TACHIE_BACKUP_REQUIRED", "details": checkpoint}
+    applied = []
+    for point in points:
+        try:
+            changed = await ymm4_post("/items/keyframe", {"item_id": item_id, "expected_revision": revision,
+                                                           "prop": "Y", "action": "set", **point})
+        except httpx.HTTPError as exc:
+            return {"success": False, "error_code": "TACHIE_JUMP_OUTCOME_UNKNOWN", "error": str(exc),
+                    "applied": applied, "backup_path": backup, "outcome_unknown": True}
+        if not isinstance(changed, dict) or changed.get("success") is not True or \
+                not isinstance(changed.get("revision"), str) or not changed["revision"]:
+            return {"success": False, "error_code": "TACHIE_JUMP_PARTIAL", "details": changed,
+                    "applied": applied, "backup_path": backup}
+        revision = changed["revision"]
+        applied.append(point)
+    try:
+        checked = await ymm4_get(key_path)
+    except httpx.HTTPError as exc:
+        return {"success": False, "error_code": "TACHIE_JUMP_VERIFY_UNKNOWN", "error": str(exc),
+                "applied": applied, "backup_path": backup, "outcome_unknown": True}
+    found = next((a.get("keyframes", []) for a in (checked.get("animations") or [])
+                  if isinstance(a, dict) and a.get("prop") == "Y"), []) if isinstance(checked, dict) and checked.get("success") is True else []
+    def matches_point(key, point):
+        if not isinstance(key, dict) or key.get("at") != point["at"]:
+            return False
+        try:
+            return abs(finite_number(key.get("value"), "Y value") - point["value"]) < 1e-6
+        except ValueError:
+            return False
+    if checked.get("revision") != revision or not all(
+            any(matches_point(key, point) for key in found) for point in points):
+        return {"success": False, "error_code": "TACHIE_JUMP_VERIFY_FAILED",
+                "applied": applied, "backup_path": backup, "details": checked}
+    return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
+
+
 async def dispatch(args: dict) -> Any:
     action = args.get("action")
     sub_action = args.get("sub_action")
     
     match action:
+        case "jump_tachie":
+            return await jump_tachie(args)
         case "set_expression":
             return await set_expression(args)
         case "duck_bgm":
