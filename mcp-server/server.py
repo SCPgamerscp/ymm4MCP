@@ -156,6 +156,7 @@ TOOLS = [
                 },
                 "dry_run": {"type": "boolean", "description": "add_script/apply_edit/create_from_template/duck_bgm/set_expression: 検証と予定のみ。duck_bgm/set_expressionの既定はtrue"},
                 "check_characters": {"type": "boolean", "description": "add_script dry_run: YMM4の登録キャラ名との一致を読み取り検査する"},
+                "append_after_existing": {"type": "boolean", "description": "add_script: 使用するレイヤーの既存アイテム末尾より後にセリフを配置する"},
                 "use_project_fps": {"type": "boolean", "description": "add_script: YMM4プロジェクトから検出したFPSで仮尺を算出する。取得不能時は停止"},
                 "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
                 "expression": {"type": "string", "description": "set_expression: expression_map 内の表情名"},
@@ -1244,6 +1245,11 @@ async def add_script(args: dict) -> dict:
     check_characters = args.get("check_characters", False)
     if not isinstance(check_characters, bool):
         raise ValueError("check_characters must be boolean")
+    append = args.get("append_after_existing", False)
+    if not isinstance(append, bool):
+        raise ValueError("append_after_existing must be boolean")
+    if append and args.get("dry_run", False):
+        raise ValueError("append_after_existing requires a live apply; use get_info/items before dry_run")
     if args.get("dry_run", False) and not check_characters:
         return plan
     characters = await ymm4_get("/characters")
@@ -1258,6 +1264,24 @@ async def add_script(args: dict) -> dict:
         raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {unknown[0]}")
     frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
+    if append:
+        snapshot = await ymm4_get("/items")
+        if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
+                not isinstance(snapshot.get("items"), list):
+            return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+        layers = {line["layer"] for line in plan["details"]}
+        try:
+            for item in snapshot["items"]:
+                if not isinstance(item, dict):
+                    raise ValueError("invalid item")
+                if item.get("layer") in layers:
+                    end = integer(integer(item.get("frame"), "item frame") +
+                                  integer(item.get("length"), "item length", 1), "item end")
+                    frame = max(frame, end + gap)
+            integer(frame, "append frame")
+        except ValueError:
+            return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    start_frame_used = frame
     results = []
     for index, line in enumerate(plan["details"]):
         requested_frame = frame
@@ -1312,7 +1336,8 @@ async def add_script(args: dict) -> dict:
                 "error": "追加結果と現在のタイムラインが一致しません。itemsを確認してください",
                 "added": len(results), "details": results, "verification_failures": failures,
                 "outcome_unknown": True, "rolled_back": False}
-    return {"success": True, "added": len(results), "total_frames": frame,
+    return {"success": True, "added": len(results), "start_frame_used": start_frame_used,
+            "total_frames": frame,
             "details": results, "verified": True, "dry_run": False}
 
 
