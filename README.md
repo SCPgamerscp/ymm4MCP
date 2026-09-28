@@ -20,6 +20,8 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
    .\setup.ps1
    ```
 
+   `./setup.ps1 -ConfigureClaudeDesktop` を使うと、既存の `mcpServers` と他の設定を保持したまま `ymm4` の設定を自動追加します。既存ファイルは `.bak.*` に保存してから更新します。Claude Desktop を再起動して反映してください。
+
 4. Claude Desktopの `%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示した JSON を設定します。手動設定する場合は、展開したフォルダ内の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定します。
 
    ```json
