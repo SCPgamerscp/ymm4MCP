@@ -1,4 +1,5 @@
-param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection)
+param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection,
+      [ValidateRange(1024, 65535)][Nullable[int]]$Port)
 $ErrorActionPreference = 'Stop'
 $serverDir = $PSScriptRoot
 $venvDir = Join-Path $serverDir '.venv'
@@ -19,6 +20,9 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
 if ($LASTEXITCODE -ne 0) { throw 'MCP サーバーの依存関係をインストールできませんでした。' }
 
 $entry = @{ command = $venvPython; args = @((Join-Path $serverDir 'server.py')) }
+if ($null -ne $Port) {
+    $entry.env = @{ YMM4_API_BASE = "http://127.0.0.1:$Port/api" }
+}
 if ($ConfigureClaudeDesktop) {
     if (-not $env:APPDATA) { throw 'APPDATA が見つかりません。Claude Desktop の設定場所を確認してください。' }
     $configPath = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
@@ -62,6 +66,12 @@ if (-not $ConfigureClaudeDesktop) {
 Write-Output ($entry | ConvertTo-Json -Depth 3)
 Write-Output '接続トークンは YMM4 プラグインの接続ファイルから自動取得します。'
 if ($CheckConnection) {
-    & $venvPython (Join-Path $serverDir 'check_connection.py')
-    if ($LASTEXITCODE -ne 0) { throw 'YMM4プラグインへの接続確認に失敗しました。' }
+    $oldBase = $env:YMM4_API_BASE
+    try {
+        if ($null -ne $Port) { $env:YMM4_API_BASE = $entry.env.YMM4_API_BASE }
+        & $venvPython (Join-Path $serverDir 'check_connection.py')
+        if ($LASTEXITCODE -ne 0) { throw 'YMM4プラグインへの接続確認に失敗しました。' }
+    } finally {
+        $env:YMM4_API_BASE = $oldBase
+    }
 }
