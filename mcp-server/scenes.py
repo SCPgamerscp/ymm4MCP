@@ -3,6 +3,17 @@
 from editing import MAX_FRAME, integer
 
 
+def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[dict]:
+    cursor, gaps = start, []
+    for left, right in sorted(intervals):
+        if left > cursor:
+            gaps.append({"start_frame": cursor, "end_frame": left})
+        cursor = max(cursor, right)
+    if cursor < end:
+        gaps.append({"start_frame": cursor, "end_frame": end})
+    return gaps
+
+
 def index(items: list[dict], ranges: list[dict]) -> dict:
     if not isinstance(items, list):
         raise ValueError("items must be an array")
@@ -34,13 +45,16 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         identity = raw.get("item_id")
         if not isinstance(identity, str) or not identity:
             raise ValueError("item_id is required")
+        layer = raw.get("layer")
+        if layer is not None:
+            layer = integer(layer, "item.layer")
         memberships = 0
         for scene in scenes:
             if frame < scene["end_frame"] and end > scene["start_frame"]:
                 visible_start = max(frame, scene["start_frame"])
                 visible_end = min(end, scene["end_frame"])
                 scene["items"].append({"item_id": identity, "frame": frame, "end_frame": end,
-                                       "layer": raw.get("layer"), "type": raw.get("type"),
+                                       "layer": layer, "type": raw.get("type"),
                                        "visible_start_frame": visible_start,
                                        "visible_end_frame": visible_end,
                                        "relative_start_frame": visible_start - scene["start_frame"],
@@ -51,18 +65,24 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if not memberships:
             unassigned.append(identity)
     for scene in scenes:
-        intervals = sorted((item["visible_start_frame"], item["visible_end_frame"])
-                           for item in scene["items"])
-        cursor = scene["start_frame"]
-        gaps = []
-        for left, right in intervals:
-            if left > cursor:
-                gaps.append({"start_frame": cursor, "end_frame": left})
-            cursor = max(cursor, right)
-        if cursor < scene["end_frame"]:
-            gaps.append({"start_frame": cursor, "end_frame": scene["end_frame"]})
+        intervals = [(item["visible_start_frame"], item["visible_end_frame"])
+                     for item in scene["items"]]
+        gaps = _uncovered(intervals, scene["start_frame"], scene["end_frame"])
         scene["uncovered_ranges"] = gaps
         scene["uncovered_frames"] = sum(g["end_frame"] - g["start_frame"] for g in gaps)
         scene["covered_frames"] = scene["end_frame"] - scene["start_frame"] - scene["uncovered_frames"]
+        by_layer = {}
+        for item in scene["items"]:
+            by_layer.setdefault(item["layer"], []).append(item)
+        scene["layer_occupancy"] = []
+        for layer, members in by_layer.items():
+            layer_gaps = _uncovered([(item["visible_start_frame"], item["visible_end_frame"])
+                                     for item in members], scene["start_frame"], scene["end_frame"])
+            uncovered = sum(g["end_frame"] - g["start_frame"] for g in layer_gaps)
+            scene["layer_occupancy"].append({
+                "layer": layer, "item_ids": list(dict.fromkeys(item["item_id"] for item in members)),
+                "covered_frames": scene["end_frame"] - scene["start_frame"] - uncovered,
+                "uncovered_frames": uncovered, "uncovered_ranges": layer_gaps,
+            })
     return {"success": True, "scenes": scenes, "unassigned_item_ids": unassigned,
             "item_count": len(items), "note": "Scene ranges are caller-defined and are not saved in YMM4"}
