@@ -19,6 +19,7 @@ YMM4(ゆっくりMovieMaker4)をMCP経由でClaudeから操作するサーバー
 """
 
 import asyncio
+import script_guard
 import json
 import os
 import ntpath
@@ -173,7 +174,7 @@ TOOLS = [
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "expected_plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: 確認済みplan_editのplan_hash。異なる場合は編集前に停止"},
-                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: plan_edit時点のタイムラインハッシュ。状態が変わった場合は編集前に停止"},
+                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit/add_script: 確認済みタイムラインハッシュ。不一致なら編集前に停止"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
                 "check_project_settings": {"type": "boolean", "description": "plan_edit/apply_edit: 計画のFPS・解像度が現在のYMM4プロジェクトと一致することを確認する"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
@@ -1281,7 +1282,7 @@ async def dispatch(args: dict) -> Any:
                 max_api_calls=args.get("max_api_calls"))
 
         case "add_script":
-            return await add_script(args)
+            return await script_guard.apply(args, ymm4_get, add_script)
 
         case "plan_edit":
             if args.get("dry_run", True) is not True:
