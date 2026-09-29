@@ -33,6 +33,35 @@ class AssetDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["assets"][0]["in_use"])
         self.assertFalse(result["usage_complete"])
 
+    async def test_unused_only_filters_verified_scan(self):
+        scan = {"success": True, "assets": [{"path": "C:/Media/used.mp4"},
+                                             {"path": "C:/Media/spare.wav"}], "truncated": False}
+        items = {"items": [{"item_id": "native:1", "type": "VideoItem",
+                            "source_path": "c:\\media\\used.mp4"}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[scan, items])):
+            result = await server.dispatch({"action": "get_info", "sub_action": "assets",
+                                            "directory": "C:/Media", "include_usage": True,
+                                            "unused_only": True})
+        self.assertEqual([asset["path"] for asset in result["assets"]], ["C:/Media/spare.wav"])
+        self.assertTrue(result["usage_complete"])
+        self.assertFalse(result["truncated"])
+
+    async def test_unused_only_refuses_unknown_media_path(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"success": True, "assets": [{"path": "C:/Media/spare.wav"}]},
+                {"items": [{"type": "AudioItem"}]}])):
+            result = await server.dispatch({"action": "get_info", "sub_action": "assets",
+                                            "directory": "C:/Media", "include_usage": True,
+                                            "unused_only": True})
+        self.assertEqual(result["error_code"], "ASSET_USAGE_UNVERIFIED")
+
+    async def test_unused_only_requires_usage_before_host_call(self):
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
+            with self.assertRaises(ValueError):
+                await server.dispatch({"action": "get_info", "sub_action": "assets",
+                                       "directory": "C:/Media", "unused_only": True})
+            get.assert_not_awaited()
+
     async def test_encoded_query_and_options(self):
         with patch.object(server, "ymm4_get", AsyncMock(return_value={"success": True})) as get:
             await server.dispatch({"action": "get_info", "sub_action": "assets",
