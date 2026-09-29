@@ -126,7 +126,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/scenes/media/assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/scenes/media/assets/missing_assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
@@ -834,6 +834,38 @@ async def dispatch(args: dict) -> Any:
                 case "capabilities": return await ymm4_get("/capabilities")
                 case "project": return await ymm4_get("/project")
                 case "items": return await ymm4_get("/items")
+                case "missing_assets":
+                    snapshot = await ymm4_get("/items")
+                    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
+                            not isinstance(snapshot.get("items"), list):
+                        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+                    sources = {}
+                    unknown = []
+                    for item in snapshot["items"]:
+                        if not isinstance(item, dict):
+                            return {"success": False, "error_code": "ITEMS_UNAVAILABLE"}
+                        if not str(item.get("type", "")).lower().endswith(("videoitem", "audioitem", "imageitem")):
+                            continue
+                        path = item.get("source_path")
+                        if not is_absolute_media_path(path):
+                            unknown.append(item.get("item_id"))
+                            continue
+                        sources.setdefault(ntpath.normcase(ntpath.normpath(path.replace("/", "\\"))),
+                                           {"path": path, "item_ids": []})["item_ids"].append(item.get("item_id"))
+                    if len(sources) > 100:
+                        return {"success": False, "error_code": "ASSET_CHECK_LIMIT_EXCEEDED", "count": len(sources)}
+                    missing = []
+                    unchecked = []
+                    for source in sources.values():
+                        info = await ymm4_get(f"/media/info?path={quote(source['path'], safe='')}")
+                        if not isinstance(info, dict) or info.get("success") is not True or \
+                                not isinstance(info.get("exists"), bool):
+                            unchecked.append(source)
+                        elif not info["exists"]:
+                            missing.append(source)
+                    return {"success": True, "complete": not unknown and not unchecked,
+                            "checked_count": len(sources) - len(unchecked), "missing": missing,
+                            "unknown_source_item_ids": unknown, "unchecked": unchecked}
                 case "scenes":
                     ranges = args.get("scene_ranges")
                     # Validate before reading the host snapshot.
