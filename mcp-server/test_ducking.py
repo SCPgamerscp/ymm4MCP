@@ -42,6 +42,19 @@ class DuckingPlanTests(unittest.TestCase):
 
 
 class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_selection_is_fail_closed(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "voice_item_ids": ["missing"]})
+        self.assertEqual(result["error_code"], "VOICE_ITEM_NOT_FOUND")
+        get.assert_awaited_once()
+        post.assert_not_awaited()
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "voice_item_ids": ["voice:1"]})
+        self.assertEqual(result["voice_count"], 1)
+
     async def test_dry_run_reads_only_and_rejects_existing_keys(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
