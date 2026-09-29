@@ -159,6 +159,8 @@ TOOLS = [
                 "append_after_existing": {"type": "boolean", "description": "add_script: 使用するレイヤーの既存アイテム末尾より後にセリフを配置する"},
                 "use_project_fps": {"type": "boolean", "description": "add_script: YMM4プロジェクトから検出したFPSで仮尺を算出する。取得不能時は停止"},
                 "bgm_item_id": {"type": "string", "description": "duck_bgm: 対象のAudioItemのitem_id"},
+                "voice_item_ids": {"type": "array", "minItems": 1, "maxItems": 500,
+                                   "items": {"type": "string"}, "description": "duck_bgm: 対象VoiceItemのIDを限定。未指定ならすべてのVoiceItem"},
                 "expression": {"type": "string", "description": "set_expression: expression_map 内の表情名"},
                 "expression_map": {"type": "object", "description": "set_expression: 表情名からYMM4のFacePathへの明示的な対応表"},
                 "duration_frames": {"type": "integer", "minimum": 2, "maximum": 120, "description": "jump_tachie: ジャンプの長さ"},
@@ -595,6 +597,17 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_REVISION_UNAVAILABLE"}
     voices = [i for i in snapshot["items"] if isinstance(i, dict) and
               str(i.get("type", "")).lower().endswith("voiceitem")]
+    selected = args.get("voice_item_ids")
+    if selected is not None:
+        if (not isinstance(selected, list) or not 1 <= len(selected) <= 500 or
+                any(not isinstance(value, str) or not value.strip() for value in selected) or
+                len(set(selected)) != len(selected)):
+            raise ValueError("voice_item_ids must contain 1..500 distinct nonempty IDs")
+        found = {voice.get("item_id") for voice in voices}
+        if any(value not in found for value in selected):
+            return {"success": False, "error_code": "VOICE_ITEM_NOT_FOUND",
+                    "missing_item_ids": [value for value in selected if value not in found]}
+        voices = [voice for voice in voices if voice.get("item_id") in selected]
     key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
     state = await ymm4_get(key_path)
     if state.get("success") is not True or state.get("revision") != revision:
