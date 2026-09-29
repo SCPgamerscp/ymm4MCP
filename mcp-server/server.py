@@ -164,6 +164,7 @@ TOOLS = [
                 "duration_frames": {"type": "integer", "minimum": 2, "maximum": 120, "description": "jump_tachie: ジャンプの長さ"},
                 "jump_height": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "jump_tachie: Y座標の上方向の移動量"},
                 "shake_distance": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "shake_tachie: X座標の左右移動量"},
+                "voice_item_id": {"type": "string", "description": "jump_tachie/shake_tachie: 発話アイテムの開始を at=0 とする安定ID"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
@@ -718,6 +719,9 @@ async def _tachie_reaction(args: dict, *, shake: bool) -> dict:
     if not isinstance(item_id, str) or not item_id.strip():
         raise ValueError(f"{action_name} requires item_id")
     at = integer(args.get("at", 0), "at")
+    voice_id = args.get("voice_item_id")
+    if voice_id is not None and (not isinstance(voice_id, str) or not voice_id.strip()):
+        raise ValueError("voice_item_id must be a nonempty string")
     duration = integer(args.get("duration_frames", 12), "duration_frames", 4 if shake else 2, 120)
     distance = finite_number(args.get(distance_name, 30 if shake else 40), distance_name)
     if not 0 < distance <= 500:
@@ -736,6 +740,14 @@ async def _tachie_reaction(args: dict, *, shake: bool) -> dict:
     if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("tachieitem"):
         return {"success": False, "error_code": "TACHIE_ITEM_NOT_FOUND"}
     item = matches[0]
+    if voice_id is not None:
+        voices = [candidate for candidate in snapshot["items"] if isinstance(candidate, dict) and
+                  candidate.get("item_id") == voice_id and
+                  str(candidate.get("type", "")).lower().endswith("voiceitem")]
+        if len(voices) != 1:
+            return {"success": False, "error_code": "VOICE_ITEM_NOT_FOUND"}
+        at = integer(integer(voices[0].get("frame"), "voice frame") -
+                     integer(item.get("frame"), "tachie frame") + at, "reaction at")
     revision = item.get("revision")
     if not isinstance(revision, str) or not revision:
         return {"success": False, "error_code": "TACHIE_REVISION_UNAVAILABLE"}
@@ -765,6 +777,7 @@ async def _tachie_reaction(args: dict, *, shake: bool) -> dict:
                {"at": at + duration // 2, "value": baseline - distance},
                {"at": at + duration, "value": baseline}])
     result = {"success": True, "dry_run": dry_run, "item_id": item_id,
+              "voice_item_id": voice_id, "at": at,
               "revision": revision, "keyframes": points}
     if dry_run:
         return result

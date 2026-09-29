@@ -11,6 +11,27 @@ Y = {"success": True, "revision": "r1", "animations": [
 
 
 class JumpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reaction_can_start_at_voice_frame_relative_to_tachie(self):
+        items = {"success": True, "items": [
+            {**ITEMS["items"][0], "frame": 100},
+            {"item_id": "voice:1", "type": "VoiceItem", "frame": 120, "length": 30}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[items, Y])), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "jump_tachie", "item_id": "tachie:1",
+                                            "voice_item_id": "voice:1", "at": 3})
+        self.assertEqual(result["at"], 23)
+        self.assertEqual(result["keyframes"][0]["at"], 23)
+        post.assert_not_awaited()
+
+    async def test_missing_voice_stops_before_keyframe_lookup(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "shake_tachie", "item_id": "tachie:1",
+                                            "voice_item_id": "missing", "dry_run": False})
+        self.assertEqual(result["error_code"], "VOICE_ITEM_NOT_FOUND")
+        get.assert_awaited_once_with("/items")
+        post.assert_not_awaited()
+
     async def test_shake_uses_x_axis_and_bounded_five_point_pattern(self):
         x = {"success": True, "revision": "r1", "animations": [
             {"prop": "X", "keyframes": [{"at": 0, "value": 100}]}]}

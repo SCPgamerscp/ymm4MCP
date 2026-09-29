@@ -327,6 +327,8 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 
 `shake_tachie` は同じ安全確認で X 座標を左右に揺らします。`item_id`、相対 `at`、`duration_frames`（4〜120）、`shake_distance` を指定し、適用前に5点の予定を確認できます。既存の X アニメーションがある場合は停止します。
 
+`jump_tachie` / `shake_tachie` に `voice_item_id` を渡すと、VoiceItem の開始フレームを基準に `at` を指定できます。対象の立ち絵開始からの相対位置に変換し、範囲外なら編集前に停止します。
+
 `get_info/scenes` は `scene_ranges=[{"id":"intro","start_frame":0,"end_frame":300}, ...]` を指定し、現在のタイムラインをシーン範囲ごとに読み取ります。各シーンは重なるレイヤーを二重計上しない `covered_frames` と残りの `uncovered_frames` も返します。境界をまたぐアイテムは両側に `crosses_boundary=true` で現れ、シーン内で見える半開区間を `visible_start_frame` / `visible_end_frame` とシーン相対位置で返します。どの範囲にも入らないアイテムは `unassigned_item_ids` に含まれます。範囲は呼び出し側が定義し、YMM4プロジェクトには保存されません。
 
 | action | sub_action | 説明 |
