@@ -101,6 +101,13 @@ class VisualQaTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             visual_qa.thumbnail(base64.b64encode(b"not png").decode())
 
+    def test_malformed_samples_cannot_produce_passing_qa(self):
+        image = visual_qa.thumbnail(png("white"))
+        for samples in ([(3, image), (3, image)], [(4, image), (2, image)],
+                        [(0, image[:-1])], [(0, b"")]):
+            with self.subTest(samples=samples), self.assertRaises(ValueError):
+                visual_qa.inspect(samples, step_frames=30)
+
     def test_color_change_with_similar_luminance_is_not_static(self):
         red = visual_qa.thumbnail(png((255, 0, 0)))
         green = visual_qa.thumbnail(png((0, 130, 0)))
