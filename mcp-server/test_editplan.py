@@ -39,6 +39,20 @@ def one_text_record(revision="r1"):
 
 
 class ParsePlanTests(unittest.TestCase):
+    def test_explicit_frames_cannot_escape_their_scene(self):
+        text_item = {"id": "b", "type": "text", "text": "b", "layer": 1, "length": 10}
+        first = {"id": "a", "duration_policy": "explicit", "duration": 30,
+                 "items": [{**text_item, "id": "a"}]}
+        for second in ({"id": "b", "items": [{**text_item, "frame": 5}]},
+                       {"id": "b", "duration_policy": "explicit", "duration": 10,
+                        "items": [{**text_item, "frame": 35}]}):
+            with self.subTest(second=second), self.assertRaises(ValueError):
+                editplan.parse_plan({"plan": {"scenes": [first, second]}})
+        with self.assertRaises(ValueError):
+            editplan.parse_plan({"plan": {"start_frame": 2147483640, "scenes": [
+                {"id": "a", "duration_policy": "explicit", "duration": 20,
+                 "items": [{**text_item, "length": 1}]}]}})
+
     def test_snapshot_hash_ignores_item_order_but_detects_revision_changes(self):
         items = [{"item_id": "a", "revision": "r1", "frame": 0},
                  {"item_id": "b", "revision": "r1", "frame": 10}]

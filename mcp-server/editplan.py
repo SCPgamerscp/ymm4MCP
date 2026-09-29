@@ -147,10 +147,15 @@ def parse_plan(args):
                 parsed["frame_source"] = "sequential"
             else:
                 parsed["frame_source"] = "explicit"
+                if parsed["frame"] < cursor:
+                    raise ValueError(f"scenes[{s_index}].items[{i_index}].frame precedes scene start")
             end = integer(parsed["frame"] + parsed["length"] + gap, "estimated end frame")
+            if policy == "explicit" and end > cursor + duration:
+                raise ValueError(f"scenes[{s_index}].items[{i_index}] exceeds explicit scene duration")
             scene_cursor = max(scene_cursor, end)
             parsed_items.append(parsed)
-        scene_end = cursor + duration if policy == "explicit" else scene_cursor
+        scene_end = integer(cursor + duration if policy == "explicit" else scene_cursor,
+                            f"scenes[{s_index}].end_frame", 1)
         if policy == "explicit" and scene_cursor - cursor > duration:
             raise ValueError(f"scenes[{s_index}] content exceeds explicit duration")
         parsed_scenes.append({
