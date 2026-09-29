@@ -34,6 +34,7 @@ from jobs import job_id_ok, is_absolute_media_path, validate_export_request, val
 import editplan
 import ducking
 import scenes
+import scene_media
 import visual_qa
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -903,7 +904,7 @@ async def dispatch(args: dict) -> Any:
                         return snapshot
                     if not isinstance(snapshot.get("items"), list):
                         return {"success": False, "error_code": "ITEMS_UNAVAILABLE"}
-                    return scenes.index(snapshot.get("items"), ranges)
+                    return scene_media.with_coverage(scenes.index(snapshot.get("items"), ranges))
                 case "audio_qa":
                     path = args.get("path")
                     if not is_absolute_media_path(path):
