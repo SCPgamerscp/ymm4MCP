@@ -224,6 +224,22 @@ class DiffAndReplayTests(unittest.TestCase):
 
 
 class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reconcile_dry_run_never_silently_applies(self):
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            with self.assertRaisesRegex(ValueError, "plan_edit"):
+                await server.dispatch({"action": "reconcile_edit", **one_text_plan(),
+                                       "dry_run": True})
+        get.assert_not_awaited()
+        post.assert_not_awaited()
+
+    async def test_plan_edit_rejects_conflicting_dry_run_false(self):
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
+            with self.assertRaisesRegex(ValueError, "apply_edit"):
+                await server.dispatch({"action": "plan_edit", **one_text_plan(),
+                                       "dry_run": False})
+            get.assert_not_awaited()
+
     async def test_expected_snapshot_hash_stops_stale_apply_before_post(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
                 {"characters": [{"name": "ゆっくり霊夢"}]},

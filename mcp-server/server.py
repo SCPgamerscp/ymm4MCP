@@ -1212,12 +1212,16 @@ async def dispatch(args: dict) -> Any:
             return await add_script(args)
 
         case "plan_edit":
+            if args.get("dry_run", True) is not True:
+                raise ValueError("plan_edit is always dry_run; use apply_edit to edit")
             return await run_edit_plan(args, dry_run=True)
 
         case "apply_edit":
             return await run_edit_plan(args, dry_run=bool(args.get("dry_run", False)))
 
         case "reconcile_edit":
+            if args.get("dry_run") is True:
+                raise ValueError("reconcile_edit does not support dry_run; use plan_edit to preview")
             return await run_edit_plan(args, dry_run=False)
 
         case _:

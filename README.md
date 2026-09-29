@@ -242,6 +242,8 @@ LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成�
 
 `apply_edit` / `reconcile_edit` に `expected_plan_hash` を指定すると、事前に確認した `plan_edit` の SHA-256 と一致しない計画はホストへの通信前に拒否します。`plan_edit` が返す `snapshot_hash` を `expected_snapshot_hash` として渡すと、その後タイムラインの状態が変わっていた場合も編集前に停止します。
 
+`plan_edit` は常にプレビューのみで、`reconcile_edit` は適用します。`reconcile_edit` に `dry_run=true`、`plan_edit` に `dry_run=false` を指定すると入力エラーにして、意図と異なる処理を防ぎます。
+
 `apply_edit` はシーンをtransactionにします。あるシーンの追加が失敗すると、**そのシーンで追加したアイテムだけ削除**し、先に完了したシーンは残します。`atomic_scenes=false` で旧来どおり部分追加を残すこともできます。通信失敗（追加できたか不明）では自動削除しません。
 Voice の実際の長さが計画より伸びて次のシーンの開始位置を越えた場合は、`SCENE_BOUNDARY_CONFLICT` で次のシーンを追加せず停止します。先に完了したシーンの `details` と実終端を返すので、計画の区間を調整してから再適用してください。
 
