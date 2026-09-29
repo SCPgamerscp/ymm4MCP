@@ -313,4 +313,4 @@ def combine_qa_reports(structural, checks, criteria):
             "score": max(0, 100 - errors * 20 - warnings * 5),
             "issue_count": len(problems), "summary": {"errors": errors, "warnings": warnings},
             "issues": problems, "problems": problems, "criteria_hash": digest,
-            "checks": checks, "scope": "Timeline structure and requested visual/audio checks."}
+            "checks": checks, "scope": "Timeline structure and requested visual/audio/export checks."}

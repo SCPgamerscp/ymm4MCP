@@ -7,6 +7,28 @@ import server
 
 
 class CompositeQaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_export_qa_failure_blocks_final_gate(self):
+        async def get(path):
+            if path == "/items":
+                return {"success": True, "items": []}
+            self.assertIn("/media/export-qa?path=C%3A%2Fdone.mp4", path)
+            return {"success": True, "passed": False, "issues": [
+                {"code": "AUDIO_STREAM_MISSING", "severity": "error"}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)):
+            result = await server.dispatch({"action": "qa_gate", "export_check": {
+                "path": "C:/done.mp4", "require_audio": True}})
+        self.assertEqual(result["decision"], "repair")
+        self.assertEqual(result["qa"]["issues"][0]["source"], "export")
+
+    async def test_export_criteria_are_part_of_history(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=lambda path:
+                {"success": True, "items": []} if path == "/items" else
+                {"success": True, "passed": True, "issues": []})):
+            first = await server.dispatch({"action": "qa_gate", "export_check": {"path": "C:/done.mp4"}})
+            with self.assertRaisesRegex(ValueError, "same validation criteria"):
+                await server.dispatch({"action": "qa_gate", "export_check": {"path": "C:/other.mp4"},
+                                       "qa_history": [first["qa"]]})
+
     async def test_audio_error_blocks_structurally_clean_timeline(self):
         async def get(path):
             if path == "/items":
