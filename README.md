@@ -22,6 +22,7 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
    `./setup.ps1 -ConfigureClaudeDesktop` を使うと、既存の `mcpServers` と他の設定を保持したまま `ymm4` の設定を自動追加します。既存ファイルは `.bak.*` に保存してから更新します。Claude Desktop を再起動して反映してください。
    YMM4を起動した状態で `./setup.ps1 -CheckConnection` を実行すると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。
+   プラグインのポートを変更した場合は `./setup.ps1 -ConfigureClaudeDesktop -CheckConnection -Port 9000` のように同じポートを指定すると、Claude Desktop の `YMM4_API_BASE` と接続確認に反映します。省略時は接続ファイルの設定を使います。
 
 4. Claude Desktopの `%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示した JSON を設定します。手動設定する場合は、展開したフォルダ内の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定します。
 
