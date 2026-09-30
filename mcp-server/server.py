@@ -19,6 +19,7 @@ YMM4(ゆっくりMovieMaker4)をMCP経由でClaudeから操作するサーバー
 """
 
 import asyncio
+import asset_qa
 import script_guard
 import json
 import os
@@ -200,6 +201,7 @@ TOOLS = [
                 "visual_check": {"type": "object", "description": "qa_gate: visual_qa の設定（end_frame必須）。指定時に現在のプレビューを検査"},
                 "audio_check": {"type": "object", "description": "qa_gate: get_info/audio_qa の設定（path必須）。指定時に現在のWAVを検査"},
                 "export_check": {"type": "object", "description": "qa_gate: get_info/export_qa の設定（MP4 path必須）。完成動画の尺・FPS・解像度・音声トラックを検査"},
+                "assets_check": {"type": "object", "description": "qa_gate: {} でタイムライン素材の欠落・参照先不明を検査"},
                 "max_repairs": {"type": "integer", "minimum": 0, "maximum": 20, "description": "qa_gate: 最大修正回数。既定3"},
                 "repeat_limit": {"type": "integer", "minimum": 2, "maximum": 10, "description": "qa_gate: 同じ問題群が連続したら停止。既定2"},
                 "elapsed_seconds": {"type": "number", "minimum": 0, "description": "qa_gate: 呼び出し側で計測した修正ループ経過秒数"},
@@ -1254,7 +1256,8 @@ async def dispatch(args: dict) -> Any:
             checks, criteria = {}, {}
             for name, option, task in (("visual", "visual_check", "visual_qa"),
                                        ("audio", "audio_check", "audio_qa"),
-                                       ("export", "export_check", "export_qa")):
+                                       ("export", "export_check", "export_qa"),
+                                       ("assets", "assets_check", "missing_assets")):
                 if option not in args:
                     continue
                 config = args[option]
@@ -1262,10 +1265,10 @@ async def dispatch(args: dict) -> Any:
                            if name == "visual" else {"path", "min_silence_seconds"} if name == "audio" else
                            {"path", "expected_duration_seconds", "duration_tolerance_seconds", "expected_fps",
                             "fps_tolerance", "expected_width", "expected_height", "expected_audio_sample_rate",
-                            "expected_audio_channels", "require_audio"})
+                            "expected_audio_channels", "require_audio"} if name == "export" else set())
                 if not isinstance(config, dict) or set(config) - allowed or \
                         (("end_frame" not in config and "scene_id" not in config) if name == "visual"
-                         else "path" not in config):
+                         else "path" not in config if name in {"audio", "export"} else bool(config)):
                     raise ValueError(f"{option} requires a valid configuration")
                 criteria[name] = config
                 report = await (run_visual_qa(config) if name == "visual" else
@@ -1273,6 +1276,8 @@ async def dispatch(args: dict) -> Any:
                 if report.get("success") is not True:
                     return {"success": False, "passed": False, "error_code": "QA_CHECK_FAILED",
                             "check": name, "details": report}
+                if name == "assets":
+                    report = asset_qa.report(report)
                 checks[name] = report
             if checks:
                 qa = combine_qa_reports(qa, checks, criteria)
