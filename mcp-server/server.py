@@ -211,6 +211,7 @@ TOOLS = [
                 "step_frames": {"type": "integer", "minimum": 1, "description": "visual_qa: サンプリング間隔。既定30、最大40枚"},
                 "min_static_frames": {"type": "integer", "minimum": 1, "description": "visual_qa: 静止候補の最短観測区間。既定60フレーム"},
                 "black_as_error": {"type": "boolean", "description": "visual_qa: 黒画面候補をerrorにする。既定false"},
+                "white_as_error": {"type": "boolean", "description": "visual_qa: 白画面候補をerrorにする。既定false"},
                 "path": {"type": "string", "description": "get_info/media/audio_qa/export_qa、video/audio/imageの素材、export/open/save_as、またはcreate_from_templateの保存先絶対パス"},
                 "directory": {"type": "string", "description": "get_info/assets: YMM4 がアクセスできる素材フォルダの絶対パス"},
                 "query": {"type": "string", "description": "get_info/assets: ファイル名の部分一致検索"},
@@ -458,8 +459,9 @@ async def run_visual_qa(args: dict) -> dict:
     step = integer(args.get("step_frames", 30), "step_frames", minimum=1)
     minimum = integer(args.get("min_static_frames", 60), "min_static_frames", minimum=1)
     black_as_error = args.get("black_as_error", False)
-    if not isinstance(black_as_error, bool):
-        raise ValueError("black_as_error must be boolean")
+    white_as_error = args.get("white_as_error", False)
+    if not isinstance(black_as_error, bool) or not isinstance(white_as_error, bool):
+        raise ValueError("black_as_error and white_as_error must be boolean")
     if end < start:
         raise ValueError("visual_qa requires an ordered range")
     count = (end - start) // step + 1 + int((end - start) % step != 0)
@@ -501,7 +503,7 @@ async def run_visual_qa(args: dict) -> dict:
         return {"success": False, "passed": False, "error": failure or "プレビュー位置を復元できません",
                 "restored_position": restoration, "sample_count": len(samples)}
     result = visual_qa.inspect(samples, step_frames=step, min_static_frames=minimum,
-                               black_as_error=black_as_error)
+                               black_as_error=black_as_error, white_as_error=white_as_error)
     result.update({"start_frame": start, "end_frame": end, "step_frames": step,
                    "restored_position": True,
                    "note": "サンプリング位置の候補です。未検査フレームや意図的な暗転・静止画は判断できません。"})
@@ -1258,7 +1260,7 @@ async def dispatch(args: dict) -> Any:
                 if option not in args:
                     continue
                 config = args[option]
-                allowed = ({"start_frame", "end_frame", "scene_id", "scene_ranges", "step_frames", "min_static_frames", "black_as_error"}
+                allowed = ({"start_frame", "end_frame", "scene_id", "scene_ranges", "step_frames", "min_static_frames", "black_as_error", "white_as_error"}
                            if name == "visual" else {"path", "min_silence_seconds"} if name == "audio" else
                            {"path", "expected_duration_seconds", "duration_tolerance_seconds", "expected_fps",
                             "fps_tolerance", "expected_width", "expected_height", "expected_audio_sample_rate",

@@ -52,7 +52,7 @@ class VisualQaTests(unittest.IsolatedAsyncioTestCase):
                                             "black_as_error": True})
         self.assertFalse(result["passed"])
         self.assertTrue(result["restored_position"])
-        self.assertEqual([i["code"] for i in result["issues"]], ["BLACK_FRAME", "STATIC_PREVIEW"])
+        self.assertEqual([i["code"] for i in result["issues"]], ["BLACK_FRAME", "STATIC_PREVIEW", "WHITE_FRAME"])
         self.assertEqual(post.await_args_list[-1].args[1], {"frame": 15})
 
     async def test_failed_capture_is_not_reported_as_pass(self):
@@ -115,6 +115,18 @@ class VisualQaTests(unittest.IsolatedAsyncioTestCase):
         result = visual_qa.inspect([(0, red), (30, green), (60, red), (90, green)],
                                    step_frames=30, min_static_frames=60)
         self.assertNotIn("STATIC_PREVIEW", [i["code"] for i in result["issues"]])
+
+    def test_white_screen_is_warning_unless_requested_as_error(self):
+        white = visual_qa.thumbnail(png("white"))
+        black = visual_qa.thumbnail(png("black"))
+        samples = [(0, white), (30, white), (60, black)]
+        warning = visual_qa.inspect(samples, step_frames=30)
+        self.assertTrue(warning["passed"])
+        self.assertEqual(warning["issues"][0]["code"], "WHITE_FRAME")
+        self.assertEqual(warning["issues"][0]["end_frame"], 30)
+        error = visual_qa.inspect(samples, step_frames=30, white_as_error=True)
+        self.assertFalse(error["passed"])
+        self.assertEqual(error["issues"][0]["severity"], "error")
 
 
 if __name__ == "__main__":
