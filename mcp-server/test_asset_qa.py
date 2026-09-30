@@ -19,8 +19,12 @@ class AssetQaTests(unittest.IsolatedAsyncioTestCase):
         items = {"success": True, "items": [{"item_id": "v", "type": "VideoItem",
                                             "source_path": "C:/lost.mp4", "frame": 0,
                                             "length": 10, "layer": 1}]}
-        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                items, items, {"success": True, "exists": False}])):
+        async def get(path):
+            if path == "/items":
+                return items
+            self.assertEqual(path, "/media/info?path=C%3A%2Flost.mp4")
+            return {"success": True, "exists": False}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)):
             result = await server.dispatch({"action": "qa_gate", "assets_check": {},
                                             "include_gaps": False})
         self.assertEqual(result["decision"], "repair")
