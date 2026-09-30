@@ -81,7 +81,8 @@ def _item_ids(items, indices):
             if isinstance(items[index], dict) and isinstance(items[index].get("item_id"), str)]
 
 
-def validate_timeline(items, expected=None, duration=None, include_gaps=True, subtitle_layers=None):
+def validate_timeline(items, expected=None, duration=None, include_gaps=True, subtitle_layers=None,
+                      subtitle_timing_tolerance_frames=0):
     """Produce machine-readable structural QA without changing the timeline."""
     if not isinstance(items, list):
         raise ValueError("items must be an array")
@@ -89,6 +90,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         integer(duration, "duration", 1)
     if not isinstance(include_gaps, bool):
         raise ValueError("include_gaps must be boolean")
+    tolerance = integer(subtitle_timing_tolerance_frames, "subtitle_timing_tolerance_frames")
     if subtitle_layers is not None:
         if not isinstance(subtitle_layers, list) or not 1 <= len(subtitle_layers) <= 128:
             raise ValueError("subtitle_layers must contain 1..128 layer numbers")
@@ -158,8 +160,26 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             normalized = "".join(voice_text.split())
             overlapping = [(s_index, items[s_index].get("text")) for start, stop, s_index in subtitles
                            if start < end and frame < stop]
-            if any(isinstance(text, str) and "".join(text.split()) == normalized
-                   for _, text in overlapping):
+            matching = [(max(start, frame), min(stop, end), s_index)
+                        for start, stop, s_index in subtitles
+                        if start < end and frame < stop and
+                        isinstance(items[s_index].get("text"), str) and
+                        "".join(items[s_index]["text"].split()) == normalized]
+            if matching:
+                cursor, gaps = frame, []
+                for left, right, _ in sorted(matching):
+                    if left - cursor > tolerance:
+                        gaps.append({"start_frame": cursor, "end_frame": left})
+                    cursor = max(cursor, right)
+                if end - cursor > tolerance:
+                    gaps.append({"start_frame": cursor, "end_frame": end})
+                if gaps:
+                    affected = [index, *(s_index for _, _, s_index in matching)]
+                    problems.append({"code": "SUBTITLE_TIMING_MISMATCH", "severity": "error",
+                                     "index": index, "indices": affected,
+                                     "item_ids": _item_ids(items, affected),
+                                     "frame_range": [frame, end], "uncovered_ranges": gaps,
+                                     "expected_text": voice_text})
                 continue
             matches = [s_index for s_index, _ in overlapping]
             problems.append({
@@ -194,7 +214,8 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
     error_count = sum(problem["severity"] == "error" for problem in problems)
     warning_count = sum(problem["severity"] == "warning" for problem in problems)
     criteria = {"expected": expected, "duration": duration, "include_gaps": include_gaps,
-                "subtitle_layers": sorted(subtitle_layers) if subtitle_layers is not None else None}
+                "subtitle_layers": sorted(subtitle_layers) if subtitle_layers is not None else None,
+                "subtitle_timing_tolerance_frames": tolerance}
     criteria_hash = hashlib.sha256(json.dumps(criteria, sort_keys=True, ensure_ascii=False,
                                              separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
     return {"success": True, "passed": error_count == 0, "valid": error_count == 0,
@@ -203,7 +224,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             "item_count": len(items), "issue_count": len(problems),
             "summary": {"errors": error_count, "warnings": warning_count},
             "issues": problems, "problems": problems,
-            "scope": "Frame ranges, same-layer overlaps/internal gaps, explicit expected items, and optional voice/subtitle text match after whitespace removal; visual/audio quality is not checked."}
+            "scope": "Frame ranges, same-layer overlaps/internal gaps, explicit expected items, and optional voice/subtitle text and interval coverage after whitespace removal; visual/audio quality is not checked."}
 
 
 def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
@@ -255,7 +276,10 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         return sorted((issue["code"], str(issue.get("severity", "")), str(issue.get("source", "")),
                        str(sorted(issue.get("item_ids") or [])),
                        str(issue.get("frame_range", [])), str(issue.get("layer", "")),
-                       str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")))
+                       str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")),
+                       json.dumps({key: issue[key] for key in
+                                   ("expected_index", "expected", "scene_id", "path", "uncovered_ranges")
+                                   if key in issue}, sort_keys=True, ensure_ascii=False))
                       for issue in report["issues"])
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"

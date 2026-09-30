@@ -295,7 +295,7 @@ action="get_info", sub_action="edit_state"
 MCPからは `edit_item` / `keyframe`（`keyframe_action=set|remove|clear`）と `get_info` / `keyframes` で呼びます。
 YMM4内部の Animation API をリフレクションで叩くため、対象バージョンでメソッドが無い場合は `KEYFRAME_METHOD_UNAVAILABLE` になります。そのときは `inspect` で署名を確認してください。
 
-`ymm4_interact(action="duck_bgm", bgm_item_id="...")` は現在の VoiceItem 区間から指定 AudioItem の Volume キーフレームを計画します。既定は `dry_run=true` で編集しません。`duck_ratio`（既定0.3）、`attack_frames`（既定5）、`release_frames`（既定10）を指定できます。適用時は `dry_run=false` とし、保存済みプロジェクトのバックアップを作ってから revision を確認しながら打刻します。既存の Volume キーフレームがある場合は上書きせず拒否します。途中失敗は部分適用と `backup_path` を返します。軽量な自動復元は行わないため、必要ならバックアップを確認して開き直してください。YMM4の Volume Animation に対応する AudioItem が対象です。
+`ymm4_interact(action="duck_bgm", bgm_item_id="...")` は現在の VoiceItem 区間から指定 AudioItem の Volume キーフレームを計画します。既定は `dry_run=true` で編集しません。`duck_ratio`（既定0.3）、`attack_frames`（既定5）、`release_frames`（既定10）を指定できます。適用時は `dry_run=false` とし、保存済みプロジェクトのバックアップを作ってから revision を確認しながら打刻します。既存の Volume キーフレームがある場合は上書きせず拒否します。途中失敗は部分適用と `backup_path` を返します。軽量な自動復元は行わないため、必要ならバックアップを確認して開き直してください。YMM4の Volume Animation に対応する AudioItem が対象です。 バックアップ後・最初の打刻前にもタイムラインを照合し、発話位置や尺などが変わっていれば `BGM_DUCKING_SNAPSHOT_CONFLICT` で打刻を中止します。適用後は最終 revision と全キーフレーム（元の0フレームを含む）を照合し、追加・重複キーや異なる値があれば `BGM_DUCKING_VERIFY_FAILED` を返します。
 
 ### 全機能アクセス用 汎用API ★NEW
 個別エンドポイントで未対応のYMM4内部機能に、リフレクション経由で直接アクセスできます。
@@ -421,14 +421,18 @@ expected=[
 結果は `passed`、0〜100の `score`、エラー・警告件数の `summary`、および `issues` を返します。
 各Issueには可能な範囲で `frame_range`、`item_ids`、`suggested_fix` が含まれます。`problems` は既存クライアント互換のための `issues` の別名です。
 先頭フレームより前の空白は警告せず、アイテム同士の内部空白だけを `GAP` として報告します。
-`subtitle_layers` を指定すると、各 VoiceItem の発話と時間が重なる指定レイヤーの TextItem を探し、空白・改行を除いた本文が一致しなければ `SUBTITLE_MISSING` または `SUBTITLE_TEXT_MISMATCH` を返します。テロップ用レイヤーは指定しないでください。発話テキストを取得できない場合は `SUBTITLE_CHECK_SKIPPED` を警告します。字幕が発話の全時間を覆うかどうかは検査しません。
+`subtitle_layers` を指定すると、各 VoiceItem の発話と時間が重なる指定レイヤーの TextItem を探し、空白・改行を除いた本文が一致しなければ `SUBTITLE_MISSING` または `SUBTITLE_TEXT_MISMATCH` を返します。テロップ用レイヤーは指定しないでください。発話テキストを取得できない場合は `SUBTITLE_CHECK_SKIPPED` を警告します。同じ本文の字幕の合計区間で発話の全時間を覆わない場合は `SUBTITLE_TIMING_MISMATCH` と空白区間 `uncovered_ranges` を返します。許容する各空白の長さは `subtitle_timing_tolerance_frames`（既定0）で指定できます。
 映像の見切れや音量などはこの検査の対象外なので、`preview` / `watch` と組み合わせて確認してください。
 
 **修正ループの停止判定：** `action="qa_gate"` は同じ検査条件で現在の `validate` を実行し、`qa_history`（過去の `validate` 結果を古い順に並べた配列）と比較します。`decision` は `pass` / `repair` / `stop`、`reason_code` は `QA_PASSED` / `QA_ISSUES_REMAIN` / `QA_REGRESSED` / `QA_STALLED` / `REPAIR_LIMIT_REACHED` / `TIME_LIMIT_REACHED` / `API_LIMIT_REACHED` です。結果の `qa` を次回の `qa_history` に追加してください。既定では修正3回が上限で、同じ問題群が2回連続した場合も停止します。経過時間とAPI回数は呼び出し側が `elapsed_seconds` / `api_calls` を数え、必要に応じて `max_seconds` / `max_api_calls` を指定します。品質悪化時の `suggested_action: consider_checkpoint_rollback` は提案のみで、ロールバックは自動実行されません。映像・音声・完成動画の品質判定は指定した追加チェックに限ります。
 
-各 `validate` 結果の `criteria_hash` は期待アイテム・尺・空白・字幕レイヤーの検査条件を表します。`qa_gate` は現在と履歴の条件が異なる場合、品質の変化を誤判定しないよう入力エラーを返します。同じ問題に含まれるアイテムIDの並び順だけが変わっても、停止判定では同一の問題として扱います。
+各 `validate` 結果の `criteria_hash` は期待アイテム・尺・空白・字幕レイヤー・字幕タイミング許容値の検査条件を表します。`qa_gate` は現在と履歴の条件が異なる場合、品質の変化を誤判定しないよう入力エラーを返します。同じ問題に含まれるアイテムIDの並び順だけが変わっても、停止判定では同一の問題として扱います。
 
 `qa_gate` に `visual_check={"end_frame":90,"step_frames":30,"black_as_error":true}`、`audio_check={"path":"C:/audio.wav"}`、`export_check={"path":"C:/done.mp4","require_audio":true}` を渡すと、現在の構造検査に映像・音声・完成MP4の検査を加えて合否と修正停止条件を判定します。複数指定もできます。各結果は `qa.checks` に含まれ、`qa.issues` には検査元 `source` が付きます。取得失敗時は `QA_CHECK_FAILED` となり、合格扱いにしません。履歴の `criteria_hash` には検査設定も含まれるため、同じ設定の `qa` を次の `qa_history` に渡してください。映像は指定したサンプル位置、音声は指定した WAV ファイルに限る検査です。
+
+`qa_gate` に `scene_check={"scene_ranges":[{"id":"intro","start_frame":0,"end_frame":300}],"require_visual":true,"require_audio":true,"max_visual_gap_frames":0,"max_audio_gap_frames":30}` を渡すと、指定シーン内の映像・音声素材の配置を別々に検査します。先頭・末尾・内部の空白のうち許容値を超える区間を `SCENE_VISUAL_GAP` / `SCENE_AUDIO_GAP` として報告します。音声の存在で映像不足を隠しません。意図した無音シーンでは `require_audio=false` を指定します。これは素材の区間だけの検査で、不透明度・音量・実際の映像/音声・VideoItem内の音声は判定しません。既定は両方必須・空白許容0です。
+
+追加チェックを行うQAでは検査後にタイムラインを再取得し、開始時のスナップショットと一致することを確認します。変化した場合は `QA_SNAPSHOT_CONFLICT`、再取得できない場合は `QA_ITEMS_UNAVAILABLE` / `QA_SNAPSHOT_VERIFY_UNKNOWN` を返し、履歴に使う `qa` や合格判定を返しません。成功時の `qa.snapshot_hash` は検査したタイムラインの状態を表します。検査条件の `criteria_hash` とは別で、修正後の状態を同条件で比較できます。この確認は楽観的な競合検出であり、ホスト全体をロックするトランザクションではありません。
 
 `visual_qa` は `start_frame`（既定0）から `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。代わりに `scene_ranges` と `scene_id` を指定すると、該当シーンの半開区間内を検査します。`qa_gate` の `visual_check` でも同じ指定が可能です。RGBの色変化も比較します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
 

@@ -47,3 +47,29 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
     if len(points) > 2000:
         raise ValueError("ducking plan exceeds 2000 keyframes")
     return [{"at": at, "value": value} for at, value in sorted(points.items())]
+
+
+def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float) -> bool:
+    """Verify the complete curve, including the unchanged original start key."""
+    if (not isinstance(report, dict) or report.get("success") is not True or
+            report.get("revision") != revision or not isinstance(report.get("animations"), list)):
+        return False
+    volume = [a for a in report["animations"] if isinstance(a, dict) and a.get("prop") == "Volume"]
+    found = volume[0].get("keyframes") if len(volume) == 1 else None
+    expected = {point["at"]: point["value"] for point in points}
+    expected.setdefault(0, base_volume)
+    if not isinstance(found, list) or len(found) != len(expected):
+        return False
+    seen = set()
+    for key in found:
+        if not isinstance(key, dict) or not isinstance(key.get("value"), (int, float)):
+            return False
+        try:
+            at = integer(key.get("at"), "keyframe.at")
+            value = finite_number(key["value"], "keyframe.value")
+        except ValueError:
+            return False
+        if at in seen or at not in expected or abs(value - expected[at]) >= 1e-6:
+            return False
+        seen.add(at)
+    return True
