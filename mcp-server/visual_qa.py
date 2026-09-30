@@ -23,7 +23,8 @@ def thumbnail(image_b64: str) -> bytes:
 
 
 def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
-            min_static_frames: int = 60, black_as_error: bool = False) -> dict:
+            min_static_frames: int = 60, black_as_error: bool = False,
+            white_as_error: bool = False) -> dict:
     """Only mark observed frames; gaps between samples are never called exact boundaries."""
     if not isinstance(samples, list) or len(samples) > 40:
         raise ValueError("samples must contain at most 40 captures")
@@ -31,8 +32,8 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
         raise ValueError("step_frames must be positive")
     if isinstance(min_static_frames, bool) or not isinstance(min_static_frames, int) or min_static_frames < 1:
         raise ValueError("min_static_frames must be positive")
-    if not isinstance(black_as_error, bool):
-        raise ValueError("black_as_error must be boolean")
+    if not isinstance(black_as_error, bool) or not isinstance(white_as_error, bool):
+        raise ValueError("black_as_error and white_as_error must be boolean")
     last_frame = -1
     for sample in samples:
         if (not isinstance(sample, tuple) or len(sample) != 2 or
@@ -43,12 +44,15 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
         last_frame = sample[0]
     issues = []
     black_start = None
+    white_start = None
     static_start = None
     previous = None
     previous_frame = None
     for frame, pixels in samples:
         black = (sum(max(pixels[i:i + 3]) < 12 for i in range(0, len(pixels), 3)) >=
                  len(pixels) / 3 * .99 and sum(pixels) / len(pixels) < 5)
+        white = (sum(min(pixels[i:i + 3]) > 245 for i in range(0, len(pixels), 3)) >=
+                 len(pixels) / 3 * .99 and sum(pixels) / len(pixels) > 250)
         if black and black_start is None:
             black_start = frame
         if not black and black_start is not None:
@@ -56,6 +60,13 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
                            "start_frame": black_start, "end_frame": previous_frame,
                            "message": "サンプリングしたプレビューがほぼ黒です（意図的な暗転の可能性あり）"})
             black_start = None
+        if white and white_start is None:
+            white_start = frame
+        if not white and white_start is not None:
+            issues.append({"code": "WHITE_FRAME", "severity": "error" if white_as_error else "warning",
+                           "start_frame": white_start, "end_frame": previous_frame,
+                           "message": "サンプリングしたプレビューがほぼ白です（意図的な白画面の可能性あり）"})
+            white_start = None
         if previous is not None:
             unchanged = sum(abs(a - b) for a, b in zip(previous, pixels)) / len(pixels) < 1
             if unchanged and static_start is None:
@@ -74,6 +85,10 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
             issues.append({"code": "BLACK_FRAME", "severity": "error" if black_as_error else "warning",
                            "start_frame": black_start, "end_frame": last,
                            "message": "サンプリングしたプレビューがほぼ黒です（意図的な暗転の可能性あり）"})
+        if white_start is not None:
+            issues.append({"code": "WHITE_FRAME", "severity": "error" if white_as_error else "warning",
+                           "start_frame": white_start, "end_frame": last,
+                           "message": "サンプリングしたプレビューがほぼ白です（意図的な白画面の可能性あり）"})
         if static_start is not None and last - static_start >= min_static_frames:
             issues.append({"code": "STATIC_PREVIEW", "severity": "warning",
                            "start_frame": static_start, "end_frame": last,
