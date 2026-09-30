@@ -33,8 +33,7 @@ if ($ConfigureClaudeDesktop) {
         if ($null -eq $config -or $config -isnot [pscustomobject]) {
             throw 'Claude Desktop の設定は JSON オブジェクトである必要があります。'
         }
-        $backupPath = "$configPath.bak.$([guid]::NewGuid().ToString('N'))"
-        Copy-Item -LiteralPath $configPath -Destination $backupPath
+        $backupPath = $null
     } else {
         $config = [pscustomobject]@{}
         $backupPath = $null
@@ -44,21 +43,37 @@ if ($ConfigureClaudeDesktop) {
     } elseif ($config.mcpServers -isnot [pscustomobject]) {
         throw 'mcpServers は JSON オブジェクトである必要があります。'
     }
-    $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
-    $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"
-    try {
-        $json = $config | ConvertTo-Json -Depth 100
-        [IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+    $current = $config.mcpServers.ymm4
+    $sameEntry = $null -ne $current -and
+                 $current.command -ceq $entry.command -and
+                 @($current.args).Count -eq 1 -and
+                 @($current.args)[0] -ceq $entry.args[0] -and
+                 (($null -eq $current.env -and $null -eq $entry.env) -or
+                  ($null -ne $current.env -and $null -ne $entry.env -and
+                   $current.env.YMM4_API_BASE -ceq $entry.env.YMM4_API_BASE))
+    if ($sameEntry) {
+        Write-Output "Claude Desktop の設定は更新済みです: $configPath"
+    } else {
         if (Test-Path -LiteralPath $configPath) {
-            [IO.File]::Replace($tempPath, $configPath, $null)
-        } else {
-            [IO.File]::Move($tempPath, $configPath)
+            $backupPath = "$configPath.bak.$([guid]::NewGuid().ToString('N'))"
+            Copy-Item -LiteralPath $configPath -Destination $backupPath
         }
-    } finally {
-        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath }
+        $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
+        $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"
+        try {
+            $json = $config | ConvertTo-Json -Depth 100
+            [IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+            if (Test-Path -LiteralPath $configPath) {
+                [IO.File]::Replace($tempPath, $configPath, $null)
+            } else {
+                [IO.File]::Move($tempPath, $configPath)
+            }
+        } finally {
+            if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath }
+        }
+        Write-Output "Claude Desktop の設定を更新しました: $configPath"
+        if ($backupPath) { Write-Output "元の設定のバックアップ: $backupPath" }
     }
-    Write-Output "Claude Desktop の設定を更新しました: $configPath"
-    if ($backupPath) { Write-Output "元の設定のバックアップ: $backupPath" }
 }
 if (-not $ConfigureClaudeDesktop) {
     Write-Output 'Claude Desktop の mcpServers.ymm4 に次の内容を設定してください:'
