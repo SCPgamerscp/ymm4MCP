@@ -72,8 +72,9 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_apply_uses_revision_chain_and_verifies(self):
         planned = ducking.plan(ITEMS["items"][0], ITEMS["items"][1:], 100)
-        verified = {"success": True, "animations": [{"prop": "Volume", "keyframes": planned}]}
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, verified]
+        verified = {"success": True, "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
+            {"at": 0, "value": 100}, *planned]}]}
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, verified]
         posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
@@ -85,7 +86,7 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_failure_exposes_backup_and_applied_points(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                  {"success": True, "backup_path": "C:/backup/cp.ymmp"},
                  {"success": True, "revision": "r2"},
@@ -99,7 +100,7 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
         posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, TimeoutError("read timed out")])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, TimeoutError("read timed out")])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
         self.assertEqual(result["error_code"], "BGM_DUCKING_VERIFY_UNKNOWN")

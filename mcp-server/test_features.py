@@ -177,7 +177,7 @@ class PlanningTests(unittest.TestCase):
     def test_subtitle_qa_matches_text_and_time_only_on_selected_layers(self):
         items = [
             {"item_id": "voice:1", "type": "VoiceItem", "text": "こんにちは 世界", "frame": 10, "layer": 7, "length": 60},
-            {"item_id": "caption:1", "type": "TextItem", "text": "こんにちは\n世界", "frame": 12, "layer": 9, "length": 58},
+            {"item_id": "caption:1", "type": "TextItem", "text": "こんにちは\n世界", "frame": 10, "layer": 9, "length": 60},
             {"item_id": "title", "type": "TextItem", "text": "別のテロップ", "frame": 10, "layer": 3, "length": 60},
         ]
         result = editing.validate_timeline(items, include_gaps=False, subtitle_layers=[9])

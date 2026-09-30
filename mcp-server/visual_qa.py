@@ -25,8 +25,8 @@ def thumbnail(image_b64: str) -> bytes:
 def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
             min_static_frames: int = 60, black_as_error: bool = False) -> dict:
     """Only mark observed frames; gaps between samples are never called exact boundaries."""
-    if not isinstance(samples, list) or len(samples) > 40:
-        raise ValueError("samples must contain at most 40 captures")
+    if not isinstance(samples, list) or not 1 <= len(samples) <= 40:
+        raise ValueError("samples must contain 1..40 captures")
     if isinstance(step_frames, bool) or not isinstance(step_frames, int) or step_frames < 1:
         raise ValueError("step_frames must be positive")
     if isinstance(min_static_frames, bool) or not isinstance(min_static_frames, int) or min_static_frames < 1:

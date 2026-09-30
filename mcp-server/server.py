@@ -35,6 +35,8 @@ import editplan
 import ducking
 import scenes
 import scene_media
+import scene_qa
+import quality_guard
 import visual_qa
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -197,6 +199,8 @@ TOOLS = [
                 "scene_id": {"type": "string", "description": "visual_qa: scene_ranges 内の検査対象ID"},
                 "qa_history": {"type": "array", "maxItems": 20, "items": {"type": "object"},
                                "description": "qa_gate: 同じ検査条件で得た過去のvalidate結果。古い順"},
+                "scene_check": {"type": "object", "description": "qa_gate: scene_rangesとrequire_visual/require_audio、max_visual_gap_frames/max_audio_gap_framesでシーン内の素材配置の空白を検査"},
+                "subtitle_timing_tolerance_frames": {"type": "integer", "minimum": 0, "description": "validate/qa_gate: 字幕が発話区間を覆わない空白の許容フレーム数。既定0"},
                 "visual_check": {"type": "object", "description": "qa_gate: visual_qa の設定（end_frame必須）。指定時に現在のプレビューを検査"},
                 "audio_check": {"type": "object", "description": "qa_gate: get_info/audio_qa の設定（path必須）。指定時に現在のWAVを検査"},
                 "export_check": {"type": "object", "description": "qa_gate: get_info/export_qa の設定（MP4 path必須）。完成動画の尺・FPS・解像度・音声トラックを検査"},
@@ -638,6 +642,10 @@ async def run_bgm_ducking(args: dict) -> dict:
     backup = checkpoint.get("backup_path")
     if checkpoint.get("success") is not True or not isinstance(backup, str) or not backup:
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
+    conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+    if conflict is not None:
+        return {**conflict, "error_code": "BGM_DUCKING_" + conflict["error_code"],
+                "applied": [], "backup_path": backup}
     applied = []
     for point in points:
         payload = {"item_id": item_id, "expected_revision": revision,
@@ -647,7 +655,7 @@ async def run_bgm_ducking(args: dict) -> dict:
         except Exception as exc:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN", "error": str(exc),
                     "applied": applied, "backup_path": backup, "outcome_unknown": True}
-        if changed.get("success") is not True or not isinstance(changed.get("revision"), str):
+        if changed.get("success") is not True or not isinstance(changed.get("revision"), str) or not changed["revision"]:
             return {"success": False, "error_code": "BGM_DUCKING_PARTIAL",
                     "applied": applied, "details": changed, "backup_path": backup}
         applied.append(point)
@@ -658,10 +666,7 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_UNKNOWN",
                 "error": str(exc), "applied": applied, "backup_path": backup,
                 "outcome_unknown": True}
-    found = next((a.get("keyframes", []) for a in (checked.get("animations") or [])
-                  if isinstance(a, dict) and a.get("prop") == "Volume"), []) if checked.get("success") is True else []
-    if not all(any(k.get("at") == p["at"] and isinstance(k.get("value"), (int, float)) and
-                   abs(k["value"] - p["value"]) < 1e-6 for k in found) for p in points):
+    if not ducking.verify_keyframes(checked, revision, points, keys[0]["value"]):
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_FAILED",
                 "applied": applied, "backup_path": backup, "details": checked}
     return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
@@ -1248,10 +1253,14 @@ async def dispatch(args: dict) -> Any:
             if snapshot.get("success") is False or "error" in snapshot:
                 return snapshot
             qa = validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"),
-                                   args.get("include_gaps", True), args.get("subtitle_layers"))
+                                   args.get("include_gaps", True), args.get("subtitle_layers"),
+                                   args.get("subtitle_timing_tolerance_frames", 0))
             if action == "validate":
                 return qa
             checks, criteria = {}, {}
+            if "scene_check" in args:
+                checks["scene"] = scene_qa.inspect(snapshot["items"], args["scene_check"])
+                criteria["scene"] = args["scene_check"]
             for name, option, task in (("visual", "visual_check", "visual_qa"),
                                        ("audio", "audio_check", "audio_qa"),
                                        ("export", "export_check", "export_qa")):
@@ -1275,7 +1284,12 @@ async def dispatch(args: dict) -> Any:
                             "check": name, "details": report}
                 checks[name] = report
             if checks:
+                conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+                if conflict is not None:
+                    return {**conflict, "passed": False,
+                            "error_code": "QA_" + conflict["error_code"]}
                 qa = combine_qa_reports(qa, checks, criteria)
+            qa["snapshot_hash"] = editplan.snapshot_hash(snapshot["items"])
             return evaluate_qa_gate(
                 qa, args.get("qa_history"), max_repairs=args.get("max_repairs", 3),
                 repeat_limit=args.get("repeat_limit", 2), elapsed_seconds=args.get("elapsed_seconds", 0),
