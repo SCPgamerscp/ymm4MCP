@@ -65,6 +65,10 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if not memberships:
             unassigned.append(identity)
     for scene in scenes:
+        scene["continues_from_previous_item_ids"] = list(dict.fromkeys(
+            item["item_id"] for item in scene["items"] if item["frame"] < scene["start_frame"]))
+        scene["continues_into_next_item_ids"] = list(dict.fromkeys(
+            item["item_id"] for item in scene["items"] if item["end_frame"] > scene["end_frame"]))
         intervals = [(item["visible_start_frame"], item["visible_end_frame"])
                      for item in scene["items"]]
         gaps = _uncovered(intervals, scene["start_frame"], scene["end_frame"])
