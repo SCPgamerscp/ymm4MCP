@@ -66,9 +66,14 @@ class CompositeQaTests(unittest.IsolatedAsyncioTestCase):
 
     def test_inconsistent_external_report_is_rejected(self):
         structural = editing.validate_timeline([])
-        with self.assertRaisesRegex(ValueError, "failed without an error"):
+        with self.assertRaisesRegex(ValueError, "disagrees"):
             editing.combine_qa_reports(structural, {"visual": {
                 "success": True, "passed": False, "issues": []}}, {"visual": {"end_frame": 30}})
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            editing.combine_qa_reports(structural, {"visual": {
+                "success": True, "passed": True,
+                "issues": [{"code": "BLACK_FRAME", "severity": "error"}]}},
+                {"visual": {"end_frame": 30}})
 
     def test_moved_silence_does_not_look_stalled(self):
         structural = editing.validate_timeline([])
