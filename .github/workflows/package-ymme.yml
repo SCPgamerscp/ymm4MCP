@@ -28,6 +28,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Validate setup PowerShell syntax
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'mcp-server/setup.ps1'), [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors) { throw ($parseErrors | Out-String) }
       - name: Test timeline input validation
         run: dotnet run --project tests/TimelineInputValidation.Tests/TimelineInputValidation.Tests.csproj --configuration Release
       - name: Test WAV audio QA
