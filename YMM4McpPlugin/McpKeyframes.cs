@@ -271,6 +271,7 @@ namespace YMM4McpPlugin
                 if (TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame) && TrySetValueAt(anim, frame, value))
                     return true;
             }
+            if (KeyframeCollectionMutation.TryUpsert(anim, frame, value)) return true;
             return TrySetValueAt(anim, frame, value);
         }
 
@@ -304,7 +305,11 @@ namespace YMM4McpPlugin
                 var frames = ReadFrameList(anim);
                 int index;
                 if (frames.Count + 1 == list.Count)
-                    index = frame == 0 && (frames.Count == 0 || frames[0] != 0) ? 0 : frames.FindIndex(f => f == frame) + 1;
+                {
+                    int match = frames.FindIndex(f => f == frame);
+                    index = frame == 0 && (frames.Count == 0 || frames[0] != 0)
+                        ? 0 : match >= 0 ? match + 1 : -1;
+                }
                 else
                     index = frames.FindIndex(f => f == frame);
                 if (index < 0 || index >= list.Count) return false;
