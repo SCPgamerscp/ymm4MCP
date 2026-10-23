@@ -30,12 +30,17 @@ class MissingAssetTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["complete"])
 
     async def test_error_snapshot_with_items_is_rejected_before_probing_files(self):
-        # A host error may still carry a stale items array and success=true.
-        for error in ("timeline unavailable", None):
-            with self.subTest(error=error):
-                snapshot = {"success": True, "error": error, "items": [
-                    {"item_id": "a", "type": "VideoItem",
-                     "source_path": "C:/Media/a.mp4"}]}
+        # YMM4 returns an error alongside an empty items array when the VM is unavailable.
+        # Even success=true and a stale items array must never override an error.
+        snapshots = [
+            {"error": "MainViewModel取得失敗", "items": []},
+            {"success": True, "error": "timeline unavailable", "items": [
+                {"item_id": "a", "type": "VideoItem",
+                 "source_path": "C:/Media/a.mp4"}]},
+            {"success": True, "error": None, "items": []},
+        ]
+        for snapshot in snapshots:
+            with self.subTest(snapshot=snapshot):
                 with patch.object(server, "ymm4_get", AsyncMock(return_value=snapshot)) as get:
                     result = await server.dispatch({"action": "get_info",
                                                     "sub_action": "missing_assets"})
