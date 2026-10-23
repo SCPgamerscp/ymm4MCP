@@ -28,3 +28,32 @@ class MissingAssetTests(unittest.IsolatedAsyncioTestCase):
             result = await server.dispatch({"action": "get_info", "sub_action": "missing_assets"})
         self.assertEqual(result["checked_count"], 0)
         self.assertFalse(result["complete"])
+
+    async def test_error_snapshot_with_items_is_rejected_before_probing_files(self):
+        # A host error may still carry a stale items array and success=true.
+        for error in ("timeline unavailable", None):
+            with self.subTest(error=error):
+                snapshot = {"success": True, "error": error, "items": [
+                    {"item_id": "a", "type": "VideoItem",
+                     "source_path": "C:/Media/a.mp4"}]}
+                with patch.object(server, "ymm4_get", AsyncMock(return_value=snapshot)) as get:
+                    result = await server.dispatch({"action": "get_info",
+                                                    "sub_action": "missing_assets"})
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+                get.assert_awaited_once_with("/items")
+
+    async def test_error_media_info_with_exists_true_is_not_trusted(self):
+        snapshot = {"success": True, "items": [
+            {"item_id": "a", "type": "ImageItem",
+             "source_path": "C:/Media/a.png"}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                snapshot, {"success": True, "exists": True, "error": "access denied"}])) as get:
+            result = await server.dispatch({"action": "get_info",
+                                            "sub_action": "missing_assets"})
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["checked_count"], 0)
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["unchecked"], [
+            {"path": "C:/Media/a.png", "item_ids": ["a"]}])
+        self.assertEqual(get.await_count, 2)
