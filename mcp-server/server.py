@@ -616,6 +616,19 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "VOICE_ITEM_NOT_FOUND",
                     "missing_item_ids": [value for value in selected if value not in found]}
         voices = [voice for voice in voices if voice.get("item_id") in selected]
+        try:
+            bgm_start = integer(bgm.get("frame"), "bgm.frame")
+            bgm_end = integer(bgm_start + integer(bgm.get("length"), "bgm.length", 1), "bgm.end")
+            outside = []
+            for voice in voices:
+                start = integer(voice.get("frame"), "voice.frame")
+                end = integer(start + integer(voice.get("length"), "voice.length", 1), "voice.end")
+                if start >= bgm_end or end <= bgm_start:
+                    outside.append(voice["item_id"])
+        except ValueError as exc:
+            return {"success": False, "error_code": "VOICE_TIMING_UNAVAILABLE", "error": str(exc)}
+        if outside:
+            return {"success": False, "error_code": "VOICE_OUTSIDE_BGM", "item_ids": outside}
     key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
     state = await ymm4_get(key_path)
     if state.get("success") is not True or state.get("revision") != revision:

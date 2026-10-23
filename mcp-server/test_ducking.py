@@ -42,6 +42,17 @@ class DuckingPlanTests(unittest.TestCase):
 
 
 class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selected_voice_outside_bgm_rejects_before_keyframe_access(self):
+        distant = {"items": [ITEMS["items"][0],
+                             {**ITEMS["items"][1], "frame": 100}]}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=distant)) as get, \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "voice_item_ids": ["voice:1"], "dry_run": False})
+        self.assertEqual(result["error_code"], "VOICE_OUTSIDE_BGM")
+        get.assert_awaited_once_with("/items")
+        post.assert_not_awaited()
+
     async def test_voice_selection_is_fail_closed(self):
         with patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)) as get, \
              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
