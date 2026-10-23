@@ -70,6 +70,13 @@ Check(KeyframeCollectionMutation.TryUpsert(immutable, 20, 2.0), "Insert immutabl
 Check(KeyframeCollectionMutation.TryUpsert(immutable, 10, 1.5), "Insert sorted immutable frame");
 Check(KeyframeCollectionMutation.TryUpsert(immutable, 20, 3.0), "Update immutable frame");
 Check(KeyframeCollectionMutation.TryUpsert(immutable, 0, 0.5), "Update immutable start");
+var unchangedFrames = immutable.KeyFrames.Frames;
+var unchangedValues = immutable.Values;
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 20, 3.0), "Idempotent immutable keyframe retry");
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 0, 0.5), "Idempotent immutable start retry");
+Check(ReferenceEquals(immutable.KeyFrames.Frames, unchangedFrames)
+    && ReferenceEquals(immutable.Values, unchangedValues),
+    "Idempotent retry must not replace immutable collection references");
 Check(immutable.KeyFrames.Frames.SequenceEqual(new[] { 10, 20 }), "Immutable frame order");
 Check(immutable.Values.SequenceEqual(new[] { 0.5, 1.5, 3.0 }), "Immutable value alignment");
 Check(oldFrames.Count == 0 && oldValues.SequenceEqual(new[] { 1.0 }),
