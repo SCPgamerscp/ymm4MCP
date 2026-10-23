@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Immutable;
 using YMM4McpPlugin;
 
 static void Resolved(object source, string path, object? expected)
@@ -61,6 +62,34 @@ Check(!KeyframeCollectionMutation.TryUpsert(fixedSize, 20, 3.0), "Reject fixed-s
 Check(((List<double>)fixedSize.Values).Count == 2, "Fixed-size failure is nonmutating");
 Check(!KeyframeCollectionMutation.TryUpsert(implicitStart, -1, 1.0), "Reject negative frame");
 
+// ImmutableList<T> implements non-generic IList but rejects in-place changes.
+var immutable = new ImmutableAnimationFixture();
+var oldFrames = immutable.KeyFrames.Frames;
+var oldValues = immutable.Values;
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 20, 2.0), "Insert immutable frame");
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 10, 1.5), "Insert sorted immutable frame");
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 20, 3.0), "Update immutable frame");
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 0, 0.5), "Update immutable start");
+Check(immutable.KeyFrames.Frames.SequenceEqual(new[] { 10, 20 }), "Immutable frame order");
+Check(immutable.Values.SequenceEqual(new[] { 0.5, 1.5, 3.0 }), "Immutable value alignment");
+Check(oldFrames.Count == 0 && oldValues.SequenceEqual(new[] { 1.0 }),
+    "Immutable originals must remain untouched");
+
+var immutableReadOnly = new ImmutableReadOnlyAnimationFixture();
+Check(!KeyframeCollectionMutation.TryUpsert(immutableReadOnly, 10, 2.0),
+    "Reject immutable properties without setters");
+Check(immutableReadOnly.KeyFrames.Frames.Count == 0
+    && immutableReadOnly.Values.SequenceEqual(new[] { 1.0 }),
+    "Read-only immutable failure leaves original unchanged");
+
+var immutableMixed = new AnimationFixture(
+    System.Collections.Immutable.ImmutableList<int>.Empty,
+    new List<double> { 1.0 });
+Check(!KeyframeCollectionMutation.TryUpsert(immutableMixed, 10, 2.0),
+    "Reject mixed mutable and immutable layout");
+Check(((List<double>)immutableMixed.Values).SequenceEqual(new[] { 1.0 }),
+    "Mixed layout failure leaves values unchanged");
+
 Console.WriteLine("Reflection path and keyframe collection tests passed");
 
 sealed class Item
@@ -85,4 +114,26 @@ sealed class FrameFixture(IList frames)
 sealed class WrappedValue
 {
     public double Value { get; set; }
+}
+
+sealed class ImmutableAnimationFixture
+{
+    public ImmutableFrameFixture KeyFrames { get; } = new();
+    public ImmutableList<double> Values { get; set; } = ImmutableList.Create(1.0);
+}
+
+sealed class ImmutableFrameFixture
+{
+    public ImmutableList<int> Frames { get; set; } = ImmutableList<int>.Empty;
+}
+
+sealed class ImmutableReadOnlyAnimationFixture
+{
+    public ImmutableReadOnlyFrameFixture KeyFrames { get; } = new();
+    public ImmutableList<double> Values { get; } = ImmutableList.Create(1.0);
+}
+
+sealed class ImmutableReadOnlyFrameFixture
+{
+    public ImmutableList<int> Frames { get; } = ImmutableList<int>.Empty;
 }
