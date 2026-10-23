@@ -9,6 +9,25 @@ def report(availability: dict) -> dict:
     unchecked = availability.get("unchecked")
     if not all(isinstance(value, list) for value in (missing, unknown, unchecked)):
         raise ValueError("asset availability report is incomplete")
+    complete = availability.get("complete")
+    count = availability.get("checked_count")
+    if not isinstance(complete, bool) or complete != (not unknown and not unchecked):
+        raise ValueError("asset availability completeness is inconsistent")
+    if type(count) is not int or count < 0:
+        raise ValueError("checked_count must be a non-negative integer")
+
+    def valid_ids(ids):
+        return isinstance(ids, list) and bool(ids) and all(isinstance(i, str) and bool(i) for i in ids)
+
+    if any(not isinstance(i, str) or not i for i in unknown):
+        raise ValueError("unknown source item IDs must be nonempty strings")
+    for source in [*missing, *unchecked]:
+        if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
+                not source["path"].strip() or not valid_ids(source.get("item_ids"))):
+            raise ValueError("asset source entries require a path and item IDs")
+    if len(missing) > count:
+        raise ValueError("missing asset count exceeds checked_count")
+
     issues = []
     for source in missing:
         issues.append({"code": "ASSET_MISSING", "severity": "error", "path": source["path"],
@@ -18,7 +37,7 @@ def report(availability: dict) -> dict:
     for source in unchecked:
         issues.append({"code": "ASSET_CHECK_UNAVAILABLE", "severity": "error", "path": source["path"],
                        "item_ids": source["item_ids"]})
-    if availability.get("complete") is not True and not issues:
+    if not complete and not issues:
         raise ValueError("incomplete asset check has no explanation")
     return {"success": True, "passed": not issues, "issues": issues,
-            "checked_count": availability.get("checked_count")}
+            "checked_count": count}
