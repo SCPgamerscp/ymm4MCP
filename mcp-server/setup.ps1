@@ -46,6 +46,7 @@ if ($ConfigureClaudeDesktop) {
     $current = $config.mcpServers.ymm4
     $sameEntry = $null -ne $current -and
                  $current.command -ceq $entry.command -and
+                 ($current.args -is [array]) -and
                  @($current.args).Count -eq 1 -and
                  @($current.args)[0] -ceq $entry.args[0] -and
                  (($null -eq $current.env -and $null -eq $entry.env) -or
