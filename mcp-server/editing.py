@@ -258,9 +258,15 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         score = finite_number(report.get("score"), "score")
         if not 0 <= score <= 100 or not isinstance(report.get("issues"), list):
             raise ValueError("validate reports require a 0..100 score and issues array")
+        has_errors = False
         for issue in report["issues"]:
             if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"]:
                 raise ValueError("validate report issues require a code")
+            if issue.get("severity") not in ("error", "warning"):
+                raise ValueError("validate report issues require error or warning severity")
+            has_errors |= issue["severity"] == "error"
+        if report["passed"] == has_errors:
+            raise ValueError("validate report passed status disagrees with error issues")
         return score
 
     scores = [check_report(report) for report in [*history, current]]
