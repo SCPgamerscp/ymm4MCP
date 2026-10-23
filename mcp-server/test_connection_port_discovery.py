@@ -83,7 +83,8 @@ class ConnectionPortDiscoveryTests(unittest.TestCase):
                         connection_settings()
 
     def test_reject_control_characters_in_explicit_token(self):
-        for token in ("a b", "a\x00b", "a\x1bb", "a\x7fb", "a\nb"):
+        # NUL cannot be stored in os.environ; the descriptor-token test covers it.
+        for token in ("a b", "a\x1bb", "a\x7fb", "a\nb"):
             with self.subTest(token=repr(token)):
                 with patch.dict(os.environ, {"YMM4_API_TOKEN": token}, clear=True):
                     with self.assertRaises(ConnectionConfigurationError):
