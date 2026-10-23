@@ -18,7 +18,7 @@ def thumbnail(image_b64: str) -> bytes:
                 raise ValueError("preview must be a PNG of at most 32 megapixels")
             image.load()
             return image.convert("RGB").resize((64, 36)).tobytes()
-    except (ValueError, UnidentifiedImageError, OSError) as exc:
+    except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise ValueError("invalid preview PNG") from exc
 
 
