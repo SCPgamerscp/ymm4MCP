@@ -13,7 +13,7 @@ _JOB_ID = re.compile(r"^job_[A-Za-z0-9]{8,64}$")
 
 
 def is_absolute_media_path(path: str) -> bool:
-    if not isinstance(path, str) or not path.strip() or "\x00" in path or "\n" in path:
+    if not isinstance(path, str) or not path.strip() or any(ord(c) < 32 or ord(c) == 127 for c in path):
         return False
     candidate = path.strip()
     if candidate.startswith("\\\\") or _DRIVE.match(candidate):
@@ -79,14 +79,23 @@ def verify_media_file(path: str, expected_format: str | None = None) -> dict:
     if not isinstance(path, str) or not path.strip():
         return {"ok": False, "error_code": "EXPORT_FILE_MISSING", "error": "出力パスが空です"}
     target = Path(path)
-    if not target.is_file():
-        return {"ok": False, "error_code": "EXPORT_FILE_MISSING", "error": "出力ファイルがありません", "output_path": path}
-    size = target.stat().st_size
+    missing = {"ok": False, "error_code": "EXPORT_FILE_MISSING", "error": "出力ファイルがありません", "output_path": path}
+    try:
+        if not target.is_file():
+            return missing
+        with target.open("rb") as stream:
+            size = stream.seek(0, 2)
+            stream.seek(0)
+            header = stream.read(12)
+    except FileNotFoundError:
+        return missing
+    except OSError:
+        return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": "出力ファイルを読み取れません",
+                "output_path": path}
     fmt = (expected_format or target.suffix.lstrip(".")).lower()
     if size < 32:
         return {"ok": False, "error_code": "EXPORT_FILE_EMPTY", "error": "出力ファイルが小さすぎます",
                 "bytes": size, "output_path": path, "format": fmt}
-    header = target.read_bytes()[:12]
     if fmt == "mp4":
         if header[4:8] != b"ftyp":
             return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": "MP4のftypボックスがありません",
