@@ -128,6 +128,11 @@ namespace YMM4McpPlugin
             if (values[0] == null || !IsNumeric(values[0]!.GetType()))
                 return false;
             if (!CreateValue(values[0]!, value, out var entry)) return false;
+            // A repeated request for the same value is already satisfied.
+            // ImmutableList<T>.SetItem may return the original instance for no-op updates.
+            if (!insert && Number(values[valueIndex], out var existing)
+                && existing == Convert.ToDouble(entry, CultureInfo.InvariantCulture))
+                return true;
             object? nextFrames = frames;
             object? nextValues;
             if (insert)
