@@ -326,8 +326,9 @@ def combine_qa_reports(structural, checks, criteria):
             if source == "visual" and "start_frame" in issue and "end_frame" in issue:
                 normalized["frame_range"] = [issue["start_frame"], issue["end_frame"]]
             problems.append(normalized)
-        if not report["passed"] and not any(i["severity"] == "error" for i in report["issues"]):
-            raise ValueError(f"{source} failed without an error issue")
+        has_errors = any(i["severity"] == "error" for i in report["issues"])
+        if report["passed"] == has_errors:
+            raise ValueError(f"{source} passed status disagrees with its error issues")
     errors = sum(i["severity"] == "error" for i in problems)
     warnings = sum(i["severity"] == "warning" for i in problems)
     digest = hashlib.sha256(json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
