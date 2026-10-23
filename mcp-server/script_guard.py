@@ -20,7 +20,9 @@ async def apply(args, get, add_script):
     if expected != actual:
         return {"success": False, "error_code": "SNAPSHOT_CONFLICT",
                 "expected_snapshot_hash": expected, "actual_snapshot_hash": actual}
-    result = await add_script(args)
+    # Recheck inside add_script after character/FPS/append preflight, immediately
+    # before its first voice write. The first check alone can become stale there.
+    result = await add_script(args, expected_snapshot=expected)
     if isinstance(result, dict) and args.get("dry_run"):
         return {**result, "snapshot_hash": actual}
     return result
