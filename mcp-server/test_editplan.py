@@ -107,6 +107,24 @@ class ParsePlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             editplan.parse_reason({"reason": "x" * 201})
 
+    def test_checkpoint_id_requires_exact_ascii_token(self):
+        for token in ("cp_" + "a" * 8, "cp_" + "Z9" * 32):
+            with self.subTest(token=token):
+                self.assertTrue(editplan.checkpoint_id_ok(token))
+        for token in (
+            "cp_" + "a" * 7,
+            "cp_" + "a" * 65,
+            "cp_" + "a" * 8 + "\\n",
+            "cp_" + "a" * 8 + "\\r\\n",
+            "cp_" + "a" * 8 + "\\t",
+            "cp_" + "a" * 8 + "/",
+            "cp_" + "a" * 7 + "é",
+            None,
+            123,
+        ):
+            with self.subTest(token=token):
+                self.assertFalse(editplan.checkpoint_id_ok(token))
+
     def test_group_ops_keeps_scene_order(self):
         ops = [
             {"id": "a", "scene_id": "intro", "op": "add"},
