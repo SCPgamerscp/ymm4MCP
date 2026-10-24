@@ -28,3 +28,37 @@ class MissingAssetTests(unittest.IsolatedAsyncioTestCase):
             result = await server.dispatch({"action": "get_info", "sub_action": "missing_assets"})
         self.assertEqual(result["checked_count"], 0)
         self.assertFalse(result["complete"])
+
+    async def test_error_snapshot_with_items_is_rejected_before_probing_files(self):
+        # YMM4 returns an error alongside an empty items array when the VM is unavailable.
+        # Even success=true and a stale items array must never override an error.
+        snapshots = [
+            {"error": "MainViewModel取得失敗", "items": []},
+            {"success": True, "error": "timeline unavailable", "items": [
+                {"item_id": "a", "type": "VideoItem",
+                 "source_path": "C:/Media/a.mp4"}]},
+            {"success": True, "error": None, "items": []},
+        ]
+        for snapshot in snapshots:
+            with self.subTest(snapshot=snapshot):
+                with patch.object(server, "ymm4_get", AsyncMock(return_value=snapshot)) as get:
+                    result = await server.dispatch({"action": "get_info",
+                                                    "sub_action": "missing_assets"})
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+                get.assert_awaited_once_with("/items")
+
+    async def test_error_media_info_with_exists_true_is_not_trusted(self):
+        snapshot = {"success": True, "items": [
+            {"item_id": "a", "type": "ImageItem",
+             "source_path": "C:/Media/a.png"}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                snapshot, {"success": True, "exists": True, "error": "access denied"}])) as get:
+            result = await server.dispatch({"action": "get_info",
+                                            "sub_action": "missing_assets"})
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["checked_count"], 0)
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["unchecked"], [
+            {"path": "C:/Media/a.png", "item_ids": ["a"]}])
+        self.assertEqual(get.await_count, 2)
