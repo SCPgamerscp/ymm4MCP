@@ -18,7 +18,7 @@ def thumbnail(image_b64: str) -> bytes:
                 raise ValueError("preview must be a PNG of at most 32 megapixels")
             image.load()
             return image.convert("RGB").resize((64, 36)).tobytes()
-    except (ValueError, UnidentifiedImageError, OSError) as exc:
+    except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise ValueError("invalid preview PNG") from exc
 
 
@@ -49,6 +49,24 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     previous = None
     previous_frame = None
     for frame, pixels in samples:
+        if previous_frame is not None and frame - previous_frame > step_frames:
+            # Missing observations must not connect independent runs or imply a static interval.
+            if black_start is not None:
+                issues.append({"code": "BLACK_FRAME", "severity": "error" if black_as_error else "warning",
+                               "start_frame": black_start, "end_frame": previous_frame,
+                               "message": "サンプリングしたプレビューがほぼ黒です（意図的な暗転の可能性あり）"})
+                black_start = None
+            if white_start is not None:
+                issues.append({"code": "WHITE_FRAME", "severity": "error" if white_as_error else "warning",
+                               "start_frame": white_start, "end_frame": previous_frame,
+                               "message": "サンプリングしたプレビューがほぼ白です（意図的な白画面の可能性あり）"})
+                white_start = None
+            if static_start is not None and previous_frame - static_start >= min_static_frames:
+                issues.append({"code": "STATIC_PREVIEW", "severity": "warning",
+                               "start_frame": static_start, "end_frame": previous_frame,
+                               "message": "プレビューの変化がほとんどありません（静止画の可能性あり）"})
+            static_start = None
+            previous = None
         black = (sum(max(pixels[i:i + 3]) < 12 for i in range(0, len(pixels), 3)) >=
                  len(pixels) / 3 * .99 and sum(pixels) / len(pixels) < 5)
         white = (sum(min(pixels[i:i + 3]) > 245 for i in range(0, len(pixels), 3)) >=
