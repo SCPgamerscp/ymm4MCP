@@ -97,6 +97,17 @@ Check(!KeyframeCollectionMutation.TryUpsert(immutableMixed, 10, 2.0),
 Check(((List<double>)immutableMixed.Values).SequenceEqual(new[] { 1.0 }),
     "Mixed layout failure leaves values unchanged");
 
+// A host-specific immutable Insert can return a list of the right size
+// but insert the wrong frame. Reject it before changing either property.
+var corrupting = new CorruptingImmutableAnimationFixture();
+var corruptingFrames = corrupting.KeyFrames.Frames;
+var corruptingValues = corrupting.Values;
+Check(!KeyframeCollectionMutation.TryUpsert(corrupting, 10, 2.0),
+    "Reject immutable insert that returns an unexpected frame");
+Check(ReferenceEquals(corrupting.KeyFrames.Frames, corruptingFrames)
+    && ReferenceEquals(corrupting.Values, corruptingValues),
+    "Invalid immutable insert must leave both properties unchanged");
+
 Console.WriteLine("Reflection path and keyframe collection tests passed");
 
 sealed class Item
@@ -143,4 +154,30 @@ sealed class ImmutableReadOnlyAnimationFixture
 sealed class ImmutableReadOnlyFrameFixture
 {
     public ImmutableList<int> Frames { get; } = ImmutableList<int>.Empty;
+}
+
+// Simulates a version-specific Insert implementation returning an incorrect
+// frame while otherwise behaving like a read-only IList.
+sealed class CorruptingImmutableAnimationFixture
+{
+    public CorruptingImmutableFrameFixture KeyFrames { get; } = new();
+    public ImmutableList<double> Values { get; set; } = ImmutableList.Create(1.0);
+}
+
+sealed class CorruptingImmutableFrameFixture
+{
+    public CorruptingImmutableFrames Frames { get; set; } = new();
+}
+
+sealed class CorruptingImmutableFrames : System.Collections.ObjectModel.ReadOnlyCollection<int>
+{
+    public CorruptingImmutableFrames() : base(new List<int>()) { }
+    private CorruptingImmutableFrames(List<int> frames) : base(frames) { }
+
+    public CorruptingImmutableFrames Insert(int index, int frame)
+    {
+        var next = this.ToList();
+        next.Insert(index, frame + 1);
+        return new CorruptingImmutableFrames(next);
+    }
 }
