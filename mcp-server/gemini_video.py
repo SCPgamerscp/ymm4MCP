@@ -115,7 +115,13 @@ def _extract_json(text: str) -> dict:
         end = text.rfind("}")
         candidate = text[start : end + 1] if (start >= 0 and end > start) else text
     try:
-        return json.loads(candidate)
+        parsed = json.loads(candidate)
+        if (not isinstance(parsed, dict)
+                or not isinstance(parsed.get("summary"), str)
+                or not isinstance(parsed.get("events"), list)
+                or any(not isinstance(event, dict) for event in parsed["events"])):
+            raise ValueError("summary must be text and events must be an array of objects")
+        return parsed
     except Exception as e:
         return {"summary": "", "events": [], "_parse_error": f"JSON解析失敗: {e}", "_raw": text[:2000]}
 
@@ -155,9 +161,10 @@ def analyze_video_file(
         return {"success": False, "error": f"動画ファイルが見つかりません: {video_path}"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
-    client = _client()
-
+    client = None
+    uploaded = None
     try:
+        client = _client()
         uploaded = client.files.upload(file=video_path)
         active = _wait_file_active(client, uploaded)
         resp = client.models.generate_content(
@@ -165,20 +172,24 @@ def analyze_video_file(
             contents=[active, _build_prompt(instruction)],
         )
         parsed = _extract_json(getattr(resp, "text", "") or "")
-        # 後始末(File APIの容量節約)
-        try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            pass
+        if "_parse_error" in parsed:
+            return {"success": False, "error": parsed["_parse_error"], "source": "file"}
         return {
+            **parsed,
             "success": True,
             "source": "file",
             "video_path": video_path,
             "model": model,
-            **parsed,
         }
     except Exception as e:
         return {"success": False, "error": f"Gemini解析エラー: {e}"}
+    finally:
+        # File API uploads must be removed even when processing or parsing fails.
+        if client is not None and uploaded is not None:
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                pass
 
 
 def analyze_frames_dir(
@@ -203,7 +214,6 @@ def analyze_frames_dir(
         return {"success": False, "error": f"フォルダが見つかりません: {frames_dir}"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
-    client = _client()
 
     # 解析対象の画像ファイルを決定(metaがあればそれを優先、なければフォルダ走査)
     if frames_meta:
@@ -224,6 +234,7 @@ def analyze_frames_dir(
     contents: list[Any] = []
     time_table_lines = []
     try:
+        client = _client()
         for e in entries:
             path = os.path.join(frames_dir, e["file"])
             if not os.path.isfile(path):
@@ -253,13 +264,15 @@ def analyze_frames_dir(
 
         resp = client.models.generate_content(model=model, contents=contents)
         parsed = _extract_json(getattr(resp, "text", "") or "")
+        if "_parse_error" in parsed:
+            return {"success": False, "error": parsed["_parse_error"], "source": "frames_dir"}
         return {
+            **parsed,
             "success": True,
             "source": "frames_dir",
             "frames_dir": frames_dir,
             "analyzed_images": len([c for c in contents if getattr(c, "inline_data", None)]) or len(entries),
             "model": model,
-            **parsed,
         }
     except Exception as e:
         return {"success": False, "error": f"Gemini解析エラー: {e}"}
