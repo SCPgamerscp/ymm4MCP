@@ -16,6 +16,10 @@ def thumbnail(image_b64: str) -> bytes:
         with Image.open(BytesIO(raw)) as image:
             if image.format != "PNG" or image.width * image.height > 32_000_000:
                 raise ValueError("preview must be a PNG of at most 32 megapixels")
+            # A capture represents one timeline frame. APNG would silently use only
+            # its first animation frame and could make visual QA report false results.
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError("preview must contain exactly one PNG frame")
             image.load()
             return image.convert("RGB").resize((64, 36)).tobytes()
     except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
