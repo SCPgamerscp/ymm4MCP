@@ -28,7 +28,7 @@ class SkillDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_prompt_rejects_invalid_video_paths(self):
         with patch.object(mcp_skills, "skill_text", return_value="テスト"):
-            for path in (None, 42, {}, "", "   ", "C:/clip\\x00.mp4", "C:/clip\\r.mp4", "C:/clip\\x7f.mp4"):
+            for path in (None, 42, {}, "", "   ", "C:/clip\x00.mp4", "C:/clip\r.mp4", "C:/clip\x7f.mp4"):
                 with self.subTest(path=path), self.assertRaisesRegex(ValueError, "video_path"):
                     await mcp_skills.get_prompt("jikkyou", {"theme": "実況", "video_path": path})
 
