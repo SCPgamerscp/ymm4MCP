@@ -14,7 +14,7 @@ async def apply(args, get, add_script):
     plan_script(args)  # Reject malformed scripts before calling the host.
     snapshot = await get("/items")
     if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
-            not isinstance(snapshot.get("items"), list):
+            "error" in snapshot or not isinstance(snapshot.get("items"), list):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
     actual = editplan.snapshot_hash(snapshot["items"])
     if expected != actual:
