@@ -11,7 +11,8 @@ def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
 
 def with_coverage(index: dict) -> dict:
     # Unknown host item types are excluded rather than assumed to provide a picture.
-    categories = {"visual": ("videoitem", "imageitem", "textitem", "tachieitem", "faceitem"),
+    categories = {"visual": ("videoitem", "imageitem", "textitem", "tachieitem",
+                             "tachiefaceitem", "faceitem"),
                   "audio": ("audioitem", "voiceitem")}
     for scene in index["scenes"]:
         for category, suffixes in categories.items():
