@@ -887,8 +887,9 @@ async def dispatch(args: dict) -> Any:
                 case "items": return await ymm4_get("/items")
                 case "missing_assets":
                     snapshot = await ymm4_get("/items")
-                    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
-                            "error" in snapshot or not isinstance(snapshot.get("items"), list):
+                    if not isinstance(snapshot, dict) or snapshot.get("success") is not True or \
+                            "error" in snapshot or "error_code" in snapshot or \
+                            not isinstance(snapshot.get("items"), list):
                         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
                     sources = {}
                     unknown = []
@@ -910,7 +911,8 @@ async def dispatch(args: dict) -> Any:
                     for source in sources.values():
                         info = await ymm4_get(f"/media/info?path={quote(source['path'], safe='')}")
                         if not isinstance(info, dict) or info.get("success") is not True or \
-                                "error" in info or not isinstance(info.get("exists"), bool):
+                                "error" in info or "error_code" in info or \
+                                not isinstance(info.get("exists"), bool):
                             unchecked.append(source)
                         elif not info["exists"]:
                             missing.append(source)
