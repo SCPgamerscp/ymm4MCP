@@ -895,7 +895,7 @@ async def dispatch(args: dict) -> Any:
                     for item in snapshot["items"]:
                         if not isinstance(item, dict):
                             return {"success": False, "error_code": "ITEMS_UNAVAILABLE"}
-                        if not str(item.get("type", "")).lower().endswith(("videoitem", "audioitem", "imageitem")):
+                        if not scene_media.is_known_item_type(item.get("type"), ("videoitem", "audioitem", "imageitem")):
                             continue
                         path = item.get("source_path")
                         if not is_absolute_media_path(path):
