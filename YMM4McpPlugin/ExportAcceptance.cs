@@ -37,7 +37,9 @@ namespace YMM4McpPlugin
                 issues.Add(new("EXPORT_VERIFY_FAILED", "error", inspection.Error));
             else
             {
-                if (expectedDuration.HasValue && Math.Abs(inspection.DurationSeconds!.Value - expectedDuration.Value) > tolerance)
+                if (expectedDuration.HasValue && (inspection.DurationSeconds is null ||
+                    !double.IsFinite(inspection.DurationSeconds.Value) ||
+                    Math.Abs(inspection.DurationSeconds.Value - expectedDuration.Value) > tolerance))
                     issues.Add(new("DURATION_MISMATCH", "error", "動画の尺が期待値から外れています",
                         expectedDuration, inspection.DurationSeconds));
                 if (expectedWidth.HasValue && inspection.Width != expectedWidth)
@@ -49,6 +51,7 @@ namespace YMM4McpPlugin
                 if (requireAudio && !inspection.HasAudio)
                     issues.Add(new("AUDIO_STREAM_MISSING", "error", "音声トラックがありません", true, false));
                 if (expectedFps.HasValue && (inspection.AverageFps is null ||
+                    !double.IsFinite(inspection.AverageFps.Value) ||
                     Math.Abs(inspection.AverageFps.Value - expectedFps.Value) > fpsTolerance))
                     issues.Add(new("FPS_MISMATCH", "error", "平均FPSが期待値と異なるか、フレーム時刻を取得できません",
                         expectedFps, inspection.AverageFps));
