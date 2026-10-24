@@ -36,6 +36,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
                        "items": [], "item_count": 0})
 
     unassigned = []
+    seen_item_ids = set()
     for raw in items:
         if not isinstance(raw, dict):
             raise ValueError("item must be an object")
@@ -43,8 +44,11 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         length = integer(raw.get("length"), "item.length", 1)
         end = integer(frame + length, "item.end_frame", 1, MAX_FRAME)
         identity = raw.get("item_id")
-        if not isinstance(identity, str) or not identity:
+        if not isinstance(identity, str) or not identity.strip():
             raise ValueError("item_id is required")
+        if identity in seen_item_ids:
+            raise ValueError("duplicate item_id in timeline snapshot")
+        seen_item_ids.add(identity)
         layer = raw.get("layer")
         if layer is not None:
             layer = integer(layer, "item.layer")
