@@ -97,6 +97,40 @@ Check(!KeyframeCollectionMutation.TryUpsert(immutableMixed, 10, 2.0),
 Check(((List<double>)immutableMixed.Values).SequenceEqual(new[] { 1.0 }),
     "Mixed layout failure leaves values unchanged");
 
+// A host-specific immutable Insert can return a list of the right size
+// but insert the wrong frame. Reject it before changing either property.
+var corrupting = new CorruptingImmutableAnimationFixture();
+var corruptingFrames = corrupting.KeyFrames.Frames;
+var corruptingValues = corrupting.Values;
+Check(!KeyframeCollectionMutation.TryUpsert(corrupting, 10, 2.0),
+    "Reject immutable insert that returns an unexpected frame");
+Check(ReferenceEquals(corrupting.KeyFrames.Frames, corruptingFrames)
+    && ReferenceEquals(corrupting.Values, corruptingValues),
+    "Invalid immutable insert must leave both properties unchanged");
+
+// Host-specific immutable value methods must not change other keyframe values.
+var corruptingValueInsert = new CorruptingImmutableValuesAnimationFixture();
+var insertFramesBefore = corruptingValueInsert.KeyFrames.Frames;
+var insertValuesBefore = corruptingValueInsert.Values;
+Check(!KeyframeCollectionMutation.TryUpsert(corruptingValueInsert, 20, 3.0),
+    "Reject immutable Insert that changes an unrelated value");
+Check(ReferenceEquals(corruptingValueInsert.KeyFrames.Frames, insertFramesBefore)
+    && ReferenceEquals(corruptingValueInsert.Values, insertValuesBefore),
+    "Invalid immutable value Insert must leave both references unchanged");
+Check(corruptingValueInsert.Values.SequenceEqual(new[] { 1.0, 2.0 }),
+    "Invalid immutable value Insert must preserve original values");
+
+var corruptingValueUpdate = new CorruptingImmutableValuesAnimationFixture();
+var updateFramesBefore = corruptingValueUpdate.KeyFrames.Frames;
+var updateValuesBefore = corruptingValueUpdate.Values;
+Check(!KeyframeCollectionMutation.TryUpsert(corruptingValueUpdate, 10, 3.0),
+    "Reject immutable SetItem that changes an unrelated value");
+Check(ReferenceEquals(corruptingValueUpdate.KeyFrames.Frames, updateFramesBefore)
+    && ReferenceEquals(corruptingValueUpdate.Values, updateValuesBefore),
+    "Invalid immutable value SetItem must leave both references unchanged");
+Check(corruptingValueUpdate.Values.SequenceEqual(new[] { 1.0, 2.0 }),
+    "Invalid immutable value SetItem must preserve original values");
+
 Console.WriteLine("Reflection path and keyframe collection tests passed");
 
 sealed class Item
@@ -143,4 +177,61 @@ sealed class ImmutableReadOnlyAnimationFixture
 sealed class ImmutableReadOnlyFrameFixture
 {
     public ImmutableList<int> Frames { get; } = ImmutableList<int>.Empty;
+}
+
+// Simulates a version-specific Insert implementation returning an incorrect
+// frame while otherwise behaving like a read-only IList.
+sealed class CorruptingImmutableAnimationFixture
+{
+    public CorruptingImmutableFrameFixture KeyFrames { get; } = new();
+    public ImmutableList<double> Values { get; set; } = ImmutableList.Create(1.0);
+}
+
+sealed class CorruptingImmutableFrameFixture
+{
+    public CorruptingImmutableFrames Frames { get; set; } = new();
+}
+
+sealed class CorruptingImmutableFrames : System.Collections.ObjectModel.ReadOnlyCollection<int>
+{
+    public CorruptingImmutableFrames() : base(new List<int>()) { }
+    private CorruptingImmutableFrames(List<int> frames) : base(frames) { }
+
+    public CorruptingImmutableFrames Insert(int index, int frame)
+    {
+        var next = this.ToList();
+        next.Insert(index, frame + 1);
+        return new CorruptingImmutableFrames(next);
+    }
+}
+
+sealed class CorruptingImmutableValuesAnimationFixture
+{
+    public ImmutableFrameFixture KeyFrames { get; } = new()
+    {
+        Frames = ImmutableList.Create(10)
+    };
+    public CorruptingImmutableValues Values { get; set; } = new();
+}
+
+sealed class CorruptingImmutableValues : System.Collections.ObjectModel.ReadOnlyCollection<double>
+{
+    public CorruptingImmutableValues() : base(new List<double> { 1.0, 2.0 }) { }
+    private CorruptingImmutableValues(List<double> values) : base(values) { }
+
+    public CorruptingImmutableValues Insert(int index, double value)
+    {
+        var next = this.ToList();
+        next.Insert(index, value);
+        next[0] += 1.0;
+        return new CorruptingImmutableValues(next);
+    }
+
+    public CorruptingImmutableValues SetItem(int index, double value)
+    {
+        var next = this.ToList();
+        next[index] = value;
+        next[0] += 1.0;
+        return new CorruptingImmutableValues(next);
+    }
 }
