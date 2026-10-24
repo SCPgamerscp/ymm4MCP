@@ -2,7 +2,8 @@
 
 
 def report(availability: dict) -> dict:
-    if not isinstance(availability, dict) or availability.get("success") is not True:
+    if (not isinstance(availability, dict) or availability.get("success") is not True or
+            "error" in availability or "error_code" in availability):
         raise ValueError("asset availability check failed")
     missing = availability.get("missing")
     unknown = availability.get("unknown_source_item_ids")
