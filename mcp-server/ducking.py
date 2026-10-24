@@ -52,6 +52,7 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
 def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float) -> bool:
     """Verify the complete curve, including the unchanged original start key."""
     if (not isinstance(report, dict) or report.get("success") is not True or
+            "error" in report or "error_code" in report or
             report.get("revision") != revision or not isinstance(report.get("animations"), list)):
         return False
     volume = [a for a in report["animations"] if isinstance(a, dict) and a.get("prop") == "Volume"]
