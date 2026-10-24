@@ -681,7 +681,8 @@ async def run_bgm_ducking(args: dict) -> dict:
         except Exception as exc:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN", "error": str(exc),
                     "applied": applied, "backup_path": backup, "outcome_unknown": True}
-        if isinstance(changed, dict) and ("error" in changed or "error_code" in changed):
+        if (isinstance(changed, dict) and changed.get("success") is True and
+                ("error" in changed or "error_code" in changed)):
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
