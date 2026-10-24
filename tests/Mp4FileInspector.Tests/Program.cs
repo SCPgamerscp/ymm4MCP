@@ -21,7 +21,7 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
-var ftyp = Box("ftyp", Encoding.ASCII.GetBytes("isom"));
+var ftyp = Box("ftyp", Encoding.ASCII.GetBytes("isom"), new byte[4]); // major_brand + minor_version
 var mvhd = new byte[20];
 U32(mvhd, 12, 1000); U32(mvhd, 16, 2000);
 var tkhd = new byte[84];
@@ -59,6 +59,11 @@ try
     Check(valid.DurationSeconds == 2 && valid.Width == 1920 && valid.Height == 1080, "metadata mismatch");
     Check(valid.AverageFps == 30, "stts average FPS mismatch");
     Check(valid.AudioSampleRate == 48000 && valid.AudioChannels == 2, "mp4a audio metadata mismatch");
+
+    Write(Box("ftyp", Encoding.ASCII.GetBytes("isom")), mdat, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "ftyp without minor_version accepted");
+    Write(Box("ftyp", Encoding.ASCII.GetBytes("isom"), new byte[5]), mdat, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "ftyp with incomplete compatible brand accepted");
 
     Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd), video, Box("trak", Handler("soun"))));
     var unknownAudio = Mp4FileInspector.Inspect(path);
