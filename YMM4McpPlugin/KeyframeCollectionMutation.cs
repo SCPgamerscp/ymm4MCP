@@ -153,6 +153,23 @@ namespace YMM4McpPlugin
                 || actual != Convert.ToDouble(entry, CultureInfo.InvariantCulture))
                 return false;
 
+            // A reflected immutable Insert method is not guaranteed to insert the
+            // requested frame. Verify the entire ordered frame sequence before
+            // committing either collection, not just the resulting counts.
+            if (insert)
+            {
+                for (int i = 0; i < newFrames.Count; i++)
+                {
+                    var expected = i == insertAt ? frame : frames[i < insertAt ? i : i - 1];
+                    if (!int.TryParse(Convert.ToString(expected, CultureInfo.InvariantCulture),
+                            NumberStyles.Integer, CultureInfo.InvariantCulture, out int expectedFrame)
+                        || !int.TryParse(Convert.ToString(newFrames[i], CultureInfo.InvariantCulture),
+                            NumberStyles.Integer, CultureInfo.InvariantCulture, out int actualFrame)
+                        || actualFrame != expectedFrame)
+                        return false;
+                }
+            }
+
             // Stage both new immutable lists before touching the animation.
             // Restore both references if either property setter rejects the update.
             try
