@@ -114,9 +114,9 @@ class ParsePlanTests(unittest.TestCase):
         for token in (
             "cp_" + "a" * 7,
             "cp_" + "a" * 65,
-            "cp_" + "a" * 8 + "\\n",
-            "cp_" + "a" * 8 + "\\r\\n",
-            "cp_" + "a" * 8 + "\\t",
+            "cp_" + "a" * 8 + "\n",
+            "cp_" + "a" * 8 + "\r\n",
+            "cp_" + "a" * 8 + "\t",
             "cp_" + "a" * 8 + "/",
             "cp_" + "a" * 7 + "é",
             None,
