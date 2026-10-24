@@ -91,11 +91,13 @@ namespace YMM4McpPlugin
             var started = Application.Current.Dispatcher.Invoke(() => StartNativeExport(discovery, outputPath, format));
             if (!started.invoked)
             {
+                bool dialogRequired = ExportInvocationPolicy.HasDialogOnlyMethod(
+                    discovery.Methods.Select(m => m.method), format);
                 UpdateJob(job, "failed", phase: "failed", progress: 0,
-                    message: "プログラムからの書き出し方法が見つかりません",
-                    error: "YMM4の出力コマンド/メソッドを実行できませんでした",
-                    errorCode: "EXPORT_METHOD_UNAVAILABLE",
-                    result: new { discovered = discovery.Describe(), output_path = outputPath });
+                    message: dialogRequired ? "保存先を指定できる書き出し方法がありません" : "プログラムからの書き出し方法が見つかりません",
+                    error: dialogRequired ? "YMM4の出力ダイアログはMCPから自動入力できません" : "YMM4の出力コマンド/メソッドを実行できませんでした",
+                    errorCode: dialogRequired ? "EXPORT_DIALOG_REQUIRED" : "EXPORT_METHOD_UNAVAILABLE",
+                    result: new { discovered = discovery.Describe(), output_path = outputPath, format });
                 return;
             }
             UpdateJob(job, "running", phase: "render", progress: 15,
@@ -115,8 +117,6 @@ namespace YMM4McpPlugin
             long lastSize = -1;
             int stable = 0;
             bool outputWasRemoved = false;
-            bool dialogOnly = started.dialogLikely;
-            var dialogDeadline = DateTime.UtcNow.AddSeconds(8);
             while (DateTime.UtcNow < deadline)
             {
                 token.ThrowIfCancellationRequested();
@@ -152,15 +152,6 @@ namespace YMM4McpPlugin
                 {
                     stable = 0;
                     lastSize = -1;
-                    if (dialogOnly && DateTime.UtcNow > dialogDeadline)
-                    {
-                        UpdateJob(job, "failed", phase: "failed", progress: 0,
-                            message: "出力ダイアログは開きましたがファイルが生成されませんでした",
-                            error: "GUIの出力ダイアログは自動入力できません。パス付きメソッドが見つかるYMM4版が必要です",
-                            errorCode: "EXPORT_DIALOG_REQUIRED",
-                            result: new { discovered = discovery.Describe(), invoked = started.method });
-                        return;
-                    }
                 }
                 await Task.Delay(1000, token);
             }
@@ -503,35 +494,24 @@ namespace YMM4McpPlugin
             }
         }
 
-        private static (bool invoked, bool dialogLikely, string method, string target, Task? task) StartNativeExport(
+        private static (bool invoked, string method, string target, Task? task) StartNativeExport(
             ExportDiscovery discovery, string outputPath, string format)
         {
-            foreach (var (target, name, obj) in discovery.PathProperties)
+            foreach (var (target, method, obj) in discovery.Methods)
             {
-                try
-                {
-                    var prop = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (prop?.CanWrite == true) prop.SetValue(obj, outputPath);
-                }
-                catch { }
-            }
-
-            foreach (var (target, method, obj) in discovery.Methods.OrderBy(m => m.method.GetParameters().Length == 0 ? 1 : 0))
-            {
+                if (!ExportInvocationPolicy.AcceptsPath(method, format)) continue;
                 var parameters = method.GetParameters();
                 object?[] args;
-                if (parameters.Length == 0) args = Array.Empty<object?>();
-                else if (parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                if (parameters.Length == 1)
                     args = new object?[] { outputPath };
-                else if (parameters.Length == 2 && parameters[0].ParameterType == typeof(string) && parameters[1].ParameterType == typeof(string))
+                else if (parameters.Length == 2)
                     args = new object?[] { outputPath, format };
                 else continue;
                 try
                 {
                     var result = method.Invoke(obj, args);
                     Task? task = result as Task;
-                    bool dialog = parameters.Length == 0;
-                    return (true, dialog, method.Name, target, task);
+                    return (true, method.Name, target, task);
                 }
                 catch { }
             }
@@ -542,14 +522,13 @@ namespace YMM4McpPlugin
                 {
                     var prop = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     if (prop?.GetValue(obj) is not ICommand cmd) continue;
-                    object? param = cmd.CanExecute(outputPath) ? outputPath : null;
-                    if (!cmd.CanExecute(param)) continue;
-                    cmd.Execute(param);
-                    return (true, param == null, name, target, null);
+                    if (!ExportInvocationPolicy.MatchesFormat(name, format) || !cmd.CanExecute(outputPath)) continue;
+                    cmd.Execute(outputPath);
+                    return (true, name, target, null);
                 }
                 catch { }
             }
-            return (false, false, "", "", null);
+            return (false, "", "", null);
         }
 
         private (bool ok, string method, string target, Task? task) InvokeNamed(string[] names, string path)
