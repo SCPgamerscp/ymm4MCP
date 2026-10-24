@@ -12,9 +12,14 @@ def check() -> dict:
         response = client.get(base + "/status", headers=headers)
         response.raise_for_status()
         status = response.json()
-    if not isinstance(status, dict) or status.get("status") != "running":
+    if (not isinstance(status, dict) or status.get("status") != "running"
+            or "error" in status or "error_code" in status
+            or ("success" in status and status["success"] is not True)):
         raise ValueError("YMM4のステータスを確認できません")
-    return {"status": status["status"], "version": status.get("version"), "port": status.get("port")}
+    port = status.get("port")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("YMM4の応答ポートが不正です")
+    return {"status": status["status"], "version": status.get("version"), "port": port}
 
 
 def main() -> int:

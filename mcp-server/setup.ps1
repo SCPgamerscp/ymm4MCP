@@ -5,13 +5,33 @@ $serverDir = $PSScriptRoot
 $venvDir = Join-Path $serverDir '.venv'
 $venvPython = Join-Path $venvDir 'Scripts\python.exe'
 
+# The Windows py launcher can exist without a registered Python 3 runtime.
+# Probe it first, then fall back to python.exe instead of failing installation.
+$pythonCommand = $null
+$pythonArgs = @()
 if (Get-Command py -ErrorAction SilentlyContinue) {
-    & py -3 -m venv $venvDir
-} elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    & python -m venv $venvDir
-} else {
-    throw 'Python 3 が見つかりません。Python をインストールしてから再実行してください。'
+    try {
+        & py -3 -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $pythonCommand = 'py'
+            $pythonArgs = @('-3')
+        }
+    } catch {
+        # A broken launcher must not prevent checking python.exe.
+    }
 }
+if ($null -eq $pythonCommand -and (Get-Command python -ErrorAction SilentlyContinue)) {
+    try {
+        & python -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        if ($LASTEXITCODE -eq 0) { $pythonCommand = 'python' }
+    } catch {
+        # Report a single actionable error below if both candidates fail.
+    }
+}
+if ($null -eq $pythonCommand) {
+    throw '利用可能な Python 3 が見つかりません。Python 3 をインストールしてから再実行してください。'
+}
+& $pythonCommand @pythonArgs -m venv $venvDir
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
     throw 'Python の仮想環境を作成できませんでした。'
 }
@@ -23,6 +43,19 @@ $entry = @{ command = $venvPython; args = @((Join-Path $serverDir 'server.py')) 
 if ($null -ne $Port) {
     $entry.env = @{ YMM4_API_BASE = "http://127.0.0.1:$Port/api" }
 }
+# Validate connectivity before changing Claude Desktop settings. A failed
+# -CheckConnection must not leave a broken mcpServers.ymm4 entry behind.
+if ($CheckConnection) {
+    $oldBase = $env:YMM4_API_BASE
+    try {
+        if ($null -ne $Port) { $env:YMM4_API_BASE = $entry.env.YMM4_API_BASE }
+        & $venvPython (Join-Path $serverDir 'check_connection.py')
+        if ($LASTEXITCODE -ne 0) { throw 'YMM4プラグインへの接続確認に失敗しました。' }
+    } finally {
+        $env:YMM4_API_BASE = $oldBase
+    }
+}
+
 if ($ConfigureClaudeDesktop) {
     if (-not $env:APPDATA) { throw 'APPDATA が見つかりません。Claude Desktop の設定場所を確認してください。' }
     $configPath = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
@@ -81,13 +114,3 @@ if (-not $ConfigureClaudeDesktop) {
 }
 Write-Output ($entry | ConvertTo-Json -Depth 3)
 Write-Output '接続トークンは YMM4 プラグインの接続ファイルから自動取得します。'
-if ($CheckConnection) {
-    $oldBase = $env:YMM4_API_BASE
-    try {
-        if ($null -ne $Port) { $env:YMM4_API_BASE = $entry.env.YMM4_API_BASE }
-        & $venvPython (Join-Path $serverDir 'check_connection.py')
-        if ($LASTEXITCODE -ne 0) { throw 'YMM4プラグインへの接続確認に失敗しました。' }
-    } finally {
-        $env:YMM4_API_BASE = $oldBase
-    }
-}
