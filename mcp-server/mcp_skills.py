@@ -9,11 +9,14 @@ SKILLS = {
     "chaban": "ゆっくり茶番",
     "story": "ゆっくりストーリー",
 }
+# The pronunciation skill is useful as a read-only reference, but unlike the
+# four production workflows it does not use the generic video-creation prompt.
+RESOURCE_SKILLS = {**SKILLS, "chosei": "ゆっくりボイス調声"}
 ROOT = Path(__file__).resolve().parent / "skills"
 
 
 def skill_text(name: str) -> str:
-    if name not in SKILLS:
+    if name not in RESOURCE_SKILLS:
         raise ValueError(f"Unknown skill: {name}")
     return (ROOT / f"ymm4-{name}" / "SKILL.md").read_text(encoding="utf-8")
 
@@ -21,11 +24,11 @@ def skill_text(name: str) -> str:
 async def list_resources():
     return [Resource(uri=f"ymm4://skills/{name}", name=title, mimeType="text/markdown",
                      description=f"{title}の役割・話速・制作ワークフロー")
-            for name, title in SKILLS.items()]
+            for name, title in RESOURCE_SKILLS.items()]
 
 
 async def read_resource(uri):
-    mapping = {f"ymm4://skills/{name}": name for name in SKILLS}
+    mapping = {f"ymm4://skills/{name}": name for name in RESOURCE_SKILLS}
     name = mapping.get(str(uri))
     if name is None:
         raise ValueError(f"Unknown skill resource: {uri}")
@@ -41,12 +44,20 @@ async def list_prompts():
 
 
 async def get_prompt(name: str, arguments: dict | None = None):
+    if name not in SKILLS:
+        raise ValueError(f"Unknown production prompt: {name}")
     text = skill_text(name)
-    args = arguments or {}
+    args = {} if arguments is None else arguments
+    if not isinstance(args, dict):
+        raise ValueError("Prompt arguments must be an object")
     if set(args) - {"theme", "video_path", "duration_seconds"}:
         raise ValueError("Unknown prompt argument")
     if not isinstance(args.get("theme"), str) or not args["theme"].strip():
         raise ValueError("theme は必須です")
+    if "video_path" in args:
+        path = args["video_path"]
+        if not isinstance(path, str) or not path.strip() or any(ord(c) < 32 or ord(c) == 127 for c in path):
+            raise ValueError("video_path は制御文字を含まない空でない文字列で指定してください")
     if "duration_seconds" in args:
         try:
             duration = int(args["duration_seconds"])
