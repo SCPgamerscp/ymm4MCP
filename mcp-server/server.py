@@ -598,7 +598,10 @@ async def run_bgm_ducking(args: dict) -> dict:
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
     snapshot = await ymm4_get("/items")
-    if snapshot.get("success") is False or "error" in snapshot or not isinstance(snapshot.get("items"), list):
+    if (not isinstance(snapshot, dict) or
+            ("success" in snapshot and snapshot["success"] is not True) or
+            "error" in snapshot or "error_code" in snapshot or
+            not isinstance(snapshot.get("items"), list)):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
     matches = [i for i in snapshot["items"] if isinstance(i, dict) and i.get("item_id") == item_id]
     if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("audioitem"):
@@ -635,7 +638,9 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "VOICE_OUTSIDE_BGM", "item_ids": outside}
     key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
     state = await ymm4_get(key_path)
-    if state.get("success") is not True or state.get("revision") != revision:
+    if (not isinstance(state, dict) or state.get("success") is not True or
+            "error" in state or "error_code" in state or
+            state.get("revision") != revision):
         return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
     animations = [a for a in (state.get("animations") or [])
                   if isinstance(a, dict) and a.get("prop") == "Volume"]
@@ -653,11 +658,15 @@ async def run_bgm_ducking(args: dict) -> dict:
     if dry_run or not points:
         return result
     project = await ymm4_get("/project")
-    if project.get("success") is not True or project.get("isSaved") is not True:
+    if (not isinstance(project, dict) or project.get("success") is not True or
+            "error" in project or "error_code" in project or
+            project.get("isSaved") is not True):
         return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
     checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
-    backup = checkpoint.get("backup_path")
-    if checkpoint.get("success") is not True or not isinstance(backup, str) or not backup:
+    backup = checkpoint.get("backup_path") if isinstance(checkpoint, dict) else None
+    if (not isinstance(checkpoint, dict) or checkpoint.get("success") is not True or
+            "error" in checkpoint or "error_code" in checkpoint or
+            not isinstance(backup, str) or not backup):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
     conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
     if conflict is not None:
@@ -672,7 +681,12 @@ async def run_bgm_ducking(args: dict) -> dict:
         except Exception as exc:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN", "error": str(exc),
                     "applied": applied, "backup_path": backup, "outcome_unknown": True}
-        if changed.get("success") is not True or not isinstance(changed.get("revision"), str) or not changed["revision"]:
+        if isinstance(changed, dict) and ("error" in changed or "error_code" in changed):
+            return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
+                    "applied": applied, "details": changed, "backup_path": backup,
+                    "outcome_unknown": True}
+        if (not isinstance(changed, dict) or changed.get("success") is not True or
+                not isinstance(changed.get("revision"), str) or not changed["revision"]):
             return {"success": False, "error_code": "BGM_DUCKING_PARTIAL",
                     "applied": applied, "details": changed, "backup_path": backup}
         applied.append(point)
