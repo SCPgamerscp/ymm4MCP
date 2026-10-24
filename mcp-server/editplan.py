@@ -48,8 +48,8 @@ def parse_reason(args):
 def _id(value, name):
     if not isinstance(value, str) or not 1 <= len(value) <= MAX_ID_LEN or not value.isascii():
         raise ValueError(f"{name} must be a 1..{MAX_ID_LEN} character ASCII id")
-    if any(c.isspace() for c in value) or "/" in value or "\\" in value:
-        raise ValueError(f"{name} must not contain whitespace or path separators")
+    if any(not ("!" <= c <= "~") or c in "/\\" for c in value):
+        raise ValueError(f"{name} must contain only printable ASCII without path separators")
     return value
 
 
@@ -99,7 +99,8 @@ def parse_plan(args):
     start = integer(raw.get("start_frame", args.get("start_frame", 0)), "start_frame")
     key = args.get("idempotency_key", raw.get("idempotency_key"))
     if key is not None:
-        if not isinstance(key, str) or not 1 <= len(key) <= MAX_IDEMPOTENCY or key.strip() != key:
+        if (not isinstance(key, str) or not 1 <= len(key) <= MAX_IDEMPOTENCY
+                or key.strip() != key or any(ord(c) < 32 or ord(c) == 127 for c in key)):
             raise ValueError("idempotency_key must be a 1..128 character string")
     if "dry_run" in args and not isinstance(args["dry_run"], bool):
         raise ValueError("dry_run must be boolean")
