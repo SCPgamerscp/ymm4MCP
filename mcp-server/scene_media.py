@@ -1,7 +1,7 @@
 """Estimate independent visual and audio coverage from a read-only scene index."""
 
 
-def _is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
+def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
     """Match the exact CLR type name, optionally with namespace/nesting qualifiers."""
     if not isinstance(value, str):
         return False
@@ -17,7 +17,7 @@ def with_coverage(index: dict) -> dict:
         for category, suffixes in categories.items():
             spans = sorted((item["visible_start_frame"], item["visible_end_frame"])
                            for item in scene["items"]
-                           if _is_known_item_type(item["type"], suffixes))
+                           if is_known_item_type(item["type"], suffixes))
             cursor = scene["start_frame"]
             gaps = []
             for left, right in spans:
