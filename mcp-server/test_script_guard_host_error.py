@@ -26,6 +26,22 @@ class ScriptSnapshotHostErrorTests(unittest.IsolatedAsyncioTestCase):
                 get.assert_awaited_once_with("/items")
                 add_script.assert_not_awaited()
 
+    async def test_error_code_and_nonboolean_success_never_authorize_write(self):
+        for snapshot in (
+            {"success": True, "items": [], "error_code": "HOST_UNAVAILABLE"},
+            {"success": True, "items": [], "error_code": None},
+            {"success": "true", "items": []},
+            {"success": 1, "items": []},
+            {"success": None, "items": []},
+        ):
+            with self.subTest(snapshot=snapshot):
+                add_script = AsyncMock()
+                result = await script_guard.apply(
+                    self.args(), AsyncMock(return_value=snapshot), add_script)
+                self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+                self.assertEqual(result["details"], snapshot)
+                add_script.assert_not_awaited()
+
     async def test_clean_matching_snapshot_still_allows_write(self):
         args = self.args()
         get = AsyncMock(return_value={"success": True, "items": []})
