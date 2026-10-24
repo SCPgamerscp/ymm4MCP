@@ -49,7 +49,7 @@ def _id(value, name):
     if not isinstance(value, str) or not 1 <= len(value) <= MAX_ID_LEN or not value.isascii():
         raise ValueError(f"{name} must be a 1..{MAX_ID_LEN} character ASCII id")
     if any(not ("!" <= c <= "~") or c in "/\\" for c in value):
-        raise ValueError(f"{name} must not contain whitespace or path separators")
+        raise ValueError(f"{name} must contain only printable ASCII without path separators")
     return value
 
 
