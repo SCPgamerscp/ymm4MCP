@@ -32,7 +32,8 @@ namespace YMM4McpPlugin
                     if (boxes == 1 && box.Type != "ftyp") throw new InvalidDataException("ftyp is not the first box");
                     if (box.Type == "ftyp")
                     {
-                        if (box.PayloadLength < 4) throw new InvalidDataException("ftyp is incomplete");
+                        if (box.PayloadLength < 8 || (box.PayloadLength - 8) % 4 != 0)
+                            throw new InvalidDataException("ftyp must contain major_brand, minor_version and complete compatible brands");
                         brand = Encoding.ASCII.GetString(Read(file, 4));
                     }
                     else if (box.Type == "mdat") mdat |= box.PayloadLength > 0;
