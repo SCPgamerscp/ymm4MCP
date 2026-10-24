@@ -170,6 +170,20 @@ namespace YMM4McpPlugin
                 }
             }
 
+            // A reflected Insert/SetItem may return a collection of the expected size
+            // while silently altering unrelated keyframe values. Check every element
+            // before replacing either collection, including the requested value.
+            if (newValues.Count != values.Count + (insert ? 1 : 0))
+                return false;
+            for (int i = 0; i < newValues.Count; i++)
+            {
+                var expected = insert
+                    ? (i == valueIndex ? entry : values[i < valueIndex ? i : i - 1])
+                    : (i == valueIndex ? entry : values[i]);
+                if (!Equals(newValues[i], expected))
+                    return false;
+            }
+
             // Stage both new immutable lists before touching the animation.
             // Restore both references if either property setter rejects the update.
             try
