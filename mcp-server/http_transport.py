@@ -16,7 +16,7 @@ from starlette.routing import Route
 
 def create_http_app(mcp_server, close_client):
     token = os.environ.get("YMM4_MCP_BEARER_TOKEN", "")
-    if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
+    if len(token) < 32 or any(not 33 <= ord(c) <= 126 for c in token):
         raise ValueError("YMM4_MCP_BEARER_TOKEN must be a distinct, random ASCII token of at least 32 characters")
     hosts = [host.strip() for host in os.environ.get(
         "YMM4_MCP_ALLOWED_HOSTS", "127.0.0.1,127.0.0.1:*,localhost,localhost:*"
@@ -47,14 +47,17 @@ def create_http_app(mcp_server, close_client):
     class AuthenticatedApplication:
         async def __call__(self, scope, receive, send):
             if scope["type"] == "http":
-                headers = dict(scope["headers"])
-                provided = headers.get(b"authorization", b"")
+                # Never collapse repeated Authorization headers: different proxies
+                # may select different values, making the authentication ambiguous.
+                auth_values = [value for name, value in scope["headers"]
+                               if name.lower() == b"authorization"]
                 expected = ("Bearer " + token).encode("ascii")
-                if not hmac.compare_digest(provided, expected):
+                if len(auth_values) != 1 or not hmac.compare_digest(auth_values[0], expected):
                     await JSONResponse({"error": "Unauthorized"}, status_code=401,
                                        headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
                     return
-                if scope.get("scheme") != "https" or b"origin" in headers:
+                if (scope.get("scheme") != "https" or
+                        any(name.lower() == b"origin" for name, _ in scope["headers"])):
                     await JSONResponse({"error": "TLS required; browser origins are not supported"}, status_code=403)(scope, receive, send)
                     return
             await application(scope, receive, send)

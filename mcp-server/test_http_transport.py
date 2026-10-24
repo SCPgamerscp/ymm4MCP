@@ -56,6 +56,32 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
             response = await client.post("http://localhost/mcp", headers={"Authorization": f"Bearer {TOKEN}"})
             self.assertEqual(response.status_code, 403)
 
+    async def test_duplicate_authorization_headers_fail_closed(self):
+        with patch.dict(os.environ, {"YMM4_MCP_BEARER_TOKEN": TOKEN}, clear=True):
+            app = create_http_app(server.app, AsyncMock())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="https://localhost") as client:
+            for headers in (
+                [("Authorization", "Bearer wrong"),
+                 ("Authorization", f"Bearer {TOKEN}")],
+                [("Authorization", f"Bearer {TOKEN}"),
+                 ("Authorization", "Bearer wrong")],
+                [("Authorization", f"Bearer {TOKEN}"),
+                 ("Authorization", f"Bearer {TOKEN}")],
+            ):
+                with self.subTest(headers=headers):
+                    response = await client.post("/mcp", headers=headers)
+                    self.assertEqual(response.status_code, 401)
+                    self.assertEqual(response.json()["error"], "Unauthorized")
+
+    async def test_rejects_control_characters_in_bearer_token(self):
+        for control in ("\x1b", "\x7f"):
+            token = TOKEN + control
+            with self.subTest(control=repr(control)), patch.dict(
+                    os.environ, {"YMM4_MCP_BEARER_TOKEN": token}, clear=True):
+                with self.assertRaises(ValueError):
+                    create_http_app(server.app, AsyncMock())
+
     async def test_authenticated_mcp_and_host_validation(self):
         close = AsyncMock()
         with patch.dict(os.environ, {"YMM4_MCP_BEARER_TOKEN": TOKEN, "YMM4_ENABLE_ADVANCED": "0"}, clear=True):
