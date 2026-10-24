@@ -614,7 +614,7 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as client:
                 await client.initialize()
-                self.assertEqual(len((await client.list_resources()).resources), 4)
+                self.assertEqual(len((await client.list_resources()).resources), 5)
                 self.assertEqual(len((await client.list_prompts()).prompts), 4)
                 resource = await client.read_resource("ymm4://skills/kaisetsu")
                 self.assertIn("魔理沙", resource.contents[0].text)

@@ -65,7 +65,7 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
                     response = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}})
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertEqual(response.json()["result"]["serverInfo"]["name"], "ymm4-mcp")
-                    for method, field, count in (("tools/list", "tools", 3), ("resources/list", "resources", 4), ("prompts/list", "prompts", 4)):
+                    for method, field, count in (("tools/list", "tools", 3), ("resources/list", "resources", 5), ("prompts/list", "prompts", 4)):
                         response = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 2, "method": method})
                         self.assertEqual(response.status_code, 200, response.text)
                         self.assertEqual(len(response.json()["result"][field]), count)
