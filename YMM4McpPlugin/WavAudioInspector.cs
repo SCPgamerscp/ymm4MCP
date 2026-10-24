@@ -31,6 +31,8 @@ namespace YMM4McpPlugin
                 long end = 8L + U32(riff, 4);
                 if (end > file.Length || end < 44) return Fail("AUDIO_FILE_INVALID", "WAV のサイズが不正です");
                 int rate = 0, channels = 0, align = 0, bits = 0, format = 0;
+                uint byteRate = 0;
+                bool fmtSeen = false;
                 long dataStart = -1, dataSize = 0;
                 int chunks = 0;
                 while (file.Position + 8 <= end)
@@ -42,9 +44,12 @@ namespace YMM4McpPlugin
                         return Fail("AUDIO_FILE_INVALID", "WAV のチャンク長が不正です");
                     if (Text(header, 0) == "fmt ")
                     {
+                        if (fmtSeen) return Fail("AUDIO_FILE_INVALID", "fmt チャンクが重複しています");
+                        fmtSeen = true;
                         if (size < 16) return Fail("AUDIO_FILE_INVALID", "fmt チャンクが不完全です");
                         var fmt = Read(file, (int)Math.Min(size, 40));
                         format = U16(fmt, 0); channels = U16(fmt, 2); rate = checked((int)U32(fmt, 4));
+                        byteRate = U32(fmt, 8);
                         align = U16(fmt, 12); bits = U16(fmt, 14);
                         // WAVE_FORMAT_EXTENSIBLE carries the actual PCM/float format in its subtype GUID.
                         if (format == 0xfffe && size >= 40 && U16(fmt, 16) >= 22 &&
@@ -68,6 +73,9 @@ namespace YMM4McpPlugin
                 if ((!pcm && !ieeeFloat) || channels is < 1 or > 2 || rate is < 1 or > 384000 ||
                     align != channels * (bits / 8))
                     return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 16/24/32-bit / IEEE float 32-bit mono/stereo WAV のみ検査できます");
+                // A malformed byte rate can make downstream duration and QA results unreliable.
+                if (byteRate != (long)rate * align)
+                    return Fail("AUDIO_FILE_INVALID", "WAV の byte rate と sample rate/block align が一致しません");
                 if (dataStart < 0 || dataSize == 0 || dataSize % align != 0)
                     return Fail("AUDIO_FILE_INVALID", "PCM データが不完全です");
 
