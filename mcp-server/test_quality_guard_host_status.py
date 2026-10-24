@@ -27,6 +27,14 @@ class SnapshotHostStatusTests(unittest.IsolatedAsyncioTestCase):
             "success": True, "items": ITEMS, "error": "read failed"}), ITEMS)
         self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
 
+    async def test_host_error_code_marker_never_authorizes_qa(self):
+        for code in ("ITEMS_UNAVAILABLE", None):
+            with self.subTest(code=code):
+                response = {"success": True, "items": ITEMS, "error_code": code}
+                result = await verify_snapshot(AsyncMock(return_value=response), ITEMS)
+                self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+                self.assertEqual(result["details"], response)
+
     async def test_valid_status_does_not_hide_snapshot_conflict(self):
         different = [{**ITEMS[0], "frame": 1}]
         result = await verify_snapshot(AsyncMock(return_value={
