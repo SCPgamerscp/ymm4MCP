@@ -9,5 +9,6 @@
     <Compile Include="../../YMM4McpPlugin/KeyframeMethodInvoker.cs" Link="KeyframeMethodInvoker.cs" />
     <Compile Include="../../YMM4McpPlugin/KeyframeHostBinding.cs" Link="KeyframeHostBinding.cs" />
     <Compile Include="../../YMM4McpPlugin/KeyframeInsertionSafety.cs" Link="KeyframeInsertionSafety.cs" />
+    <Compile Include="../../YMM4McpPlugin/KeyframeValueMutation.cs" Link="KeyframeValueMutation.cs" />
   </ItemGroup>
 </Project>
