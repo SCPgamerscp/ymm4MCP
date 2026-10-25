@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -10,6 +11,23 @@ namespace YMM4McpPlugin
     // no-implicit-start layout (1 frame, 1 value).
     internal static class KeyframeInsertionSafety
     {
+        // Some YMM4 host methods insert both a frame and a default value.
+        // If the subsequent value write fails, the extra value must not be
+        // left behind after the shared frame has been removed.
+        internal static bool TryRemoveInsertedValue(IList values, int previousCount, int index)
+        {
+            if (values.Count == previousCount) return true;
+            if (values.Count != previousCount + 1 || values.IsReadOnly
+                || values.IsFixedSize || index < 0 || index >= values.Count)
+                return false;
+            try
+            {
+                values.RemoveAt(index);
+                return values.Count == previousCount;
+            }
+            catch { return false; }
+        }
+
         internal static bool IsComplete(
             IReadOnlyList<int> beforeFrames, int beforeValues,
             IReadOnlyList<int> afterFrames, int afterValues, int insertedFrame)
