@@ -31,5 +31,25 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                                 for issue in result["issues"]))
 
 
+    def test_loud_audio_reports_near_clipping_sample_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "loud.mp4"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=10:d=3",
+                 "-f", "lavfi", "-i", "sine=frequency=1000:duration=3",
+                 "-af", "volume=24dB", "-t", "3",
+                 "-c:v", "mpeg4", "-c:a", "aac", "-y", str(video)],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30)
+            result = decoded_media_qa.inspect(str(video), sample_seconds=3)
+            self.assertTrue(result["success"], result)
+            self.assertTrue(result["passed"], result)
+            self.assertEqual(len(result["audio_peaks"]), 1)
+            self.assertGreaterEqual(result["audio_peaks"][0]["peak_dbfs"], -0.1)
+            self.assertIn("EXPORT_SAMPLE_AUDIO_PEAK_NEAR_CLIPPING",
+                          {issue["code"] for issue in result["issues"]})
+
+
 if __name__ == "__main__":
     unittest.main()
