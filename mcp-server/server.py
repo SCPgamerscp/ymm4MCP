@@ -206,7 +206,7 @@ TOOLS = [
                 "visual_check": {"type": "object", "description": "qa_gate: visual_qa の設定（end_frame必須）。指定時に現在のプレビューを検査"},
                 "audio_check": {"type": "object", "description": "qa_gate: get_info/audio_qa の設定（path必須）。指定時に現在のWAVを検査"},
                 "export_check": {"type": "object", "description": "qa_gate: get_info/export_qa の設定（MP4 path必須）。完成動画の尺・FPS・解像度・音声トラックを検査"},
-                "decoded_export_check": {"type": "object", "description": "qa_gate: FFmpegによる完成動画の冒頭・末尾の映像/音声サンプルデコード（Python MCP側のパスが必要）"},
+                "decoded_export_check": {"type": "object", "description": "qa_gate: FFmpegによる完成動画の冒頭・末尾サンプル検証、full_decode=trueなら全尺デコード（Python MCP側のパスが必要）"},
                 "assets_check": {"type": "object", "description": "qa_gate: {} でタイムライン素材の欠落・参照先不明を検査"},
                 "max_repairs": {"type": "integer", "minimum": 0, "maximum": 20, "description": "qa_gate: 最大修正回数。既定3"},
                 "repeat_limit": {"type": "integer", "minimum": 2, "maximum": 10, "description": "qa_gate: 同じ問題群が連続したら停止。既定2"},
@@ -237,6 +237,7 @@ TOOLS = [
                 "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa: 平均FPSの許容誤差。既定0.1"},
                 "require_audio": {"type": "boolean", "description": "get_info/export_qa/decoded_export_qa: 音声トラックを必須とする"},
                 "sample_seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "decoded_export_qa: 冒頭・末尾のデコード秒数。既定8秒"},
+                "full_decode": {"type": "boolean", "description": "decoded_export_qa: 最大15分の動画を全尺デコード。既定false（冒頭・末尾のみ）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
@@ -1049,7 +1050,8 @@ async def dispatch(args: dict) -> Any:
                     return await asyncio.to_thread(
                         decoded_media_qa.inspect, args.get("path"),
                         require_audio=args.get("require_audio", True),
-                        sample_seconds=args.get("sample_seconds", 8))
+                        sample_seconds=args.get("sample_seconds", 8),
+                        full_decode=args.get("full_decode", False))
                 case "export_qa":
                     path = args.get("path")
                     if not is_absolute_media_path(path) or not path.strip().lower().endswith(".mp4"):
@@ -1331,7 +1333,7 @@ async def dispatch(args: dict) -> Any:
             if "decoded_export_check" in args:
                 config = args["decoded_export_check"]
                 if not isinstance(config, dict) or "path" not in config or \
-                        set(config) - {"path", "require_audio", "sample_seconds"}:
+                        set(config) - {"path", "require_audio", "sample_seconds", "full_decode"}:
                     raise ValueError("decoded_export_check requires path and supported options")
                 criteria["decoded_export"] = config
                 report = await dispatch({"action": "get_info", "sub_action": "decoded_export_qa", **config})
