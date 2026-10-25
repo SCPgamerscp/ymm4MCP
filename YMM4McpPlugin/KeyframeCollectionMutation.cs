@@ -49,25 +49,36 @@ namespace YMM4McpPlugin
                 return false;
 
             int valueIndex = insertAt + offset;
+            int originalValueCount = values.Count;
+            int originalFrameCount = frames.Count;
             try { values.Insert(valueIndex, entry); }
-            catch { return false; }
-            bool frameInserted = false;
+            catch
+            {
+                // Some IList implementations mutate and then throw. Restore only
+                // if the insert actually added an element; otherwise RemoveAt
+                // would delete a pre-existing keyframe value.
+                if (values.Count == originalValueCount + 1)
+                    try { values.RemoveAt(valueIndex); } catch { }
+                return false;
+            }
+            if (values.Count != originalValueCount + 1)
+                return false; // A silent no-op is not a successful insertion.
             try
             {
                 frames.Insert(insertAt, frameEntry);
-                frameInserted = true;
-                if (frames.Count + offset == values.Count
+                if (frames.Count == originalFrameCount + 1
+                    && frames.Count + offset == values.Count
                     && Convert.ToInt32(frames[insertAt], CultureInfo.InvariantCulture) == frame
                     && Number(values[valueIndex], out var actual)
                     && actual == Convert.ToDouble(ReadValue(entry), CultureInfo.InvariantCulture))
                     return true;
             }
             catch { /* Restore the two collections below. */ }
-            if (frameInserted)
-            {
+            // A failed/no-op frame insert must not remove an existing frame.
+            if (frames.Count == originalFrameCount + 1)
                 try { frames.RemoveAt(insertAt); } catch { }
-            }
-            try { values.RemoveAt(valueIndex); } catch { }
+            if (values.Count == originalValueCount + 1)
+                try { values.RemoveAt(valueIndex); } catch { }
             return false;
         }
 
@@ -87,9 +98,18 @@ namespace YMM4McpPlugin
             if (frameProperty?.SetMethod?.IsPublic != true
                 || valueProperty?.SetMethod?.IsPublic != true)
                 return false;
-            if (!ReferenceEquals(frameProperty.GetValue(owner), frames)
-                || !ReferenceEquals(valueProperty.GetValue(animation), values))
+            try
+            {
+                if (!ReferenceEquals(frameProperty.GetValue(owner), frames)
+                    || !ReferenceEquals(valueProperty.GetValue(animation), values))
+                    return false;
+            }
+            catch
+            {
+                // A YMM4 property getter can throw while the editor is closing.
+                // Treat it as an unsupported layout, not an uncaught API error.
                 return false;
+            }
 
             int offset = values.Count == frames.Count + 1 ? 1
                 : values.Count == frames.Count && frames.Count > 0 ? 0 : -1;
