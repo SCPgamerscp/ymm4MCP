@@ -33,7 +33,7 @@ Check(!ExportInvocationPolicy.HasDialogOnlyMethod([Method(nameof(ExportMethods.O
 Check(ExportInvocationPolicy.IsValidIdempotencyKey(""), "Omitted key remains valid");
 Check(ExportInvocationPolicy.IsValidIdempotencyKey(new string('a', 128)), "128-character key must be accepted");
 Check(ExportInvocationPolicy.IsValidIdempotencyKey("編集 job-1"), "Normal Unicode and internal spaces remain valid");
-foreach (var key in new[] { " a", "a ", new string('a', 129), "a\\nb", "a\\rb", "a\\tb", "a\\0b", "a\\u007fb", "a\\u001fb" })
+foreach (var key in new[] { " a", "a ", new string('a', 129), "a\nb", "a\rb", "a\tb", "a\0b", "a\u007fb", "a\u001fb" })
     Check(!ExportInvocationPolicy.IsValidIdempotencyKey(key), "Invalid idempotency key accepted: " + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(key)));
 Console.WriteLine("Export invocation policy tests passed");
 
