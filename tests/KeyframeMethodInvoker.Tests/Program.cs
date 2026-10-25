@@ -127,6 +127,33 @@ Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(new List<double> { 1.0, 2.
 Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(new List<double> { 1.0, 2.0 }, 1, 3),
     "invalid rollback index must fail closed");
 
+// Regression: a host Value setter may silently ignore or clamp a write.
+// Never report an existing keyframe as updated without reading it back.
+var numericValue = new WritableDoubleValue();
+Check(KeyframeValueMutation.TrySet(numericValue, 2.5) && numericValue.Value == 2.5,
+    "a valid keyframe value update must succeed");
+var ignoredValue = new IgnoringValue();
+Check(!KeyframeValueMutation.TrySet(ignoredValue, 2.5) && ignoredValue.Value == 1,
+    "a no-op host setter must not report success");
+var clampedValue = new ClampedValue();
+Check(!KeyframeValueMutation.TrySet(clampedValue, 5) && clampedValue.Value == 1,
+    "a clamped host value must be rolled back");
+var afterWriteThrows = new ThrowAfterWriteValue();
+Check(!KeyframeValueMutation.TrySet(afterWriteThrows, 2.5) && afterWriteThrows.Value == 1,
+    "a setter that mutates then throws must restore the old value");
+var integerValue = new WritableIntValue();
+Check(!KeyframeValueMutation.TrySet(integerValue, 2.5) && integerValue.Value == 1,
+    "fractional values must not round integer keyframes");
+Check(KeyframeValueMutation.TrySet(integerValue, 3) && integerValue.Value == 3,
+    "integral values should still update integer keyframes");
+var floatValue = new WritableFloatValue();
+Check(!KeyframeValueMutation.TrySet(floatValue, 1e100) && floatValue.Value == 1,
+    "a finite double must not overflow a float keyframe to infinity");
+bool unsafeRollbackRejected = false;
+try { KeyframeValueMutation.TrySet(new UnrestorableValue(), 5); }
+catch (InvalidOperationException) { unsafeRollbackRejected = true; }
+Check(unsafeRollbackRejected, "failed rollback must stop the fallback chain");
+
 Console.WriteLine("Keyframe method invocation and host binding tests passed");
 
 internal sealed class RejectingAnimation
@@ -234,4 +261,57 @@ internal sealed class ThrowingFrameItem
 internal sealed class ThrowingFrameAnimation
 {
     public MockKeyFrames KeyFrames => throw new InvalidOperationException("animation frame lookup failed");
+}
+
+internal sealed class WritableDoubleValue
+{
+    public double Value { get; set; } = 1;
+}
+internal sealed class WritableIntValue
+{
+    public int Value { get; set; } = 1;
+}
+internal sealed class WritableFloatValue
+{
+    public float Value { get; set; } = 1;
+}
+internal sealed class IgnoringValue
+{
+    public double Value { get => 1; set { } }
+}
+internal sealed class ClampedValue
+{
+    private double current = 1;
+    public double Value { get => current; set => current = Math.Clamp(value, 0, 3); }
+}
+internal sealed class ThrowAfterWriteValue
+{
+    private double current = 1;
+    private bool throwOnce = true;
+    public double Value
+    {
+        get => current;
+        set
+        {
+            current = value;
+            if (throwOnce)
+            {
+                throwOnce = false;
+                throw new InvalidOperationException("host setter failed after writing");
+            }
+        }
+    }
+}
+internal sealed class UnrestorableValue
+{
+    private double current = 1;
+    public double Value
+    {
+        get => current;
+        set
+        {
+            if (value == 1) throw new InvalidOperationException("rollback refused");
+            current = Math.Clamp(value, 0, 3);
+        }
+    }
 }
