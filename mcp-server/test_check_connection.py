@@ -63,6 +63,6 @@ class ConnectionCheckTests(unittest.TestCase):
                 client.get.return_value.json.return_value = {
                     "status": "running", "port": port, "success": True}
                 with patch.object(check_connection, "connection_settings", return_value=(
-                        "http://127.0.0.1:8765/api", {})), \
+                        f"http://127.0.0.1:{port}/api", {})), \
                      patch.object(check_connection.httpx, "Client", return_value=client):
                     self.assertEqual(check_connection.check()["port"], port)

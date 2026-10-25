@@ -1,5 +1,6 @@
 """Check the installed MCP server's authenticated local YMM4 connection."""
 import sys
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -19,6 +20,11 @@ def check() -> dict:
     port = status.get("port")
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("YMM4の応答ポートが不正です")
+    # A successful HTTP response on another port does not prove that the
+    # configured plugin instance is the one we intended to contact.
+    configured_port = urlsplit(base).port
+    if configured_port is not None and port != configured_port:
+        raise ValueError("YMM4の応答ポートが接続先ポートと一致しません")
     return {"status": status["status"], "version": status.get("version"), "port": port}
 
 
