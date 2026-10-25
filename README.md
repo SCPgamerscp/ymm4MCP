@@ -17,7 +17,7 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
    ```powershell
    cd C:\path\to\ymm4MCP\mcp-server
-   .\setup.ps1
+   .\setup.ps1 -ConfigureClaudeDesktop
    ```
 
    PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同じ設定処理を実行します。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。
