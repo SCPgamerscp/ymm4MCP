@@ -36,28 +36,64 @@ namespace YMM4McpPlugin
                 IgnoreInaccessible = true,
                 AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
             };
-            var assets = new List<AssetEntry>();
+            // Gather at most ScanLimit paths before hashing. The filesystem's enumeration
+            // order is unspecified, so selecting and hashing in that order would produce
+            // different results (and duplicate groups) on repeated scans.
+            var paths = new List<string>();
             int scanned = 0;
             bool truncated = false;
             bool hashTruncated = false;
-            long hashedBytes = 0;
             foreach (var path in Directory.EnumerateFiles(directory, "*", options))
             {
                 if (++scanned > ScanLimit) { truncated = true; break; }
-                var file = new FileInfo(path);
-                if (!Extensions.Contains(file.Extension) ||
-                    (query != null && !file.Name.Contains(query, StringComparison.OrdinalIgnoreCase))) continue;
+                if (!Extensions.Contains(Path.GetExtension(path)) ||
+                    (query != null && !Path.GetFileName(path).Contains(query, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                paths.Add(path);
+            }
+
+            var assets = new List<AssetEntry>();
+            long hashedBytes = 0;
+            foreach (var path in paths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                                      .ThenBy(p => p, StringComparer.Ordinal))
+            {
                 if (assets.Count >= maxResults) { truncated = true; break; }
-                string? sha = null;
-                if (hash && file.Length <= HashLimit && file.Length <= TotalHashLimit - hashedBytes)
+                try
                 {
-                    using var stream = file.OpenRead();
-                    sha = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-                    hashedBytes += file.Length;
+                    // Files can disappear or become inaccessible between enumeration and
+                    // inspection; skip them instead of aborting the entire library scan.
+                    var file = new FileInfo(path);
+                    long bytes = file.Length;
+                    string modified = file.LastWriteTimeUtc.ToString("O");
+                    string? sha = null;
+                    if (hash)
+                    {
+                        if (bytes > HashLimit || bytes > TotalHashLimit - hashedBytes)
+                            hashTruncated = true;
+                        else
+                        {
+                            try
+                            {
+                                using var stream = file.OpenRead();
+                                // Do not publish a hash for a file whose size changed
+                                // after its metadata was read.
+                                if (stream.Length != bytes)
+                                    hashTruncated = true;
+                                else
+                                {
+                                    sha = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+                                    hashedBytes += bytes;
+                                }
+                            }
+                            catch (IOException) { hashTruncated = true; }
+                            catch (UnauthorizedAccessException) { hashTruncated = true; }
+                        }
+                    }
+                    assets.Add(new AssetEntry(file.FullName, file.Name, file.Extension.ToLowerInvariant(),
+                        bytes, modified, sha));
                 }
-                else if (hash) hashTruncated = true;
-                assets.Add(new AssetEntry(file.FullName, file.Name, file.Extension.ToLowerInvariant(),
-                    file.Length, file.LastWriteTimeUtc.ToString("O"), sha));
+                catch (IOException) { /* File removed while scanning. */ }
+                catch (UnauthorizedAccessException) { /* File became inaccessible. */ }
             }
             var duplicates = assets.Where(a => a.Sha256 != null).GroupBy(a => a.Sha256!)
                 .Where(g => g.Count() > 1).Select(g => g.Select(a => a.Path).ToArray()).ToArray();
