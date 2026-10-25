@@ -54,8 +54,10 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             or parsed.path.rstrip("/") != "/api"):
         raise ConnectionConfigurationError("YMM4_API_BASE はローカルHTTPの /api URLのみ指定できます")
     try:
-        if parsed.port is not None and not 1024 <= parsed.port <= 65535:
-            raise ValueError("port out of range")
+        # YMM4 never binds its API on the implicit HTTP port 80. An omitted
+        # port can otherwise silently connect to a different local service.
+        if parsed.port is None or not 1024 <= parsed.port <= 65535:
+            raise ValueError("port missing or out of range")
     except ValueError as exc:
         raise ConnectionConfigurationError("ポートは1024〜65535で指定してください") from exc
     if not isinstance(token, str) or not token or any(not (33 <= ord(c) <= 126) for c in token):
