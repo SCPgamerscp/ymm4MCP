@@ -28,6 +28,16 @@ def _signal_ranges(log, start_name, end_name):
     return ranges
 
 
+def _audio_peak_db(log):
+    """Highest finite sample peak from FFmpeg astats (dBFS); not true-peak."""
+    peaks = []
+    for value in re.findall(r"\\bPeak level dB:\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\b", log):
+        peak = float(value)
+        if math.isfinite(peak):
+            peaks.append(peak)
+    return max(peaks) if peaks else None
+
+
 def failure(code, message):
     return {"success": False, "passed": False, "issues": [], "error_code": code, "error": message}
 
@@ -88,6 +98,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
     samples = []
     black_frames = []
     long_silences = []
+    audio_peaks = []
     for start in starts:
         length = min(float(sample_seconds), duration - start)
         if length <= 0:
@@ -99,7 +110,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
             signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98"
-                             if kind == "video" else "silencedetect=noise=-50dB:d=2")
+                             if kind == "video" else "silencedetect=noise=-50dB:d=2,astats=metadata=0:reset=0")
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "info", "-xerror", "-ss", format(start, ".3f"),
                        "-i", str(target), "-t", format(length, ".3f"),
@@ -119,6 +130,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
                                "stream_type": kind, "start_seconds": round(start, 3),
                                "details": (decoded.stderr or "")[-500:]})
                 continue
+            if kind == "audio":
+                peak = _audio_peak_db(decoded.stderr or "")
+                if peak is not None:
+                    peak_event = {"sample_start_seconds": round(start, 3),
+                                  "peak_dbfs": round(peak, 3)}
+                    audio_peaks.append(peak_event)
+                    # Near-0 dBFS samples may be clipped, but a peak alone
+                    # cannot prove distortion or inter-sample true-peak.
+                    if peak >= -0.1:
+                        issues.append({"code": "EXPORT_SAMPLE_AUDIO_PEAK_NEAR_CLIPPING",
+                                       "severity": "warning", **peak_event})
             # Black/silent stretches can be intentional (e.g. a fade). Report
             # them as warnings, not as proof of an invalid export.
             start_name, end_name = (("black_start", "black_end") if kind == "video"
@@ -141,6 +163,6 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
             "issues": issues,
             "verification_scope": "sampled_audio_video_decode", "fully_decoded": False,
             "signal_scope": "sampled_only", "black_frames": black_frames,
-            "long_silences": long_silences,
+            "long_silences": long_silences, "audio_peaks": audio_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
             "audio_streams": len(audios), "samples": samples, "path": str(target)}
