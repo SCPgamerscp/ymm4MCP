@@ -1,6 +1,7 @@
 """Expose the existing, allowlisted skill files through standard MCP discovery."""
 import json
 from pathlib import Path
+from prompt_validation import validate_prompt_arguments
 from mcp.types import Resource, Prompt, PromptArgument, GetPromptResult, PromptMessage, TextContent
 
 SKILLS = {
@@ -47,24 +48,7 @@ async def get_prompt(name: str, arguments: dict | None = None):
     if name not in SKILLS:
         raise ValueError(f"Unknown production prompt: {name}")
     text = skill_text(name)
-    args = {} if arguments is None else arguments
-    if not isinstance(args, dict):
-        raise ValueError("Prompt arguments must be an object")
-    if set(args) - {"theme", "video_path", "duration_seconds"}:
-        raise ValueError("Unknown prompt argument")
-    if not isinstance(args.get("theme"), str) or not args["theme"].strip():
-        raise ValueError("theme は必須です")
-    if "video_path" in args:
-        path = args["video_path"]
-        if not isinstance(path, str) or not path.strip() or any(ord(c) < 32 or ord(c) == 127 for c in path):
-            raise ValueError("video_path は制御文字を含まない空でない文字列で指定してください")
-    if "duration_seconds" in args:
-        try:
-            duration = int(args["duration_seconds"])
-        except (ValueError, TypeError) as exc:
-            raise ValueError("duration_seconds は正の整数秒で指定してください") from exc
-        if duration <= 0 or str(duration) != str(args["duration_seconds"]):
-            raise ValueError("duration_seconds は正の整数秒で指定してください")
+    args = validate_prompt_arguments(arguments)
     request = json.dumps(args, ensure_ascii=False)
     return GetPromptResult(description=SKILLS[name], messages=[PromptMessage(
         role="user", content=TextContent(type="text", text=(
