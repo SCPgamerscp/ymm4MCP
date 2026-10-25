@@ -43,6 +43,16 @@ TimelineInputValidation.RequireSelectionTarget(Body("{\"frame\":10}"));
 TimelineInputValidation.RequireSelectionTarget(Body("{\"layer\":2}"));
 TimelineInputValidation.RequireSelectionTarget(Body("{\"clear\":true}"));
 Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body("{}")));
+TimelineInputValidation.RequireItemTarget(Body("{\"item_id\":\"native:日本語 with space\"}"));
+TimelineInputValidation.RequireSelectionTarget(Body("{\"item_id\":\"native:日本語 with space\"}"));
+foreach (string escape in new[] { "\\u0000", "\\u0009", "\\u000a", "\\u000d", "\\u001f", "\\u007f" })
+{
+    string invalidId = "{\"item_id\":\"native:abc" + escape + "\"}";
+    Invalid(() => TimelineInputValidation.RequireItemTarget(Body(invalidId)));
+    Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body(invalidId)));
+}
+Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body("{\"item_id\":\" \"}")));
+Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body("{\"item_id\":42}")));
 Invalid(() => TimelineInputValidation.RequireSelectionTarget(Body("{\"frame\":-1}")));
 
 Invalid(() => TimelineInputValidation.AtLeast(-2, -1, "frame"));
