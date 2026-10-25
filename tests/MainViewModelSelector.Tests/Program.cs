@@ -60,6 +60,17 @@ candidate = MainViewModelSelector.Select(new (object?, bool, bool)[]
 });
 Check(ReferenceEquals(candidate, inactive), "Unique hidden editor fallback failed");
 
+
+// A window closing during enumeration must not turn a partial snapshot
+// into a successful selection of the wrong editor.
+static IEnumerable<(object?, bool, bool)> ChangingWindows()
+{
+    yield return (new MainViewModel { Index = 8 }, true, true);
+    throw new InvalidOperationException("collection modified");
+}
+Check(MainViewModelSelector.Select(ChangingWindows()) == null,
+    "Partially enumerated editor list should fail closed");
+
 Console.WriteLine("MainViewModel selection tests passed");
 
 class MainViewModel { public int Index { get; set; } }
