@@ -2,6 +2,7 @@
 import unittest
 
 import scene_media
+import scene_qa
 
 
 class SceneMediaTypeValidationTests(unittest.TestCase):
@@ -32,6 +33,28 @@ class SceneMediaTypeValidationTests(unittest.TestCase):
     def test_case_insensitive_known_type(self):
         scene = self.coverage("VIDEOITEM")
         self.assertEqual(scene["visual_covered_frames"], 20)
+
+    def test_tachie_face_item_is_visual_not_audio(self):
+        # The host creates kind=face as TachieFaceItem, not FaceItem.
+        scene = self.coverage("YukkuriMovieMaker.Project.Items.TachieFaceItem")
+        self.assertEqual(scene["visual_covered_frames"], 20)
+        self.assertEqual(scene["visual_uncovered_ranges"], [])
+        self.assertEqual(scene["audio_covered_frames"], 0)
+
+    def test_prefixed_tachie_face_type_does_not_hide_visual_gap(self):
+        scene = self.coverage("NotTachieFaceItem")
+        self.assertEqual(scene["visual_covered_frames"], 0)
+        self.assertEqual(scene["visual_uncovered_ranges"],
+                         [{"start_frame": 0, "end_frame": 20}])
+
+    def test_scene_qa_accepts_tachie_face_visual_coverage(self):
+        result = scene_qa.inspect(
+            [{"item_id": "face", "type": "TachieFaceItem",
+              "frame": 0, "length": 20, "layer": 1}],
+            {"scene_ranges": [{"id": "scene", "start_frame": 0, "end_frame": 20}],
+             "require_audio": False})
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["issues"], [])
 
     def test_missing_type_remains_uncovered(self):
         scene = self.coverage(None)
