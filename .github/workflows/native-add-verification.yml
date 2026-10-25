@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'YMM4McpPlugin/AddedItemVerification.cs'
+      - 'YMM4McpPlugin/ItemSnapshotFormatting.cs'
       - 'YMM4McpPlugin/McpEditing.cs'
       - 'tests/AddedItemVerification.Tests/**'
       - '.github/workflows/native-add-verification.yml'
