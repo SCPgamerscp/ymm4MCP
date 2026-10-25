@@ -103,11 +103,46 @@ jobs:
           $serverZip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $serverPackage).Path)
           try {
             $paths = @($serverZip.Entries | ForEach-Object { $_.FullName })
-            foreach ($required in @('mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/requirements.txt', 'mcp-server/skills/ymm4-jikkyou/SKILL.md')) {
+            foreach ($required in @('mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/install.cmd', 'mcp-server/check_connection.cmd', 'mcp-server/check_connection.py', 'mcp-server/requirements.txt', 'mcp-server/skills/ymm4-jikkyou/SKILL.md')) {
               if ($paths -notcontains $required) { throw "Missing Python server file: $required" }
             }
           }
           finally { $serverZip.Dispose() }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Smoke-test one-click MCP server setup
+        shell: pwsh
+        run: |
+          # Isolate the installer from the runner's actual Claude settings.
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'ymm4mcp-installer-smoke'
+          $configDir = Join-Path $env:APPDATA 'Claude'
+          [IO.Directory]::CreateDirectory($configDir) | Out-Null
+          $configPath = Join-Path $configDir 'claude_desktop_config.json'
+          '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"}}}' |
+            Set-Content -LiteralPath $configPath -Encoding UTF8
+          & cmd.exe /c "mcp-server\install.cmd"
+          if ($LASTEXITCODE -ne 0) { throw 'install.cmd failed' }
+          $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
+            throw 'Existing Claude Desktop settings were not preserved'
+          }
+          if (-not $config.mcpServers.ymm4.command -or
+              -not (Test-Path -LiteralPath $config.mcpServers.ymm4.command)) {
+            throw 'MCP server executable was not installed or configured'
+          }
+          if (@($config.mcpServers.ymm4.args).Count -ne 1 -or
+              -not (Test-Path -LiteralPath $config.mcpServers.ymm4.args[0])) {
+            throw 'MCP server script path was not configured'
+          }
+          # Re-running must keep unrelated configuration and not create duplicate entries.
+          & cmd.exe /c "mcp-server\install.cmd"
+          if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
+          $again = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($again.theme -ne 'dark' -or $again.mcpServers.other.command -ne 'other.exe' -or
+              @($again.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
+            throw 'Installer rerun damaged Claude Desktop settings'
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: ymm4mcp-ymme
