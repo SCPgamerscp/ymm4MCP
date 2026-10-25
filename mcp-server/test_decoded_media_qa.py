@@ -71,6 +71,37 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertEqual(qa._signal_ranges("black_start: 5 black_end: 4",
                                            "black_start", "black_end"), [])
 
+    def test_sampled_audio_peak_near_clipping_is_warning_not_proof(self):
+        self.assertEqual(qa._audio_peak_db("Peak level dB: -3.25\\nPeak level dB: -1.5"), -1.5)
+        self.assertIsNone(qa._audio_peak_db("Peak level dB: -inf"))
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return process(stdout=self.metadata)
+            if "-af" in command:
+                return process(stderr="[Parsed_astats @ 0x1] Peak level dB: 0.000000")
+            return process()
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["success"])
+        self.assertTrue(report["passed"])  # near-clipping is not proof of distortion
+        self.assertEqual(len(report["audio_peaks"]), 2)
+        self.assertEqual(report["audio_peaks"][0]["peak_dbfs"], 0.0)
+        self.assertEqual([i["code"] for i in report["issues"]],
+                         ["EXPORT_SAMPLE_AUDIO_PEAK_NEAR_CLIPPING"] * 2)
+
+    def test_normal_audio_peak_has_no_clipping_warning(self):
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return process(stdout=self.metadata)
+            if "-af" in command:
+                return process(stderr="Peak level dB: -6.020600")
+            return process()
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"])
+        self.assertEqual(len(report["audio_peaks"]), 2)
+        self.assertEqual(report["issues"], [])
+
     def test_decode_failure_does_not_claim_success(self):
         def fake(command, timeout):
             if command[0] == "ffprobe":
