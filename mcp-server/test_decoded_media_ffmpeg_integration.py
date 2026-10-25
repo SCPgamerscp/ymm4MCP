@@ -51,5 +51,27 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                           {issue["code"] for issue in result["issues"]})
 
 
+    def test_short_audio_stream_fails_tail_sample_even_when_video_is_longer(self):
+        """FFmpeg without -abort_on empty_output incorrectly returns exit 0."""
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "short_audio.mp4"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=10:d=4",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                 "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "mpeg4", "-c:a", "aac", "-y", str(video)],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30)
+            result = decoded_media_qa.inspect(str(video), sample_seconds=1)
+            self.assertTrue(result["success"], result)
+            self.assertFalse(result["passed"], result)
+            failures = [issue for issue in result["issues"]
+                        if issue["code"] == "EXPORT_DECODE_FAILED"]
+            self.assertTrue(any(issue["stream_type"] == "audio"
+                                and issue["start_seconds"] >= 3.0
+                                for issue in failures), result)
+
+
 if __name__ == "__main__":
     unittest.main()
