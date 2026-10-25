@@ -31,7 +31,7 @@ def _signal_ranges(log, start_name, end_name):
 def _audio_peak_db(log):
     """Highest finite sample peak from FFmpeg astats (dBFS); not true-peak."""
     peaks = []
-    for value in re.findall(r"\\bPeak level dB:\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\b", log):
+    for value in re.findall(r"\bPeak level dB:\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\b", log):
         peak = float(value)
         if math.isfinite(peak):
             peaks.append(peak)
