@@ -40,6 +40,8 @@ jobs:
         run: dotnet run --project tests/WavAudioInspector.Tests/WavAudioInspector.Tests.csproj --configuration Release
       - name: Test reflection path resolution
         run: dotnet run --project tests/ReflectionPath.Tests/ReflectionPath.Tests.csproj --configuration Release
+      - name: Test keyframe method invocation
+        run: dotnet run --project tests/KeyframeMethodInvoker.Tests/KeyframeMethodInvoker.Tests.csproj --configuration Release
       - name: Test MainViewModel selection
         run: dotnet run --project tests/MainViewModelSelector.Tests/MainViewModelSelector.Tests.csproj --configuration Release
       - name: Test export acceptance
