@@ -75,5 +75,39 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                                 for issue in failures), result)
 
 
+    def test_full_decode_rejects_empty_secondary_audio_stream(self):
+        """One valid audio track must not conceal an empty second track."""
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "two_audio_tracks.mkv"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "color=c=blue:s=64x64:r=10:d=3",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                 "-itsoffset", "100", "-f", "lavfi", "-i",
+                 "sine=frequency=880:duration=3",
+                 "-map", "0:v", "-map", "1:a", "-map", "2:a",
+                 "-t", "3", "-c:v", "mpeg4", "-c:a", "aac", "-y", str(video)],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30)
+            # Some FFmpeg muxers may drop an entirely empty stream; only
+            # exercise this regression when both declared tracks are retained.
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries",
+                 "stream=codec_type", "-of", "json", str(video)],
+                check=True, capture_output=True, text=True, timeout=15)
+            import json
+            streams = json.loads(probe.stdout)["streams"]
+            if sum(s.get("codec_type") == "audio" for s in streams) != 2:
+                self.skipTest("FFmpeg did not retain the empty second audio track")
+            result = decoded_media_qa.inspect(str(video), sample_seconds=3,
+                                              full_decode=True)
+            self.assertTrue(result["success"], result)
+            self.assertEqual(result["audio_streams"], 2)
+            self.assertFalse(result["passed"], result)
+            self.assertFalse(result["fully_decoded"], result)
+            self.assertIn("EXPORT_FULL_DECODE_FAILED",
+                          {issue["code"] for issue in result["issues"]})
+
+
 if __name__ == "__main__":
     unittest.main()
