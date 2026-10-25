@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Linq;
 
 namespace YMM4McpPlugin
 {
@@ -25,18 +26,26 @@ namespace YMM4McpPlugin
 
             // Use the documented SetKeyFrames(KeyFrames) API rather than trying
             // to assign the getter-only Animation.KeyFrames property.
-            foreach (var method in animation.GetType().GetMethods(flags))
+            // A YMM4 version may expose several compatible overloads, including
+            // a broad object overload that rejects or ignores the call. Prefer
+            // the exact collection type and keep trying if an overload fails.
+            var methods = animation.GetType().GetMethods(flags)
+                .Where(m => m.Name == "SetKeyFrames"
+                    && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType.IsInstanceOfType(shared))
+                .OrderBy(m => m.GetParameters()[0].ParameterType == shared.GetType() ? 0 : 1);
+            foreach (var method in methods)
             {
-                if (method.Name != "SetKeyFrames") continue;
-                var parameters = method.GetParameters();
-                if (parameters.Length != 1 || !parameters[0].ParameterType.IsInstanceOfType(shared))
-                    continue;
                 try
                 {
                     method.Invoke(animation, new[] { shared });
-                    return ReferenceEquals(animationProperty.GetValue(animation), shared);
+                    if (ReferenceEquals(animationProperty.GetValue(animation), shared))
+                        return true;
                 }
-                catch { return false; }
+                catch
+                {
+                    // A rejected overload must not hide another usable one.
+                }
             }
             return false;
         }
