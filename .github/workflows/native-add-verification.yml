@@ -1,0 +1,23 @@
+name: Native item addition verification tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/AddedItemVerification.cs'
+      - 'YMM4McpPlugin/McpEditing.cs'
+      - 'tests/AddedItemVerification.Tests/**'
+      - '.github/workflows/native-add-verification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-add-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/AddedItemVerification.Tests/AddedItemVerification.Tests.csproj --configuration Release
