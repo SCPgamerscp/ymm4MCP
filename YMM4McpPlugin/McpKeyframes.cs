@@ -274,7 +274,8 @@ namespace YMM4McpPlugin
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
             var before = ReadFrameList(anim);
-            var valueCountBefore = ReadValueList(anim).Count;
+            var valuesBefore = ReadValueList(anim);
+            var valueCountBefore = valuesBefore.Count;
             bool isNew = frame > 0 && !before.Contains(frame);
             var keyFrames = GetPropObj(anim, "KeyFrames");
 
@@ -285,15 +286,31 @@ namespace YMM4McpPlugin
             bool Complete() => !isNew || KeyframeInsertionSafety.IsComplete(
                 before, valueCountBefore, ReadFrameList(anim), ReadValueList(anim).Count, frame);
 
-            bool UndoIncomplete()
+            bool UndoIncomplete(bool force = false)
             {
-                if (!isNew || !ReadFrameList(anim).Contains(frame) || Complete()) return true;
+                var currentFrames = ReadFrameList(anim);
+                if (!isNew || !currentFrames.Contains(frame) || (!force && Complete()))
+                    return true;
+                int insertedIndex = currentFrames.IndexOf(frame);
+                int valueIndex = insertedIndex + valueCountBefore - before.Count;
                 if (keyFrames != null)
                     TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame", "RemoveKeyframe" }, frame);
                 if (ReadFrameList(anim).Contains(frame))
                     TryInvokeNamed(anim, KeyframeRemoveNames, frame);
-                // Do not attempt another insert on a partially mutated host.
-                return !ReadFrameList(anim).Contains(frame);
+                // A host Remove may remove the frame but leave the extra
+                // AnimationValue. Never retry with misaligned collections.
+                if (ReadFrameList(anim).Contains(frame)) return false;
+                if (ReadValueList(anim).Count != valueCountBefore)
+                {
+                    if (GetPropObj(anim, "Values") is not IList values
+                        || !KeyframeInsertionSafety.TryRemoveInsertedValue(
+                            values, valueCountBefore, valueIndex))
+                        return false;
+                }
+                // A host may also mutate unrelated values or frames. Stop
+                // instead of claiming that a failed edit was rolled back.
+                return ReadFrameList(anim).SequenceEqual(before)
+                    && ReadValueList(anim).SequenceEqual(valuesBefore);
             }
 
             if (TrySetValueAt(anim, frame, value) && Complete()) return true;
@@ -303,14 +320,14 @@ namespace YMM4McpPlugin
             if (!ReadFrameList(anim).Contains(frame))
                 TryInvokeNamed(anim, KeyframeMethodNames, frame);
             if (Complete() && TrySetValueAt(anim, frame, value)) return true;
-            if (!UndoIncomplete()) return false;
+            if (!UndoIncomplete(force: true)) return false;
 
             if (keyFrames != null)
             {
                 if (!ReadFrameList(anim).Contains(frame))
                     TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
                 if (Complete() && TrySetValueAt(anim, frame, value)) return true;
-                if (!UndoIncomplete()) return false;
+                if (!UndoIncomplete(force: true)) return false;
             }
             // With the original layout restored, the mutable collection
             // fallback inserts the Frame and Value as one logical operation.
