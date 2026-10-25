@@ -111,6 +111,21 @@ try
     Equal("second version", File.ReadAllText(secondBackup));
     Equal("second version", File.ReadAllText(source));
     Equal(false, firstBackup == secondBackup);
+    Equal(0, Directory.GetFiles(backups, "*.partial").Length);
+    // On Windows an exclusive source lock must not leave a published backup.
+    if (OperatingSystem.IsWindows())
+    {
+        int countBeforeFailure = Directory.GetFiles(backups, "*.ymmp").Length;
+        using (var locked = new FileStream(source, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            bool failed = false;
+            try { ProjectBackup.BeforeOverwrite(source, backups); }
+            catch (IOException) { failed = true; }
+            Equal(true, failed);
+        }
+        Equal(countBeforeFailure, Directory.GetFiles(backups, "*.ymmp").Length);
+        Equal(0, Directory.GetFiles(backups, "*.partial").Length);
+    }
 }
 finally { if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true); }
 
