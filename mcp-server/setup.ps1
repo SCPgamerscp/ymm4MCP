@@ -67,7 +67,7 @@ if ($ConfigureClaudeDesktop) {
             foreach ($package in @(Get-ChildItem -LiteralPath $packagesDir -Directory -Filter 'Claude_*')) {
                 $storeConfigDir = Join-Path $package.FullName 'LocalCache\Roaming\Claude'
                 if (Test-Path -LiteralPath $storeConfigDir) {
-                    $configPaths += Join-Path $storeConfigDir 'claude_desktop_config.json'
+                    $configPaths += (Join-Path $storeConfigDir 'claude_desktop_config.json')
                 }
             }
         }
