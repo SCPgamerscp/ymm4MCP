@@ -1,0 +1,22 @@
+name: Keyframe collection rollback tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/KeyframeCollectionMutation.cs'
+      - 'tests/KeyframeCollectionRollback.Tests/**'
+      - '.github/workflows/keyframe-collection-rollback.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keyframe-collection-rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/KeyframeCollectionRollback.Tests/KeyframeCollectionRollback.Tests.csproj --configuration Release
