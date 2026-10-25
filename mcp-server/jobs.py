@@ -95,30 +95,94 @@ def _ebml_vint(data: bytes, offset: int) -> tuple[int, int] | None:
     return value, offset + length
 
 
+def _ebml_element_id(data: bytes, offset: int) -> tuple[bytes, int] | None:
+    """Read a bounded EBML element ID without consuming payload bytes."""
+    if offset >= len(data) or data[offset] == 0:
+        return None
+    mask, length = 0x80, 1
+    while not data[offset] & mask:
+        mask >>= 1
+        length += 1
+        if length > 4:
+            return None
+    if offset + length > len(data):
+        return None
+    return data[offset:offset + length], offset + length
+
+
 def _ebml_doctype(header: bytes) -> str | None:
-    """Find the declared container type inside the bounded EBML header."""
+    """Walk EBML header children, never matching markers inside Void payloads."""
     if header[:4] != b"\x1a\x45\xdf\xa3":
         return None
     root = _ebml_vint(header, 4)
     if root is None:
         return None
     root_size, begin = root
+    if root_size == (1 << (7 * (begin - 4))) - 1:
+        return None  # Unknown-size headers cannot be bounded safely.
     end = begin + root_size
     if end > len(header):
         return None
-    marker = header.find(b"\x42\x82", begin, end)
-    if marker < 0:
-        return None
-    length = _ebml_vint(header, marker + 2)
-    if length is None:
-        return None
-    size, start = length
-    if size < 1 or start + size > end or size > 32:
-        return None
+    cursor = begin
+    while cursor < end:
+        element = _ebml_element_id(header, cursor)
+        if element is None:
+            return None
+        element_id, size_offset = element
+        length = _ebml_vint(header, size_offset)
+        if length is None:
+            return None
+        size, start = length
+        if size == (1 << (7 * (start - size_offset))) - 1:
+            return None
+        next_element = start + size
+        if next_element > end:
+            return None
+        if element_id == b"\x42\x82":
+            if not 1 <= size <= 32:
+                return None
+            try:
+                return header[start:next_element].decode("ascii")
+            except UnicodeDecodeError:
+                return None
+        cursor = next_element
+    return None
+
+
+def _mov_has_metadata_atom(path: Path, file_size: int) -> bool:
+    """Skip top-level QuickTime atoms by size, even when mdat precedes moov.
+
+    Reads at most 16 bytes per atom and never loads media payload into memory.
+    """
     try:
-        return header[start:start + size].decode("ascii")
-    except UnicodeDecodeError:
-        return None
+        with path.open("rb") as stream:
+            offset = 0
+            for _ in range(128):
+                if offset + 8 > file_size:
+                    return False
+                stream.seek(offset)
+                atom = stream.read(16)
+                if len(atom) < 8:
+                    return False
+                size = int.from_bytes(atom[:4], "big")
+                minimum = 8
+                if size == 1:
+                    if len(atom) < 16:
+                        return False
+                    size = int.from_bytes(atom[8:16], "big")
+                    minimum = 16
+                elif size == 0:
+                    size = file_size - offset
+                if size < minimum or offset + size > file_size:
+                    return False
+                if atom[4:8] == b"moov":
+                    return True
+                offset += size
+                if offset == file_size:
+                    return False
+    except OSError:
+        return False
+    return False
 
 
 def verify_media_file(path: str, expected_format: str | None = None) -> dict:
@@ -160,6 +224,10 @@ def verify_media_file(path: str, expected_format: str | None = None) -> dict:
               "streams_verified": False}
 
     if fmt in {"mp4", "mov"}:
+        if fmt == "mov" and header[4:8] != b"ftyp":
+            if not _mov_has_metadata_atom(target, size):
+                return fail("QuickTimeのmoovメタデータが見つからないか、atomサイズが不正です")
+            return result
         box_type = header[4:8]
         if box_type != b"ftyp" and not (fmt == "mov" and box_type == b"moov"):
             return fail("ISO BMFF/QuickTimeの先頭ボックスが不正です")
