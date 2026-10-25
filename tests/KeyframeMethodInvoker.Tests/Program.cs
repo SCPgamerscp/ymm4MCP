@@ -85,6 +85,25 @@ Check(ReferenceEquals(noOpOverload.KeyFrames, shared) && noOpOverload.TypedCalls
     "no-op typed overload must not be treated as success");
 
 
+// A host can insert the frame without adding a matching AnimationValue.
+// Such a partial insertion must not overwrite the original start value.
+Check(!KeyframeInsertionSafety.IsComplete(Array.Empty<int>(), 1, new[] { 24 }, 1, 24),
+    "frame-only host Add must not be mistaken for a complete keyframe");
+Check(KeyframeInsertionSafety.IsComplete(Array.Empty<int>(), 1, new[] { 24 }, 2, 24),
+    "a frame and a corresponding new value form a complete insertion");
+Check(KeyframeInsertionSafety.IsComplete(new[] { 10, 30 }, 3,
+    new[] { 10, 20, 30 }, 4, 20),
+    "a middle insertion must preserve all existing frame positions");
+Check(!KeyframeInsertionSafety.IsComplete(new[] { 10, 30 }, 3,
+    new[] { 10, 20, 31 }, 4, 20),
+    "a host insertion must not silently change unrelated frames");
+Check(!KeyframeInsertionSafety.IsComplete(new[] { 10 }, 2,
+    new[] { 10, 20 }, 2, 20),
+    "a missing new value must reject an otherwise plausible frame count");
+Check(!KeyframeInsertionSafety.IsComplete(new[] { 10 }, 2,
+    new[] { 10, 20 }, 3, 10),
+    "an existing frame must not be counted as a new insertion");
+
 Console.WriteLine("Keyframe method invocation and host binding tests passed");
 
 internal sealed class RejectingAnimation
