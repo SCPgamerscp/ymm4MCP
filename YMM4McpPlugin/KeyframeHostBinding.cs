@@ -20,7 +20,9 @@ namespace YMM4McpPlugin
             }
             catch
             {
-                return false; // Unknown host layout: preserve existing fallback behavior.
+                // A throwing host getter makes ownership unknowable. Never
+                // mutate an animation that may belong to another item.
+                return true;
             }
         }
 
