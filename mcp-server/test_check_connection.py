@@ -27,3 +27,42 @@ class ConnectionCheckTests(unittest.TestCase):
              patch.object(check_connection.httpx, "Client", return_value=client):
             with self.assertRaises(ValueError):
                 check_connection.check()
+
+    def test_error_bearing_or_failed_status_is_rejected(self):
+        for payload in ({"status": "running", "port": 8765, "error": None},
+                        {"status": "running", "port": 8765, "error_code": "FAILED"},
+                        {"status": "running", "port": 8765, "success": False},
+                        {"status": "running", "port": 8765, "success": 1}):
+            with self.subTest(payload=payload):
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.get.return_value.json.return_value = payload
+                with patch.object(check_connection, "connection_settings", return_value=(
+                        "http://127.0.0.1:8765/api", {})), \
+                     patch.object(check_connection.httpx, "Client", return_value=client):
+                    with self.assertRaisesRegex(ValueError, "ステータス"):
+                        check_connection.check()
+
+    def test_invalid_status_ports_are_rejected(self):
+        for port in (None, True, False, "8765", 0, -1, 65536, 1.5):
+            with self.subTest(port=port):
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.get.return_value.json.return_value = {"status": "running", "port": port}
+                with patch.object(check_connection, "connection_settings", return_value=(
+                        "http://127.0.0.1:8765/api", {})), \
+                     patch.object(check_connection.httpx, "Client", return_value=client):
+                    with self.assertRaisesRegex(ValueError, "ポート"):
+                        check_connection.check()
+
+    def test_success_true_and_boundary_ports_are_accepted(self):
+        for port in (1, 65535):
+            with self.subTest(port=port):
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.get.return_value.json.return_value = {
+                    "status": "running", "port": port, "success": True}
+                with patch.object(check_connection, "connection_settings", return_value=(
+                        "http://127.0.0.1:8765/api", {})), \
+                     patch.object(check_connection.httpx, "Client", return_value=client):
+                    self.assertEqual(check_connection.check()["port"], port)
