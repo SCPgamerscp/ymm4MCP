@@ -30,6 +30,13 @@ class GeminiTimestampValidationTests(unittest.TestCase):
                   {"time_sec": 3.0, "end_sec": 4.0}]
         self.assertEqual(self.parse(events)["events"], events)
 
+    def test_out_of_order_events_are_returned_chronologically(self):
+        events = [{"time_sec": 5, "label": "later"},
+                  {"time_sec": 1, "label": "earlier"},
+                  {"time_sec": 5, "label": "same time"}]
+        self.assertEqual([event["label"] for event in self.parse(events)["events"]],
+                         ["earlier", "later", "same time"])
+
     def test_event_count_is_bounded(self):
         self.assertIn("_parse_error", self.parse([{"time_sec": 0}] * 5001))
 
