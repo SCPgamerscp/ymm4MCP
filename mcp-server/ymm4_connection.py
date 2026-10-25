@@ -19,7 +19,7 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             path = str(Path(local) / "YMM4MCP" / "connection.json")
     if path:
         try:
-            with open(path, encoding="utf-8") as source:
+            with open(path, encoding="utf-8-sig") as source:
                 descriptor = json.load(source)
             if not isinstance(descriptor, dict):
                 raise ValueError("object required")
