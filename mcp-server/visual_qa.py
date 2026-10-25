@@ -1,6 +1,7 @@
 """Conservative preview QA on a bounded set of PNG captures."""
 
 import base64
+import binascii
 from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
@@ -29,7 +30,8 @@ def thumbnail(image_b64: str) -> bytes:
                 if image.convert("RGBA").getchannel("A").getextrema()[0] < 255:
                     raise ValueError("preview contains transparent pixels")
             return image.convert("RGB").resize((64, 36)).tobytes()
-    except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
+    except (ValueError, binascii.Error, UnidentifiedImageError,
+            Image.DecompressionBombError, OSError) as exc:
         raise ValueError("invalid preview PNG") from exc
 
 
