@@ -13,18 +13,18 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
 1. [Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) から最新版の `YMM4McpPlugin-*.ymme` をダウンロードします。YMM4を閉じて `.ymme` をダブルクリックし、YMM4の案内に従ってインストールします。利用者は `YMM4_PATH` や .NET SDK を設定する必要はありません。
 2. YMM4を起動します。新規インストールではプラグインのHTTPサーバーが自動起動します。「ツール」→「MCP連携サーバー」で状態を確認できます。既に自動起動を無効にしている場合は、この画面の「▶ 起動」を押します。
-3. 同じ Release の `YMM4McpServer-*.zip` を展開し、`mcp-server` の `setup.ps1` を実行します（Python 3 が必要です）。専用の仮想環境に依存関係を入れ、MCP設定に使う実際のパスを表示します。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
+3. 同じ Release の `YMM4McpServer-*.zip` を**すべて展開**し、`mcp-server/install.cmd` をダブルクリックします（Python 3 が必要です）。管理者権限は不要です。専用の仮想環境を作成し、依存関係をインストールして、Claude Desktop の `mcpServers.ymm4` 設定を自動追加します。既存の他の設定は保持し、変更時にはバックアップを作ります。完了後にClaude Desktopを再起動してください。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
 
    ```powershell
    cd C:\path\to\ymm4MCP\mcp-server
    .\setup.ps1
    ```
 
-   `./setup.ps1 -ConfigureClaudeDesktop` を使うと、既存の `mcpServers` と他の設定を保持したまま `ymm4` の設定を自動追加します。既存ファイルは `.bak.*` に保存してから更新します。Claude Desktop を再起動して反映してください。
-   YMM4を起動した状態で `./setup.ps1 -CheckConnection` を実行すると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。
+   PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同じ設定処理を実行します。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。
+   YMM4を起動した状態で `check_connection.cmd` をダブルクリックすると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。PowerShellからは `./setup.ps1 -CheckConnection` も利用できます（こちらは仮想環境の依存関係も再確認します）。
    プラグインのポートを変更した場合は `./setup.ps1 -ConfigureClaudeDesktop -CheckConnection -Port 9000` のように同じポートを指定すると、Claude Desktop の `YMM4_API_BASE` と接続確認に反映します。省略時は接続ファイルの設定を使います。
 
-4. Claude Desktopの `%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示した JSON を設定します。手動設定する場合は、展開したフォルダ内の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定します。
+4. `install.cmd` を使った場合はClaude Desktopの設定は自動更新されるため、この手順は不要です。手動で設定する場合のみ、`%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示したJSONを設定します。展開したフォルダ内の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定してください。
 
    ```json
    {
