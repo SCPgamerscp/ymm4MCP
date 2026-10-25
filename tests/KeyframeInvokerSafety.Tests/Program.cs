@@ -31,6 +31,9 @@ Check(integer.LastFrame == 2, "integral frame changed during conversion");
 Check(!KeyframeMethodInvoker.TryInvokeNamed(integer, new[] { "AddKeyFrame" }, double.PositiveInfinity, 1.0),
     "infinite frame was accepted");
 Check(integer.Calls == 1, "invalid frame caused an extra mutation");
+Check(!KeyframeMethodInvoker.TryInvokeNamed(integer, new[] { "AddKeyFrame" }, 2, double.NaN),
+    "directly assignable NaN was accepted");
+Check(integer.Calls == 1, "NaN value caused an extra mutation");
 
 // A conversion to float can overflow to Infinity without throwing.
 var floating = new FloatValue();
