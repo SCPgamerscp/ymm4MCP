@@ -10,6 +10,8 @@ def _valid_host(host: str) -> bool:
     if not host or len(host) > 253 or any(ord(c) > 127 for c in host):
         return False
     if host.startswith("[") and host.endswith("]"):
+        if "%" in host:  # Reject scoped IPv6 zone IDs in HTTP Host allowlists.
+            return False
         try:
             ipaddress.IPv6Address(host[1:-1])
         except ValueError:
