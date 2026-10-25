@@ -36,7 +36,26 @@ Check(throws.Applied == 1, "later method should run after exception");
 
 Check(!KeyframeMethodInvoker.TryInvokeNamed(legacy, new[] { "MissingMethod" }, 10),
     "missing method must fail");
-Console.WriteLine("Keyframe method invocation tests passed");
+var shared = new MockKeyFrames();
+var detached = new MockAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), detached),
+    "detached Animation must bind to the item's shared KeyFrames");
+Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
+    "binding must use the exact shared KeyFrames instance");
+Check(KeyframeHostBinding.TryBind(new MockItem(new MockKeyFrames()), detached),
+    "already-bound Animation should be accepted");
+Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
+    "existing binding must not be overwritten");
+Check(!KeyframeHostBinding.TryBind(new MockItem(null), new MockAnimation()),
+    "missing item KeyFrames must not be fabricated");
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new WrongBindingAnimation()),
+    "incompatible SetKeyFrames signature must be rejected");
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new ThrowingBindingAnimation()),
+    "host SetKeyFrames failures must not be reported as success");
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new NoOpBindingAnimation()),
+    "a no-op SetKeyFrames must not be reported as success");
+
+Console.WriteLine("Keyframe method invocation and host binding tests passed");
 
 internal sealed class RejectingAnimation
 {
@@ -74,4 +93,39 @@ internal sealed class ThrowingAnimation
     public int Applied { get; private set; }
     public bool AddKeyFrame(int frame, double value) => throw new NotSupportedException();
     public void SetKeyFrame(int frame, double value) { Applied++; }
+}
+
+internal sealed class MockKeyFrames
+{
+    public List<int> Frames { get; } = new();
+}
+
+internal sealed class MockItem(MockKeyFrames? frames)
+{
+    public MockKeyFrames? KeyFrames { get; } = frames;
+}
+
+internal sealed class MockAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int Binds { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { KeyFrames = frames; Binds++; }
+}
+
+internal sealed class WrongBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public void SetKeyFrames(string frames) { }
+}
+
+internal sealed class ThrowingBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) => throw new InvalidOperationException("host refused");
+}
+
+internal sealed class NoOpBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { }
 }
