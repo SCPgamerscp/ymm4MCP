@@ -38,4 +38,22 @@ try { ExportAcceptance.Evaluate("out.mp4", complete, expectedAudioChannels: 9); 
 catch (ArgumentException) { }
 try { ExportAcceptance.Evaluate("out.mp4", fpsInspection, expectedFps: double.NaN); throw new Exception("NaN FPS accepted"); }
 catch (ArgumentException) { }
+// A verified MP4 may still lack usable duration or frame-timing metadata.
+var noDuration = complete with { DurationSeconds = null };
+var missingDuration = ExportAcceptance.Evaluate("out.mp4", noDuration, expectedDuration: 120);
+Check(!missingDuration.Passed && missingDuration.Issues.Any(i => i.Code == "DURATION_MISMATCH"),
+    "missing duration must report a mismatch instead of throwing");
+Check(ExportAcceptance.Evaluate("out.mp4", noDuration).Passed,
+    "duration metadata should remain optional without an expected duration");
+foreach (var nonFinite in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+{
+    var invalidDuration = ExportAcceptance.Evaluate("out.mp4",
+        complete with { DurationSeconds = nonFinite }, expectedDuration: 120);
+    Check(!invalidDuration.Passed && invalidDuration.Issues.Any(i => i.Code == "DURATION_MISMATCH"),
+        "non-finite duration must fail the requested duration check");
+    var invalidFps = ExportAcceptance.Evaluate("out.mp4",
+        complete with { AverageFps = nonFinite }, expectedFps: 30);
+    Check(!invalidFps.Passed && invalidFps.Issues.Any(i => i.Code == "FPS_MISMATCH"),
+        "non-finite FPS must fail the requested frame-rate check");
+}
 Console.WriteLine("Export acceptance tests passed");
