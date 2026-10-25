@@ -1,0 +1,23 @@
+name: Debug inspection safety tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/DebugInspectionSafety.cs'
+      - 'YMM4McpPlugin/McpDebugApi.cs'
+      - 'tests/DebugInspectionSafety.Tests/**'
+      - '.github/workflows/debug-inspection-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug-inspection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/DebugInspectionSafety.Tests/DebugInspectionSafety.Tests.csproj --configuration Release
