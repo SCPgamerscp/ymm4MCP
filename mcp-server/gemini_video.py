@@ -19,6 +19,7 @@ APIキー:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -121,6 +122,18 @@ def _extract_json(text: str) -> dict:
                 or not isinstance(parsed.get("events"), list)
                 or any(not isinstance(event, dict) for event in parsed["events"])):
             raise ValueError("summary must be text and events must be an array of objects")
+        if len(parsed["events"]) > 5000:
+            raise ValueError("events exceeds the 5000 event limit")
+        for index, event in enumerate(parsed["events"]):
+            start = event.get("time_sec")
+            if (isinstance(start, bool) or not isinstance(start, (int, float))
+                    or not math.isfinite(start) or start < 0):
+                raise ValueError(f"events[{index}].time_sec must be finite and nonnegative")
+            end = event.get("end_sec", start)
+            if end is not None and (
+                    isinstance(end, bool) or not isinstance(end, (int, float))
+                    or not math.isfinite(end) or end < start):
+                raise ValueError(f"events[{index}].end_sec must not precede time_sec")
         return parsed
     except Exception as e:
         return {"summary": "", "events": [], "_parse_error": f"JSON解析失敗: {e}", "_raw": text[:2000]}
