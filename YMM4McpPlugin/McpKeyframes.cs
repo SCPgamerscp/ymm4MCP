@@ -289,8 +289,11 @@ namespace YMM4McpPlugin
             bool UndoIncomplete(bool force = false)
             {
                 var currentFrames = ReadFrameList(anim);
-                if (!isNew || !currentFrames.Contains(frame) || (!force && Complete()))
-                    return true;
+                if (!isNew) return true;
+                if (!currentFrames.Contains(frame))
+                    return currentFrames.SequenceEqual(before)
+                        && ReadValueList(anim).SequenceEqual(valuesBefore);
+                if (!force && Complete()) return true;
                 int insertedIndex = currentFrames.IndexOf(frame);
                 int valueIndex = insertedIndex + valueCountBefore - before.Count;
                 if (keyFrames != null)
