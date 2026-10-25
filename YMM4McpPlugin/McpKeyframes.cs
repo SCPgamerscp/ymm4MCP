@@ -376,15 +376,8 @@ namespace YMM4McpPlugin
                     index = frames.FindIndex(f => f == frame);
                 if (index < 0 || index >= list.Count) return false;
                 var entry = list[index];
-                if (entry != null)
-                {
-                    var vp = entry.GetType().GetProperty("Value");
-                    if (vp?.CanWrite == true)
-                    {
-                        vp.SetValue(entry, Convert.ChangeType(value, vp.PropertyType, CultureInfo.InvariantCulture));
-                        return true;
-                    }
-                }
+                if (entry != null && KeyframeValueMutation.TrySet(entry, value))
+                    return true;
             }
             foreach (var name in new[] { "DefaultValue", "Value" })
             {
