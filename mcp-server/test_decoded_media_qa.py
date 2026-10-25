@@ -44,6 +44,9 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertTrue(all(str(self.video) in cmd for cmd, _ in commands))
         self.assertTrue(all(isinstance(cmd, list) for cmd, _ in commands))
         self.assertTrue(all(timeout <= 30 for _, timeout in commands))
+        self.assertTrue(all("-abort_on" in cmd and
+                            cmd[cmd.index("-abort_on") + 1] == "empty_output"
+                            for cmd, _ in commands if cmd[0] == "ffmpeg"))
 
     def test_sampled_black_frames_and_long_silence_are_nonblocking_warnings(self):
         def fake(command, timeout):
