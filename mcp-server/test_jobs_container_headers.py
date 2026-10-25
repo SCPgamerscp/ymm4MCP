@@ -65,6 +65,36 @@ class ExportContainerHeaderTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertFalse(self.verify("clip.webm", payload)["ok"])
 
+    def test_ebml_void_payload_cannot_impersonate_doctype(self):
+        fake = b"\\x42\\x82\\x84junk"
+        void = b"\\xec" + bytes([0x80 + len(fake)]) + fake
+        real = b"\\x42\\x82\\x84webm"
+        header = b"\\x1a\\x45\\xdf\\xa3"
+        good = header + bytes([0x80 + len(void + real)]) + void + real
+        bad = header + bytes([0x80 + len(void)]) + void
+        self.assert_verified_header_only(self.verify("clip.webm", good))
+        self.assertFalse(self.verify("clip.webm", bad)["ok"])
+
+    def test_mov_finds_moov_after_free_skip_or_mdat(self):
+        moov = (8).to_bytes(4, "big") + b"moov"
+        for first_type in (b"free", b"skip", b"mdat"):
+            with self.subTest(first_type=first_type):
+                first = (16).to_bytes(4, "big") + first_type + b"payload!"
+                self.assert_verified_header_only(self.verify("clip.mov", first + moov))
+        # A marker inside mdat is not a top-level atom.
+        payload = b"garbage!" + moov
+        mdat = (8 + len(payload)).to_bytes(4, "big") + b"mdat" + payload
+        self.assertFalse(self.verify("clip.mov", mdat)["ok"])
+
+    def test_mov_rejects_atom_bounds_and_accepts_extended_size(self):
+        moov = (8).to_bytes(4, "big") + b"moov"
+        free = (16).to_bytes(4, "big") + b"free" + b"padding!"
+        self.assert_verified_header_only(self.verify("clip.mov", free + moov))
+        extended = (1).to_bytes(4, "big") + b"mdat" + (24).to_bytes(8, "big") + b"payload!"
+        self.assert_verified_header_only(self.verify("clip.mov", extended + moov))
+        corrupt = (10000).to_bytes(4, "big") + b"mdat" + b"payload!" + moov
+        self.assertFalse(self.verify("clip.mov", corrupt)["ok"])
+
     def test_expected_format_must_match_extension_and_allowlist(self):
         valid = (16).to_bytes(4, "big") + b"ftypisom" + b"\0" * 4
         self.assertFalse(self.verify("clip.mp4", valid, "wav")["ok"])
