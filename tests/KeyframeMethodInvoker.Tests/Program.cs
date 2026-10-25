@@ -110,6 +110,23 @@ Check(!KeyframeInsertionSafety.IsComplete(new[] { 10 }, 2,
     new[] { 10, 20 }, 3, 10),
     "an existing frame must not be counted as a new insertion");
 
+// A complete host insertion can still fail its value write. Roll back both
+// the new frame (by the host) and the extra value (by this helper).
+var insertedValues = new List<double> { 1.0, 2.0, 3.0 };
+Check(KeyframeInsertionSafety.TryRemoveInsertedValue(insertedValues, 2, 1),
+    "failed host insertion must remove its default value");
+Check(insertedValues.SequenceEqual(new[] { 1.0, 3.0 }),
+    "rollback must preserve the values on either side of the insertion");
+Check(KeyframeInsertionSafety.TryRemoveInsertedValue(insertedValues, 2, 1),
+    "host removal that already restored values must be accepted");
+var fixedValues = new double[] { 1.0, 2.0 };
+Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(fixedValues, 1, 1),
+    "a fixed-size collection must not be mutated during rollback");
+Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(new List<double> { 1.0, 2.0, 3.0 }, 1, 1),
+    "unexpected value count must fail closed");
+Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(new List<double> { 1.0, 2.0 }, 1, 3),
+    "invalid rollback index must fail closed");
+
 Console.WriteLine("Keyframe method invocation and host binding tests passed");
 
 internal sealed class RejectingAnimation
