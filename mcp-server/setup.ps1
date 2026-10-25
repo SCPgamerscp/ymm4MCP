@@ -58,7 +58,32 @@ if ($CheckConnection) {
 
 if ($ConfigureClaudeDesktop) {
     if (-not $env:APPDATA) { throw 'APPDATA が見つかりません。Claude Desktop の設定場所を確認してください。' }
-    $configPath = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+    $configPaths = @((Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'))
+    # Microsoft Store Claude Desktop uses an app-container roaming directory,
+    # not the classic %APPDATA%\Claude path. Configure both when present.
+    if ($env:LOCALAPPDATA) {
+        $packagesDir = Join-Path $env:LOCALAPPDATA 'Packages'
+        if (Test-Path -LiteralPath $packagesDir) {
+            foreach ($package in @(Get-ChildItem -LiteralPath $packagesDir -Directory -Filter 'Claude_*')) {
+                $storeConfigDir = Join-Path $package.FullName 'LocalCache\Roaming\Claude'
+                if (Test-Path -LiteralPath $storeConfigDir) {
+                    $configPaths += Join-Path $storeConfigDir 'claude_desktop_config.json'
+                }
+            }
+        }
+    }
+    # Validate all existing configs before updating any of them. A broken Store
+    # config must not leave the classic config partially changed (or vice versa).
+    foreach ($candidate in $configPaths) {
+        if (Test-Path -LiteralPath $candidate) {
+            $existing = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -eq $existing -or $existing -isnot [pscustomobject] -or
+                ($null -ne $existing.mcpServers -and $existing.mcpServers -isnot [pscustomobject])) {
+                throw "Claude Desktop の設定は JSON オブジェクトである必要があります: $candidate"
+            }
+        }
+    }
+    foreach ($configPath in $configPaths) {
     $configDir = Split-Path -Parent $configPath
     [IO.Directory]::CreateDirectory($configDir) | Out-Null
     if (Test-Path -LiteralPath $configPath) {
@@ -108,6 +133,7 @@ if ($ConfigureClaudeDesktop) {
         }
         Write-Output "Claude Desktop の設定を更新しました: $configPath"
         if ($backupPath) { Write-Output "元の設定のバックアップ: $backupPath" }
+    }
     }
 }
 if (-not $ConfigureClaudeDesktop) {
