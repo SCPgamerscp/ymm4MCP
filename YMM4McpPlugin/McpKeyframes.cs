@@ -273,30 +273,47 @@ namespace YMM4McpPlugin
 
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
-            // Capture before any reflected insertion. A host method can mutate
-            // Frames even when it reports false or the value update fails.
             var before = ReadFrameList(anim);
-            // Existing points (including the implicit start value) can be
-            // edited without asking the shared collection to insert again.
-            if (TrySetValueAt(anim, frame, value)) return true;
-            if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value)) return true;
-            // A host method may insert the frame and then return false/throw.
-            // Recheck before invoking another insertion method to avoid duplicates.
+            var valueCountBefore = ReadValueList(anim).Count;
+            bool isNew = frame > 0 && !before.Contains(frame);
+            var keyFrames = GetPropObj(anim, "KeyFrames");
+
+            // A host Add may insert a shared Frame without inserting its
+            // AnimationValue. In that state Values.Count == Frames.Count can
+            // look like a valid no-implicit-start layout, and TrySetValueAt
+            // would overwrite the *original* start value and claim success.
+            bool Complete() => !isNew || KeyframeInsertionSafety.IsComplete(
+                before, valueCountBefore, ReadFrameList(anim), ReadValueList(anim).Count, frame);
+
+            bool UndoIncomplete()
+            {
+                if (!isNew || !ReadFrameList(anim).Contains(frame) || Complete()) return true;
+                if (keyFrames != null)
+                    TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame", "RemoveKeyframe" }, frame);
+                if (ReadFrameList(anim).Contains(frame))
+                    TryInvokeNamed(anim, KeyframeRemoveNames, frame);
+                // Do not attempt another insert on a partially mutated host.
+                return !ReadFrameList(anim).Contains(frame);
+            }
+
+            if (TrySetValueAt(anim, frame, value) && Complete()) return true;
+            if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value) && Complete()) return true;
+            if (!UndoIncomplete()) return false;
+
             if (!ReadFrameList(anim).Contains(frame))
                 TryInvokeNamed(anim, KeyframeMethodNames, frame);
-            if (TrySetValueAt(anim, frame, value)) return true;
-            var keyFrames = GetPropObj(anim, "KeyFrames");
+            if (Complete() && TrySetValueAt(anim, frame, value)) return true;
+            if (!UndoIncomplete()) return false;
+
             if (keyFrames != null)
             {
                 if (!ReadFrameList(anim).Contains(frame))
                     TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
-                if (TrySetValueAt(anim, frame, value)) return true;
-                // A shared-frame insertion without a corresponding value is
-                // partial. Roll back even when Add reported false: some host
-                // versions mutate first and report failure afterwards.
-                if (!before.Contains(frame) && ReadFrameList(anim).Contains(frame))
-                    TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
+                if (Complete() && TrySetValueAt(anim, frame, value)) return true;
+                if (!UndoIncomplete()) return false;
             }
+            // With the original layout restored, the mutable collection
+            // fallback inserts the Frame and Value as one logical operation.
             return KeyframeCollectionMutation.TryUpsert(anim, frame, value);
         }
 
