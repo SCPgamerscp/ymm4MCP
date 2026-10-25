@@ -72,7 +72,7 @@ class DecodedMediaQATests(unittest.TestCase):
                                            "black_start", "black_end"), [])
 
     def test_sampled_audio_peak_near_clipping_is_warning_not_proof(self):
-        self.assertEqual(qa._audio_peak_db("Peak level dB: -3.25\\nPeak level dB: -1.5"), -1.5)
+        self.assertEqual(qa._audio_peak_db("Peak level dB: -3.25\nPeak level dB: -1.5"), -1.5)
         self.assertIsNone(qa._audio_peak_db("Peak level dB: -inf"))
         def fake(command, timeout):
             if command[0] == "ffprobe":
