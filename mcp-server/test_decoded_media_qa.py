@@ -48,6 +48,64 @@ class DecodedMediaQATests(unittest.TestCase):
                             cmd[cmd.index("-abort_on") + 1] == "empty_output"
                             for cmd, _ in commands if cmd[0] == "ffmpeg"))
 
+    def test_full_decode_checks_all_streams_and_marks_full_scope(self):
+        commands = []
+        def fake(command, timeout):
+            commands.append((command, timeout))
+            return process(stdout=self.metadata if command[0] == "ffprobe" else "")
+        with patch.object(qa, "run", side_effect=fake):
+            result = qa.inspect(str(self.video), full_decode=True)
+        self.assertTrue(result["passed"], result)
+        self.assertTrue(result["fully_decoded"])
+        self.assertEqual(result["verification_scope"], "full_audio_video_decode")
+        self.assertEqual(result["signal_scope"], "sampled_only")
+        self.assertEqual(len(commands), 7)  # probe, four samples, two full streams
+        full_commands = [cmd for cmd, _ in commands if "-v" in cmd
+                         and cmd[cmd.index("-v") + 1] == "error"]
+        self.assertEqual(len(full_commands), 2)
+        self.assertEqual({cmd[cmd.index("-map") + 1] for cmd in full_commands},
+                         {"0:v", "0:a"})
+        self.assertTrue(all("-ss" not in cmd and "-t" not in cmd
+                            and "-abort_on" in cmd for cmd in full_commands))
+        self.assertTrue(all(timeout <= 900 for _, timeout in commands))
+
+    def test_full_decode_detects_middle_corruption_not_seen_in_samples(self):
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return process(stdout=self.metadata)
+            if "-v" in command and command[command.index("-v") + 1] == "error":
+                if "0:v" in command:
+                    return process(1, stderr="corrupt packet in middle")
+            return process()
+        with patch.object(qa, "run", side_effect=fake):
+            sampled = qa.inspect(str(self.video))
+            full = qa.inspect(str(self.video), full_decode=True)
+        self.assertTrue(sampled["passed"])
+        self.assertFalse(sampled["fully_decoded"])
+        self.assertFalse(full["passed"])
+        self.assertFalse(full["fully_decoded"])
+        self.assertIn("EXPORT_FULL_DECODE_FAILED",
+                      {issue["code"] for issue in full["issues"]})
+
+    def test_full_decode_timeout_and_duration_limit_fail_closed(self):
+        def timeout(command, seconds):
+            if command[0] == "ffprobe":
+                return process(stdout=self.metadata)
+            if "-v" in command and command[command.index("-v") + 1] == "error":
+                raise subprocess.TimeoutExpired(command, seconds)
+            return process()
+        with patch.object(qa, "run", side_effect=timeout):
+            report = qa.inspect(str(self.video), full_decode=True)
+        self.assertFalse(report["passed"])
+        self.assertIn("EXPORT_FULL_DECODE_TIMEOUT",
+                      {issue["code"] for issue in report["issues"]})
+        too_long = json.dumps({"format": {"duration": "901"}, "streams":
+                               [{"codec_type": "video"}]})
+        with patch.object(qa, "run", return_value=process(stdout=too_long)) as run:
+            report = qa.inspect(str(self.video), full_decode=True)
+        self.assertEqual(report["error_code"], "EXPORT_FULL_DECODE_DURATION_LIMIT")
+        self.assertEqual(run.call_count, 1)
+
     def test_sampled_black_frames_and_long_silence_are_nonblocking_warnings(self):
         def fake(command, timeout):
             if command[0] == "ffprobe":
@@ -132,7 +190,8 @@ class DecodedMediaQATests(unittest.TestCase):
 
     def test_invalid_arguments_and_missing_files(self):
         for kwargs in ({"sample_seconds": True}, {"sample_seconds": 0},
-                       {"sample_seconds": 16}, {"require_audio": "false"}):
+                       {"sample_seconds": 16}, {"require_audio": "false"},
+                       {"full_decode": "true"}, {"full_decode": 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 qa.inspect(str(self.video), **kwargs)
         with self.assertRaises(ValueError):
@@ -155,9 +214,10 @@ class McpDispatchTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(server.decoded_media_qa, "inspect", return_value=report) as inspect:
             actual = await server.dispatch({"action": "get_info", "sub_action": "decoded_export_qa",
                                             "path": "/tmp/clip.mp4", "sample_seconds": 3,
-                                            "require_audio": False})
+                                            "require_audio": False, "full_decode": True})
         self.assertEqual(actual, report)
-        inspect.assert_called_once_with("/tmp/clip.mp4", require_audio=False, sample_seconds=3)
+        inspect.assert_called_once_with("/tmp/clip.mp4", require_audio=False,
+                                        sample_seconds=3, full_decode=True)
 
 
 if __name__ == "__main__":
