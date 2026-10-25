@@ -39,12 +39,15 @@ namespace YMM4McpPlugin
         {
             try
             {
-                if (!File.Exists(SettingsPath)) return new McpSettings();
+                // File.Exists can return false for access-denied errors, which
+                // would incorrectly auto-start with defaults. Read directly.
                 var settings = JsonSerializer.Deserialize<McpSettings>(File.ReadAllText(SettingsPath))
                     ?? throw new InvalidDataException("MCP設定ファイルが空です");
                 settings.Validate();
                 return settings;
             }
+            catch (FileNotFoundException) { return new McpSettings(); }
+            catch (DirectoryNotFoundException) { return new McpSettings(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or JsonException or InvalidDataException
                                        or ArgumentOutOfRangeException)
