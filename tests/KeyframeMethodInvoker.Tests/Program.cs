@@ -42,10 +42,21 @@ Check(KeyframeHostBinding.TryBind(new MockItem(shared), detached),
     "detached Animation must bind to the item's shared KeyFrames");
 Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
     "binding must use the exact shared KeyFrames instance");
-Check(KeyframeHostBinding.TryBind(new MockItem(new MockKeyFrames()), detached),
-    "already-bound Animation should be accepted");
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), detached),
+    "already-bound Animation should be accepted when it owns the same shared frames");
+Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(shared), detached),
+    "matching item and animation frames must not be treated as a conflict");
 Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
     "existing binding must not be overwritten");
+var foreignFrames = new MockKeyFrames();
+Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(foreignFrames), detached),
+    "cross-item keyframe binding must be detected before editing");
+Check(!KeyframeHostBinding.TryBind(new MockItem(foreignFrames), detached),
+    "cross-item binding must not be reported as successful");
+Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
+    "cross-item binding check must not mutate the original animation");
+Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(null), detached),
+    "hosts without item-level KeyFrames should retain their legacy fallback");
 Check(!KeyframeHostBinding.TryBind(new MockItem(null), new MockAnimation()),
     "missing item KeyFrames must not be fabricated");
 Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new WrongBindingAnimation()),
