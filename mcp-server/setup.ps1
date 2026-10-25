@@ -1,4 +1,4 @@
-param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection,
+﻿param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection,
       [ValidateRange(1024, 65535)][Nullable[int]]$Port)
 $ErrorActionPreference = 'Stop'
 $serverDir = $PSScriptRoot
