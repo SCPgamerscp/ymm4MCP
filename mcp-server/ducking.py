@@ -88,7 +88,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         try:
             at = integer(key.get("at"), "keyframe.at")
             value = finite_number(key["value"], "keyframe.value")
-        except ValueError:
+        except (ValueError, OverflowError):
             return False
         if at in seen or at not in expected or abs(value - expected[at]) >= 1e-6:
             return False
