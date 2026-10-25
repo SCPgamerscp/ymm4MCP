@@ -24,29 +24,33 @@ Check(normal.Frames.Count == 2 && Convert.ToInt32(normal.Frames[1]) == 20
     "valid insertion produced the wrong keyframe");
 
 // A value collection can mutate and then throw. It must not leave an orphan.
-var valueThrows = new TestAnimation(new FaultyList { 10 },
-    new FaultyList { 1.0, 2.0 } { ThrowAfterInsert = true });
+var throwingValues = new FaultyList { 1.0, 2.0 };
+throwingValues.ThrowAfterInsert = true;
+var valueThrows = new TestAnimation(new FaultyList { 10 }, throwingValues);
 Check(!KeyframeCollectionMutation.TryUpsert(valueThrows, 20, 5.0),
     "throwing value insertion should fail");
 CheckUnchanged(valueThrows.Frames, valueThrows.Values, "value throws after insertion");
 
 // A frame collection can mutate and then throw. Restore both collections.
-var frameThrows = new TestAnimation(
-    new FaultyList { 10 } { ThrowAfterInsert = true }, new FaultyList { 1.0, 2.0 });
+var throwingFrames = new FaultyList { 10 };
+throwingFrames.ThrowAfterInsert = true;
+var frameThrows = new TestAnimation(throwingFrames, new FaultyList { 1.0, 2.0 });
 Check(!KeyframeCollectionMutation.TryUpsert(frameThrows, 20, 5.0),
     "throwing frame insertion should fail");
 CheckUnchanged(frameThrows.Frames, frameThrows.Values, "frame throws after insertion");
 
 // A non-conforming IList may silently ignore Insert. Rollback must not delete
 // a pre-existing frame or value when the collection count did not increase.
-var frameNoOp = new TestAnimation(
-    new FaultyList { 10 } { IgnoreInsert = true }, new FaultyList { 1.0, 2.0 });
+var ignoredFrames = new FaultyList { 10 };
+ignoredFrames.IgnoreInsert = true;
+var frameNoOp = new TestAnimation(ignoredFrames, new FaultyList { 1.0, 2.0 });
 Check(!KeyframeCollectionMutation.TryUpsert(frameNoOp, 20, 5.0),
     "ignored frame insertion should fail");
 CheckUnchanged(frameNoOp.Frames, frameNoOp.Values, "frame insert ignored");
 
-var valueNoOp = new TestAnimation(new FaultyList { 10 },
-    new FaultyList { 1.0, 2.0 } { IgnoreInsert = true });
+var ignoredValues = new FaultyList { 1.0, 2.0 };
+ignoredValues.IgnoreInsert = true;
+var valueNoOp = new TestAnimation(new FaultyList { 10 }, ignoredValues);
 Check(!KeyframeCollectionMutation.TryUpsert(valueNoOp, 20, 5.0),
     "ignored value insertion should fail");
 CheckUnchanged(valueNoOp.Frames, valueNoOp.Values, "value insert ignored");
