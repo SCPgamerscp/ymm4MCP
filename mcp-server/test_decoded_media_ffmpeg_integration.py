@@ -21,9 +21,11 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                  "-t", "4", "-c:v", "mpeg4", "-c:a", "aac", "-y", str(video)],
                 check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 timeout=30)
-            result = decoded_media_qa.inspect(str(video), sample_seconds=4)
+            result = decoded_media_qa.inspect(str(video), sample_seconds=4, full_decode=True)
             self.assertTrue(result["success"], result)
             self.assertTrue(result["passed"], result)  # warnings are not errors
+            self.assertTrue(result["fully_decoded"], result)
+            self.assertEqual(result["verification_scope"], "full_audio_video_decode")
             self.assertEqual(result["signal_scope"], "sampled_only")
             self.assertGreaterEqual(len(result["black_frames"]), 1)
             self.assertGreaterEqual(len(result["long_silences"]), 1)
