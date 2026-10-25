@@ -150,7 +150,7 @@ def _extract_json(text: str) -> dict:
 def _wait_file_active(client, file_obj, timeout_sec: int = 180):
     """File API にアップロードした動画が ACTIVE になるまで待つ。"""
     name = file_obj.name
-    waited = 0
+    deadline = time.monotonic() + timeout_sec
     while True:
         f = client.files.get(name=name)
         state = getattr(f.state, "name", str(f.state))
@@ -158,10 +158,11 @@ def _wait_file_active(client, file_obj, timeout_sec: int = 180):
             return f
         if state == "FAILED":
             raise RuntimeError("Geminiでの動画処理に失敗しました(FAILED)")
-        if waited >= timeout_sec:
+        # Account for the time spent inside files.get, not just sleep calls.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError(f"動画処理がタイムアウトしました(state={state})")
-        time.sleep(3)
-        waited += 3
+        time.sleep(min(3, remaining))
 
 
 def analyze_video_file(
@@ -353,9 +354,10 @@ def analyze_frames_dir(
         # An explicitly requested audio track is required for audiovisual QA.
         # Silently omitting a missing WAV would falsely report a complete review.
         if audio_path is not None:
-            if not isinstance(audio_path, str) or not audio_path or not os.path.isfile(audio_path):
+            if (not isinstance(audio_path, str) or not audio_path or
+                    not audio_path.lower().endswith(".wav") or not os.path.isfile(audio_path)):
                 return {"success": False, "source": "frames_dir",
-                        "error": "Requested audio file is missing or invalid"}
+                        "error": "Requested audio file must be an existing WAV"}
             if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
                 return {"success": False, "error": "Audio exceeds the upload size limit",
                         "source": "frames_dir"}
@@ -364,6 +366,11 @@ def analyze_frames_dir(
             if (len(wav_bytes) > MAX_AUDIO_BYTES
                     or total_payload_bytes + len(wav_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Audio payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            # Do not label arbitrary audio bytes as audio/wav in Gemini requests.
+            if (len(wav_bytes) < 12 or wav_bytes[:4] != b"RIFF"
+                    or wav_bytes[8:12] != b"WAVE"):
+                return {"success": False, "error": "Requested audio is not a RIFF/WAVE file",
                         "source": "frames_dir"}
             total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
