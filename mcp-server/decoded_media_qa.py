@@ -116,7 +116,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
                        "-i", str(target), "-t", format(length, ".3f"),
                        "-map", "0:v:0" if kind == "video" else "0:a:0",
                        "-vf" if kind == "video" else "-af", signal_filter,
-                       "-f", "null", "-"]
+                       "-abort_on", "empty_output", "-f", "null", "-"]
             try:
                 decoded = run(command, 30)
             except FileNotFoundError:
