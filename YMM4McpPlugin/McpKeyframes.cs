@@ -91,6 +91,10 @@ namespace YMM4McpPlugin
                 if (anim == null)
                     return Failure("KEYFRAME_UNSUPPORTED", "プロパティ '" + prop + "' はAnimationではありません");
 
+                // KeyFrames belongs to the timeline item and is shared across
+                // its animations.  Bind a detached Animation before adding a
+                // nonzero keyframe; do not replace an existing binding.
+                KeyframeHostBinding.TryBind(item, anim);
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
@@ -263,16 +267,26 @@ namespace YMM4McpPlugin
 
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
+            // Existing points (including the implicit start value) can be
+            // edited without asking the shared collection to insert again.
+            if (TrySetValueAt(anim, frame, value)) return true;
             if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value)) return true;
             if (TryInvokeNamed(anim, KeyframeMethodNames, frame) && TrySetValueAt(anim, frame, value)) return true;
             var keyFrames = GetPropObj(anim, "KeyFrames");
             if (keyFrames != null)
             {
-                if (TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame) && TrySetValueAt(anim, frame, value))
-                    return true;
+                var before = ReadFrameList(anim);
+                if (TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame))
+                {
+                    if (TrySetValueAt(anim, frame, value)) return true;
+                    // A shared-frame insertion without a corresponding value
+                    // is a partial edit.  Restore the old frame list if the
+                    // host did not materialize a writable AnimationValue.
+                    if (!before.Contains(frame) && ReadFrameList(anim).Contains(frame))
+                        TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
+                }
             }
-            if (KeyframeCollectionMutation.TryUpsert(anim, frame, value)) return true;
-            return TrySetValueAt(anim, frame, value);
+            return KeyframeCollectionMutation.TryUpsert(anim, frame, value);
         }
 
         private static bool RemoveKeyframe(object anim, int frame)
