@@ -161,7 +161,7 @@ try
         "duplicate fmt chunk accepted");
 
     // Extensible fmt cbSize must describe bytes actually present in the fmt chunk.
-    var invalidExtensibleLength = PcmWave(new[] { 1, 2, 3 }, 24, extensible: true);
+    var invalidExtensibleLength = PcmWave(new[] { 1, 2, 3, 4 }, 24, extensible: true);
     BinaryPrimitives.WriteUInt16LittleEndian(invalidExtensibleLength.AsSpan(36, 2), 23);
     File.WriteAllBytes(path, invalidExtensibleLength);
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
