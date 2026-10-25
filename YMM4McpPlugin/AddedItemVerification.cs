@@ -18,6 +18,19 @@ namespace YMM4McpPlugin
             return false;
         }
 
+        internal static bool LengthMatches(object? actual, int expected) => actual switch
+        {
+            int n => n == expected,
+            long n => n == expected,
+            short n => n == expected,
+            ushort n => n == expected,
+            uint n => n == expected,
+            ulong n => (ulong)expected == n,
+            byte n => n == expected,
+            sbyte n => n == expected,
+            _ => false
+        };
+
         internal static object? UniqueExpectedNewcomer(IEnumerable<object> newcomers, string expectedName)
         {
             object? candidate = null;
