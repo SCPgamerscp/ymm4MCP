@@ -94,7 +94,8 @@ namespace YMM4McpPlugin
                 // KeyFrames belongs to the timeline item and is shared across
                 // its animations.  Bind a detached Animation before adding a
                 // nonzero keyframe; do not replace an existing binding.
-                KeyframeHostBinding.TryBind(item, anim);
+                if (action == "set" && relativeFrame > 0)
+                    KeyframeHostBinding.TryBind(item, anim);
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
