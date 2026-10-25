@@ -11,6 +11,10 @@ namespace YMM4McpPlugin
         public int Port { get; set; } = 8765;
         public bool AutoStart { get; set; } = true;
         public bool AllowAdvanced { get; set; } = false;
+        // A corrupt settings file must not prevent the plugin from loading or
+        // silently enable the HTTP listener / advanced reflection API.
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string LoadWarning { get; set; } = "";
         public static string DirectoryPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YMM4MCP");
         public static string ConnectionPath => Path.Combine(DirectoryPath, "connection.json");
@@ -33,11 +37,27 @@ namespace YMM4McpPlugin
 
         public static McpSettings Load()
         {
-            if (!File.Exists(SettingsPath)) return new McpSettings();
-            var settings = JsonSerializer.Deserialize<McpSettings>(File.ReadAllText(SettingsPath))
-                ?? throw new InvalidDataException("MCP設定ファイルが空です");
-            settings.Validate();
-            return settings;
+            try
+            {
+                if (!File.Exists(SettingsPath)) return new McpSettings();
+                var settings = JsonSerializer.Deserialize<McpSettings>(File.ReadAllText(SettingsPath))
+                    ?? throw new InvalidDataException("MCP設定ファイルが空です");
+                settings.Validate();
+                return settings;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or JsonException or InvalidDataException
+                                       or ArgumentOutOfRangeException)
+            {
+                // Preserve the damaged file for diagnosis. Do not auto-start on
+                // fallback settings, and never enable dangerous APIs.
+                return new McpSettings
+                {
+                    AutoStart = false,
+                    AllowAdvanced = false,
+                    LoadWarning = "MCP設定を読み込めません。自動起動を無効化しました。設定ファイルを確認し、必要ならUIから保存し直してください: " + ex.Message
+                };
+            }
         }
 
         public void Validate()
