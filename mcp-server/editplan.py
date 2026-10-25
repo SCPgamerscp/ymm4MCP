@@ -33,7 +33,7 @@ ITEM_FIELDS = {
 
 
 def checkpoint_id_ok(value):
-    return isinstance(value, str) and bool(_CHECKPOINT_ID.match(value))
+    return isinstance(value, str) and _CHECKPOINT_ID.fullmatch(value) is not None
 
 
 def parse_reason(args):
