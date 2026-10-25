@@ -192,12 +192,12 @@ jobs:
           & cmd.exe /c "mcp-server\install.cmd"
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
           $again = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-          if ($again.theme -ne 'dark' -or $again.mcpServers.other.command -ne 'other.exe' -or
+          if ($again.theme -ne 'rollback-classic' -or $again.mcpServers.other.command -ne 'classic.exe' -or
               @($again.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
             throw 'Installer rerun damaged Claude Desktop settings'
           }
           $againStore = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-          if ($againStore.theme -ne 'store' -or $againStore.mcpServers.other.command -ne 'store.exe' -or
+          if ($againStore.theme -ne 'rollback-store' -or $againStore.mcpServers.other.command -ne 'store.exe' -or
               @($againStore.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
             throw 'Installer rerun damaged Microsoft Store Claude settings'
           }
