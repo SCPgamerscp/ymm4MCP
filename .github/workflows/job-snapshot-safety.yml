@@ -1,0 +1,24 @@
+name: Job snapshot persistence regression
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/McpJobs.cs'
+      - 'YMM4McpPlugin/JobSnapshotSafety.cs'
+      - 'tests/JobSnapshotSafety.Tests/**'
+      - '.github/workflows/job-snapshot-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  job-snapshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run job persistence safety regressions
+        run: dotnet run --project tests/JobSnapshotSafety.Tests/JobSnapshotSafety.Tests.csproj --configuration Release
