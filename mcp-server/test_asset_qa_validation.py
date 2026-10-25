@@ -71,7 +71,7 @@ class AssetQaValidationTests(unittest.TestCase):
                                  "complete": not variant.get("unchecked"), **variant})
 
     def test_rejects_blank_and_control_character_ids(self):
-        for bad_id in (" ", "  ", "\\n", "a\\x00b", "a\\x7fb"):
+        for bad_id in (" ", "  ", "\n", "a\x00b", "a\x7fb"):
             with self.subTest(bad_id=bad_id):
                 with self.assertRaises(ValueError):
                     asset_qa.report({**self.good, "complete": False,
@@ -81,7 +81,7 @@ class AssetQaValidationTests(unittest.TestCase):
                                      "missing": [{"path": "C:/missing", "item_ids": [bad_id]}]})
 
     def test_rejects_control_character_paths(self):
-        for bad_path in ("C:/path\\nother", "C:/a\\x00b", "C:/a\\x7fb"):
+        for bad_path in ("C:/path\nother", "C:/a\x00b", "C:/a\x7fb"):
             with self.subTest(bad_path=bad_path), self.assertRaises(ValueError):
                 asset_qa.report({**self.good,
                                  "missing": [{"path": bad_path, "item_ids": ["a"]}]})
