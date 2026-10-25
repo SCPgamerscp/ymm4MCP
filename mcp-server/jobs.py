@@ -22,7 +22,7 @@ def is_absolute_media_path(path: str) -> bool:
 
 
 def job_id_ok(job_id: str) -> bool:
-    return isinstance(job_id, str) and bool(_JOB_ID.match(job_id))
+    return isinstance(job_id, str) and bool(_JOB_ID.fullmatch(job_id))
 
 
 def validate_export_request(args: dict) -> dict:
@@ -50,7 +50,8 @@ def validate_export_request(args: dict) -> dict:
         raise ValueError(f"timeout_seconds must be an integer in 1..{MAX_TIMEOUT}")
     key = args.get("idempotency_key")
     if key is not None:
-        if not isinstance(key, str) or not 1 <= len(key) <= MAX_IDEMPOTENCY or key.strip() != key:
+        if (not isinstance(key, str) or not 1 <= len(key) <= MAX_IDEMPOTENCY
+                or key.strip() != key or any(ord(c) < 32 or ord(c) == 127 for c in key)):
             raise ValueError("idempotency_key must be a 1..128 character string")
     return {
         "output_path": path,
