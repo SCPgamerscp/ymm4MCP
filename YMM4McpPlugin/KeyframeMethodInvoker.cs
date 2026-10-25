@@ -77,6 +77,11 @@ namespace YMM4McpPlugin
             var target = Nullable.GetUnderlyingType(destination) ?? destination;
             if (argument == null)
                 return !destination.IsValueType || Nullable.GetUnderlyingType(destination) != null;
+            // Even a directly assignable double/float must be finite. Otherwise
+            // the fast path below would bypass the conversion validation.
+            if (argument is double nonFiniteDouble && !double.IsFinite(nonFiniteDouble)
+                || argument is float nonFiniteFloat && !float.IsFinite(nonFiniteFloat))
+                return false;
             // Convert.ChangeType cannot convert an object to System.Object, a
             // derived class to its base class, or a value to Nullable<T>.
             if (target.IsInstanceOfType(argument))
@@ -114,7 +119,7 @@ namespace YMM4McpPlugin
                 }
                 return true;
             }
-            catch (Exception) when (true)
+            catch (Exception)
             {
                 converted = null;
                 return false;
