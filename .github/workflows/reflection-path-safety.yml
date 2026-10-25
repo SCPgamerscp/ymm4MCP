@@ -1,0 +1,23 @@
+name: Reflection path safety regression
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/ReflectionPath.cs'
+      - 'tests/ReflectionPathSafety.Tests/**'
+      - '.github/workflows/reflection-path-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reflection-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run reflection path safety regressions
+        run: dotnet run --project tests/ReflectionPathSafety.Tests/ReflectionPathSafety.Tests.csproj --configuration Release
