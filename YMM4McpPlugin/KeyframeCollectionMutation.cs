@@ -153,6 +153,37 @@ namespace YMM4McpPlugin
                 || actual != Convert.ToDouble(entry, CultureInfo.InvariantCulture))
                 return false;
 
+            // A reflected immutable Insert method is not guaranteed to insert the
+            // requested frame. Verify the entire ordered frame sequence before
+            // committing either collection, not just the resulting counts.
+            if (insert)
+            {
+                for (int i = 0; i < newFrames.Count; i++)
+                {
+                    var expected = i == insertAt ? frame : frames[i < insertAt ? i : i - 1];
+                    if (!int.TryParse(Convert.ToString(expected, CultureInfo.InvariantCulture),
+                            NumberStyles.Integer, CultureInfo.InvariantCulture, out int expectedFrame)
+                        || !int.TryParse(Convert.ToString(newFrames[i], CultureInfo.InvariantCulture),
+                            NumberStyles.Integer, CultureInfo.InvariantCulture, out int actualFrame)
+                        || actualFrame != expectedFrame)
+                        return false;
+                }
+            }
+
+            // A reflected Insert/SetItem may return a collection of the expected size
+            // while silently altering unrelated keyframe values. Check every element
+            // before replacing either collection, including the requested value.
+            if (newValues.Count != values.Count + (insert ? 1 : 0))
+                return false;
+            for (int i = 0; i < newValues.Count; i++)
+            {
+                var expected = insert
+                    ? (i == valueIndex ? entry : values[i < valueIndex ? i : i - 1])
+                    : (i == valueIndex ? entry : values[i]);
+                if (!Equals(newValues[i], expected))
+                    return false;
+            }
+
             // Stage both new immutable lists before touching the animation.
             // Restore both references if either property setter rejects the update.
             try
