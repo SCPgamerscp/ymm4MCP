@@ -8,5 +8,6 @@
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/ReflectionPath.cs" Link="ReflectionPath.cs" />
     <Compile Include="../../YMM4McpPlugin/KeyframeCollectionMutation.cs" Link="KeyframeCollectionMutation.cs" />
+    <Compile Include="../../YMM4McpPlugin/KeyframeHostBinding.cs" Link="KeyframeHostBinding.cs" />
   </ItemGroup>
 </Project>
