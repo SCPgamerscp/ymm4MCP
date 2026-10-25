@@ -48,6 +48,11 @@ def _get_default_model() -> str:
 
 DEFAULT_MODEL = _get_default_model()
 
+# Limit memory retained for inline Gemini frame/audio payloads.
+MAX_FRAME_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_AUDIO_BYTES = 128 * 1024 * 1024
+MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
 # デフォルトの検出指示(イベント全種類)。AIがカスタムプロンプトを渡せば上書きされる。
 DEFAULT_EVENT_INSTRUCTION = (
     "この動画(または連番フレーム画像と音声)を時系列で精密に解析し、"
@@ -273,12 +278,21 @@ def analyze_frames_dir(
     time_table_lines = []
     try:
         client = _client()
+        total_payload_bytes = 0
         for e in entries:
             path = _safe_frame_path(frames_dir, e["file"])
             if path is None:
                 continue
+            if os.path.getsize(path) > MAX_FRAME_IMAGE_BYTES:
+                return {"success": False, "error": "PNG frame exceeds the upload size limit",
+                        "source": "frames_dir"}
             with open(path, "rb") as fh:
-                img_bytes = fh.read()
+                img_bytes = fh.read(MAX_FRAME_IMAGE_BYTES + 1)
+            if (len(img_bytes) > MAX_FRAME_IMAGE_BYTES
+                    or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
+                return {"success": False, "error": "Frame payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
             t_ms = e.get("timeMs")
             t_label = f"{t_ms/1000.0:.2f}s" if isinstance(t_ms, (int, float)) else "?"
@@ -291,8 +305,16 @@ def analyze_frames_dir(
 
         # 音声があれば添付
         if audio_path and os.path.isfile(audio_path):
+            if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
+                return {"success": False, "error": "Audio exceeds the upload size limit",
+                        "source": "frames_dir"}
             with open(audio_path, "rb") as fh:
-                wav_bytes = fh.read()
+                wav_bytes = fh.read(MAX_AUDIO_BYTES + 1)
+            if (len(wav_bytes) > MAX_AUDIO_BYTES
+                    or total_payload_bytes + len(wav_bytes) > MAX_TOTAL_BYTES):
+                return {"success": False, "error": "Audio payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
             contents.append(genai_types.Part.from_text(
                 text="↑これは上記フレーム区間全体の音声です。画像の時刻と対応付けて音響イベントを解析してください。"))
