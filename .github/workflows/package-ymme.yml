@@ -119,6 +119,13 @@ jobs:
           $configDir = Join-Path $env:APPDATA 'Claude'
           [IO.Directory]::CreateDirectory($configDir) | Out-Null
           $configPath = Join-Path $configDir 'claude_desktop_config.json'
+          # Simulate the Microsoft Store app-container configuration as well.
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'ymm4mcp-store-smoke'
+          $storeConfigDir = Join-Path $env:LOCALAPPDATA 'Packages/Claude_test/LocalCache/Roaming/Claude'
+          [IO.Directory]::CreateDirectory($storeConfigDir) | Out-Null
+          $storeConfigPath = Join-Path $storeConfigDir 'claude_desktop_config.json'
+          '{"theme":"store","mcpServers":{"other":{"command":"store.exe"}}}' |
+            Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
           '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"}}}' |
             Set-Content -LiteralPath $configPath -Encoding UTF8
           & cmd.exe /c "mcp-server\install.cmd"
@@ -126,6 +133,12 @@ jobs:
           $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
             throw 'Existing Claude Desktop settings were not preserved'
+          }
+          $storeConfig = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($storeConfig.theme -ne 'store' -or
+              $storeConfig.mcpServers.other.command -ne 'store.exe' -or
+              -not $storeConfig.mcpServers.ymm4.command) {
+            throw 'Microsoft Store Claude Desktop settings were not configured safely'
           }
           if (-not $config.mcpServers.ymm4.command -or
               -not (Test-Path -LiteralPath $config.mcpServers.ymm4.command)) {
@@ -142,6 +155,11 @@ jobs:
           if ($again.theme -ne 'dark' -or $again.mcpServers.other.command -ne 'other.exe' -or
               @($again.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
             throw 'Installer rerun damaged Claude Desktop settings'
+          }
+          $againStore = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($againStore.theme -ne 'store' -or $againStore.mcpServers.other.command -ne 'store.exe' -or
+              @($againStore.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
+            throw 'Installer rerun damaged Microsoft Store Claude settings'
           }
       - uses: actions/upload-artifact@v4
         with:
