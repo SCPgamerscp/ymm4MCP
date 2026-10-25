@@ -28,6 +28,13 @@ Check(ExportInvocationPolicy.HasDialogOnlyMethod(
     "A matching parameterless method requires a dialog");
 Check(!ExportInvocationPolicy.HasDialogOnlyMethod([Method(nameof(ExportMethods.OutputExoFile))], "mp4"),
     "An EXO-only method is unavailable for MP4");
+// Regression: export jobs persist idempotency keys, so embedded control characters
+// must be rejected before the request is recorded or replayed.
+Check(ExportInvocationPolicy.IsValidIdempotencyKey(""), "Omitted key remains valid");
+Check(ExportInvocationPolicy.IsValidIdempotencyKey(new string('a', 128)), "128-character key must be accepted");
+Check(ExportInvocationPolicy.IsValidIdempotencyKey("編集 job-1"), "Normal Unicode and internal spaces remain valid");
+foreach (var key in new[] { " a", "a ", new string('a', 129), "a\nb", "a\rb", "a\tb", "a\0b", "a\u007fb", "a\u001fb" })
+    Check(!ExportInvocationPolicy.IsValidIdempotencyKey(key), "Invalid idempotency key accepted: " + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(key)));
 Console.WriteLine("Export invocation policy tests passed");
 
 class ExportMethods
