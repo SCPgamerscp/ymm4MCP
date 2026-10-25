@@ -1,12 +1,31 @@
 """Read-only, bounded FFmpeg decode QA for completed local video exports."""
 import json
 import math
+import re
 import subprocess
 from pathlib import Path
 
 from jobs import is_absolute_media_path
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+
+
+def _signal_ranges(log, start_name, end_name):
+    """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
+    pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
+                         + r"):\s*(\d+(?:\.\d+)?)")
+    start = None
+    ranges = []
+    for line in log.splitlines():
+        for name, timestamp in pattern.findall(line):
+            value = float(timestamp)
+            if name == start_name:
+                start = value
+            elif start is not None:
+                if value > start:
+                    ranges.append((start, value))
+                start = None
+    return ranges
 
 
 def failure(code, message):
@@ -67,6 +86,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
     if duration > 2 * sample_seconds:
         starts.append(max(0.0, duration - sample_seconds))
     samples = []
+    black_frames = []
+    long_silences = []
     for start in starts:
         length = min(float(sample_seconds), duration - start)
         if length <= 0:
@@ -75,10 +96,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
         for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
             if not present:
                 continue
-            command = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-xerror",
-                       "-ss", format(start, ".3f"), "-i", str(target),
-                       "-t", format(length, ".3f"), "-map",
-                       "0:v:0" if kind == "video" else "0:a:0", "-f", "null", "-"]
+            # Keep the decode check and add non-blocking signal hints. The
+            # filters emit bounded info logs for the sampled windows only.
+            signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98"
+                             if kind == "video" else "silencedetect=noise=-50dB:d=2")
+            command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
+                       "-v", "info", "-xerror", "-ss", format(start, ".3f"),
+                       "-i", str(target), "-t", format(length, ".3f"),
+                       "-map", "0:v:0" if kind == "video" else "0:a:0",
+                       "-vf" if kind == "video" else "-af", signal_filter,
+                       "-f", "null", "-"]
             try:
                 decoded = run(command, 30)
             except FileNotFoundError:
@@ -91,7 +118,29 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
                 issues.append({"code": "EXPORT_DECODE_FAILED", "severity": "error",
                                "stream_type": kind, "start_seconds": round(start, 3),
                                "details": (decoded.stderr or "")[-500:]})
-    return {"success": True, "passed": not issues, "issues": issues,
+                continue
+            # Black/silent stretches can be intentional (e.g. a fade). Report
+            # them as warnings, not as proof of an invalid export.
+            start_name, end_name = (("black_start", "black_end") if kind == "video"
+                                    else ("silence_start", "silence_end"))
+            for signal_start, signal_end in _signal_ranges(
+                    decoded.stderr or "", start_name, end_name):
+                event = {"sample_start_seconds": round(start, 3),
+                         "filter_start_seconds": round(signal_start, 3),
+                         "filter_end_seconds": round(signal_end, 3),
+                         "duration_seconds": round(signal_end - signal_start, 3)}
+                if kind == "video":
+                    black_frames.append(event)
+                    code = "EXPORT_SAMPLE_BLACK_FRAMES"
+                else:
+                    long_silences.append(event)
+                    code = "EXPORT_SAMPLE_LONG_SILENCE"
+                issues.append({"code": code, "severity": "warning", **event})
+    return {"success": True,
+            "passed": not any(issue["severity"] == "error" for issue in issues),
+            "issues": issues,
             "verification_scope": "sampled_audio_video_decode", "fully_decoded": False,
+            "signal_scope": "sampled_only", "black_frames": black_frames,
+            "long_silences": long_silences,
             "duration_seconds": duration, "video_streams": len(videos),
             "audio_streams": len(audios), "samples": samples, "path": str(target)}
