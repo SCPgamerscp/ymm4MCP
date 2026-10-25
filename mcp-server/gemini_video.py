@@ -139,6 +139,9 @@ def _extract_json(text: str) -> dict:
                     isinstance(end, bool) or not isinstance(end, (int, float))
                     or not math.isfinite(end) or end < start):
                 raise ValueError(f"events[{index}].end_sec must not precede time_sec")
+        # Gemini can return valid events out of order. Preserve relative order
+        # for ties while guaranteeing the chronological contract for callers.
+        parsed["events"].sort(key=lambda event: event["time_sec"])
         return parsed
     except Exception as e:
         return {"summary": "", "events": [], "_parse_error": f"JSON解析失敗: {e}", "_raw": text[:2000]}
@@ -172,6 +175,9 @@ def analyze_video_file(
     Gemini の File API に動画をアップロードし、映像+音声を時系列解析させて
     タイムスタンプ付きイベントJSONを得る。
     """
+    if (not isinstance(video_path, str) or not video_path.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in video_path)):
+        return {"success": False, "error": "video_path must be a nonempty path without control characters"}
     ok, msg = is_available()
     if not ok:
         return {"success": False, "error": msg}
@@ -279,6 +285,7 @@ def analyze_frames_dir(
     try:
         client = _client()
         total_payload_bytes = 0
+        analyzed_images = 0
         for e in entries:
             path = _safe_frame_path(frames_dir, e["file"])
             if path is None:
@@ -294,10 +301,16 @@ def analyze_frames_dir(
                         "source": "frames_dir"}
             total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+            analyzed_images += 1
             t_ms = e.get("timeMs")
-            t_label = f"{t_ms/1000.0:.2f}s" if isinstance(t_ms, (int, float)) else "?"
-            contents.append(genai_types.Part.from_text(text=f"[上の画像の時刻 = {t_label}, frame={e.get('frame')}]"))
-            time_table_lines.append(f"  画像{len(time_table_lines)}: time={t_label} frame={e.get('frame')}")
+            valid_time = (not isinstance(t_ms, bool) and isinstance(t_ms, (int, float))
+                          and 0 <= t_ms <= 1_000_000_000_000 and math.isfinite(t_ms))
+            t_label = f"{t_ms/1000.0:.2f}s" if valid_time else "?"
+            frame = e.get("frame")
+            frame_label = (frame if type(frame) is int and 0 <= frame <= 2_147_483_647
+                           else "?")
+            contents.append(genai_types.Part.from_text(text=f"[上の画像の時刻 = {t_label}, frame={frame_label}]"))
+            time_table_lines.append(f"  画像{len(time_table_lines)}: time={t_label} frame={frame_label}")
 
         if not time_table_lines:
             return {"success": False, "error": "解析可能なPNGフレームがありません",
@@ -335,7 +348,7 @@ def analyze_frames_dir(
             "success": True,
             "source": "frames_dir",
             "frames_dir": frames_dir,
-            "analyzed_images": len([c for c in contents if getattr(c, "inline_data", None)]) or len(entries),
+            "analyzed_images": analyzed_images,
             "model": model,
         }
     except Exception as e:
