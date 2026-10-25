@@ -28,6 +28,8 @@ def with_coverage(index: dict) -> dict:
             if cursor < scene["end_frame"]:
                 gaps.append({"start_frame": cursor, "end_frame": scene["end_frame"]})
             scene[f"{category}_uncovered_ranges"] = gaps
-            scene[f"{category}_covered_frames"] = (scene["end_frame"] - scene["start_frame"] -
-                                                    sum(g["end_frame"] - g["start_frame"] for g in gaps))
+            duration = scene["end_frame"] - scene["start_frame"]
+            covered = duration - sum(g["end_frame"] - g["start_frame"] for g in gaps)
+            scene[f"{category}_covered_frames"] = covered
+            scene[f"{category}_coverage_ratio"] = covered / duration
     return index
