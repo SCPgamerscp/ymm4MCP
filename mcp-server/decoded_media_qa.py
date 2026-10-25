@@ -47,14 +47,16 @@ def run(command, timeout):
                           stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
 
 
-def inspect(path, *, require_audio=True, sample_seconds=8):
-    """Decode up to 15s at the start and end; do not claim full-file verification."""
+def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
+    """Sample both ends and optionally decode all video/audio streams end-to-end."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
     if not isinstance(require_audio, bool):
         raise ValueError("require_audio must be boolean")
     if type(sample_seconds) is not int or not 1 <= sample_seconds <= 15:
         raise ValueError("sample_seconds must be an integer in 1..15")
+    if not isinstance(full_decode, bool):
+        raise ValueError("full_decode must be boolean")
     target = Path(path)
     if not target.is_file():
         return failure("EXPORT_FILE_MISSING", "動画ファイルがありません（Python MCP側のローカルパスを指定）")
@@ -84,6 +86,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
             raise ValueError("invalid metadata")
     except (ValueError, TypeError, KeyError, OverflowError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
+
+    # Full decode is intentionally bounded: it is opt-in, not a background job.
+    # Reject oversized work rather than silently claiming a full verification.
+    if full_decode and duration > 900:
+        return failure("EXPORT_FULL_DECODE_DURATION_LIMIT",
+                       "全尺デコードは15分以内の動画に限定しています")
 
     videos = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
     audios = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"]
@@ -158,10 +166,46 @@ def inspect(path, *, require_audio=True, sample_seconds=8):
                     long_silences.append(event)
                     code = "EXPORT_SAMPLE_LONG_SILENCE"
                 issues.append({"code": code, "severity": "warning", **event})
+    full_decode_ok = False
+    if full_decode and videos:
+        full_decode_ok = True
+        # -map 0:v / 0:a checks every video/audio stream, not only stream 0.
+        # No signal filters are used here: sample-only diagnostics above remain
+        # bounded, and full-file stderr is restricted to decoding errors.
+        timeout = min(900, max(60, int(math.ceil(duration * 4))))
+        for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
+            if not present:
+                continue
+            command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
+                       "-v", "error", "-xerror", "-i", str(target),
+                       "-map", "0:v" if kind == "video" else "0:a",
+                       "-abort_on", "empty_output", "-f", "null", "-"]
+            try:
+                decoded = run(command, timeout)
+            except FileNotFoundError:
+                return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
+            except subprocess.TimeoutExpired:
+                full_decode_ok = False
+                issues.append({"code": "EXPORT_FULL_DECODE_TIMEOUT",
+                               "severity": "error", "stream_type": kind})
+                continue
+            except OSError:
+                full_decode_ok = False
+                issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
+                               "severity": "error", "stream_type": kind})
+                continue
+            if decoded.returncode:
+                full_decode_ok = False
+                issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
+                               "severity": "error", "stream_type": kind,
+                               "details": (decoded.stderr or "")[-500:]})
+    passed = not any(issue["severity"] == "error" for issue in issues)
+    fully_decoded = bool(full_decode and full_decode_ok and passed)
     return {"success": True,
-            "passed": not any(issue["severity"] == "error" for issue in issues),
+            "passed": passed,
             "issues": issues,
-            "verification_scope": "sampled_audio_video_decode", "fully_decoded": False,
+            "verification_scope": ("full_audio_video_decode" if full_decode else "sampled_audio_video_decode"),
+            "fully_decoded": fully_decoded,
             "signal_scope": "sampled_only", "black_frames": black_frames,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
