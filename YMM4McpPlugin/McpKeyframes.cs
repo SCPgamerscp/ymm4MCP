@@ -94,13 +94,13 @@ namespace YMM4McpPlugin
                 // KeyFrames belongs to the timeline item and is shared across
                 // its animations.  Bind a detached Animation before adding a
                 // nonzero keyframe; do not replace an existing binding.
+                // Remove, clear and even a set at frame zero can mutate a
+                // shared collection. Reject cross-item bindings for every action.
+                if (KeyframeHostBinding.HasConflictingBinding(item, anim))
+                    return Failure("KEYFRAME_BINDING_CONFLICT",
+                        "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
                 if (action == "set" && relativeFrame > 0)
-                {
-                    if (KeyframeHostBinding.HasConflictingBinding(item, anim))
-                        return Failure("KEYFRAME_BINDING_CONFLICT",
-                            "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
                     KeyframeHostBinding.TryBind(item, anim);
-                }
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
