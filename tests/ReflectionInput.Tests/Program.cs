@@ -40,17 +40,17 @@ Check(ReflectionInput.TryConvert(Json("{\"x\":[1]}"), typeof(JsonElement), out v
 
 var methods = typeof(Target).GetMethods(BindingFlags.Public | BindingFlags.Instance);
 Check(ReflectionInput.TrySelectMethod(methods.Where(m => m.Name == "Apply"),
-      new[] { Json("7") }, out var selected, out var args, out var ambiguous)
+      new[] { Json("7") }, out var selected, out var boundArgs, out var ambiguous)
       && selected!.GetParameters()[0].ParameterType == typeof(int)
-      && args![0] is int i && i == 7 && !ambiguous,
+      && boundArgs![0] is int i && i == 7 && !ambiguous,
       "numeric overload selection failed");
 Check(ReflectionInput.TrySelectMethod(methods.Where(m => m.Name == "Apply"),
-      new[] { Json("\"hello\"") }, out selected, out args, out ambiguous)
+      new[] { Json("\"hello\"") }, out selected, out boundArgs, out ambiguous)
       && selected!.GetParameters()[0].ParameterType == typeof(string),
       "string overload selection failed");
 Check(!ReflectionInput.TrySelectMethod(methods.Where(m => m.Name == "Ambiguous"),
-      new[] { Json("7") }, out selected, out args, out ambiguous)
-      && ambiguous && selected == null && args == null,
+      new[] { Json("7") }, out selected, out boundArgs, out ambiguous)
+      && ambiguous && selected == null && boundArgs == null,
       "ambiguous overload silently selected");
 Check(!ReflectionInput.TrySelectMethod(methods.Where(m => m.Name == "OnlyInteger"),
       new[] { Json("\"invalid\"") }, out _, out _, out ambiguous)
