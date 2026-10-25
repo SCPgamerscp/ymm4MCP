@@ -160,6 +160,21 @@ try
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
         "duplicate fmt chunk accepted");
 
+    // Extensible fmt cbSize must describe bytes actually present in the fmt chunk.
+    var invalidExtensibleLength = PcmWave(new[] { 1, 2, 3 }, 24, extensible: true);
+    BinaryPrimitives.WriteUInt16LittleEndian(invalidExtensibleLength.AsSpan(36, 2), 23);
+    File.WriteAllBytes(path, invalidExtensibleLength);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "extensible fmt claiming missing extension bytes accepted");
+
+    // RIFF payload must not silently ignore 1..7 trailing bytes of a chunk header.
+    var partialHeader = Wave(clean);
+    Array.Resize(ref partialHeader, partialHeader.Length + 3);
+    BinaryPrimitives.WriteUInt32LittleEndian(partialHeader.AsSpan(4, 4), (uint)(partialHeader.Length - 8));
+    File.WriteAllBytes(path, partialHeader);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "truncated trailing RIFF chunk header accepted");
+
     foreach (int bits in new[] { 24, 32 })
         foreach (bool extensible in new[] { false, true })
         {
