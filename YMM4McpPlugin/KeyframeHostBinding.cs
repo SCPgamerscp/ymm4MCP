@@ -9,6 +9,21 @@ namespace YMM4McpPlugin
     // unbound Animation cannot create an item-level keyframe.
     internal static class KeyframeHostBinding
     {
+        internal static bool HasConflictingBinding(object item, object animation)
+        {
+            var flags = BindingFlags.Public | BindingFlags.Instance;
+            try
+            {
+                var existing = animation.GetType().GetProperty("KeyFrames", flags)?.GetValue(animation);
+                var shared = item.GetType().GetProperty("KeyFrames", flags)?.GetValue(item);
+                return existing != null && shared != null && !ReferenceEquals(existing, shared);
+            }
+            catch
+            {
+                return false; // Unknown host layout: preserve existing fallback behavior.
+            }
+        }
+
         internal static bool TryBind(object item, object animation)
         {
             var flags = BindingFlags.Public | BindingFlags.Instance;
@@ -17,7 +32,9 @@ namespace YMM4McpPlugin
             object? existing;
             try { existing = animationProperty.GetValue(animation); }
             catch { return false; }
-            if (existing != null) return true;
+            // An Animation already attached to a different item's collection
+            // must not be edited as though it belonged to this timeline item.
+            if (existing != null) return !HasConflictingBinding(item, animation);
 
             object? shared;
             try { shared = item.GetType().GetProperty("KeyFrames", flags)?.GetValue(item); }
