@@ -147,7 +147,13 @@ Check(!KeyframeValueMutation.TrySet(integerValue, 2.5) && integerValue.Value == 
 Check(KeyframeValueMutation.TrySet(integerValue, 3) && integerValue.Value == 3,
     "integral values should still update integer keyframes");
 var floatValue = new WritableFloatValue();
-Check(!KeyframeValueMutation.TrySet(floatValue, 1e100) && floatValue.Value == 1,
+// A float getter's shortest round-trip text ("0.1") differs from its exact
+// value widened to double (0.10000000149011612). Valid writes must succeed.
+Check(KeyframeValueMutation.TrySet(floatValue, 0.1) && floatValue.Value == 0.1f,
+    "a valid fractional float keyframe update must not be rolled back");
+Check(KeyframeValueMutation.TrySet(floatValue, -0.1) && floatValue.Value == -0.1f,
+    "negative fractional float keyframes must also be accepted");
+Check(!KeyframeValueMutation.TrySet(floatValue, 1e100) && floatValue.Value == -0.1f,
     "a finite double must not overflow a float keyframe to infinity");
 bool unsafeRollbackRejected = false;
 try { KeyframeValueMutation.TrySet(new UnrestorableValue(), 5); }
