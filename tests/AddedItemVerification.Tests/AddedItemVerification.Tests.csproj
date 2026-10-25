@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/AddedItemVerification.cs" Link="AddedItemVerification.cs" />
+    <Compile Include="../../YMM4McpPlugin/ItemSnapshotFormatting.cs" Link="ItemSnapshotFormatting.cs" />
   </ItemGroup>
 </Project>
