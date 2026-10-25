@@ -1,9 +1,8 @@
 ﻿param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection,
-      [ValidateRange(1024, 65535)][Nullable[int]]$Port)
+      [ValidateRange(1024, 65535)][Nullable[int]]$Port, [switch]$Install)
 $ErrorActionPreference = 'Stop'
-$serverDir = $PSScriptRoot
-$venvDir = Join-Path $serverDir '.venv'
-$venvPython = Join-Path $venvDir 'Scripts\python.exe'
+$sourceDir = $PSScriptRoot
+$serverDir = $sourceDir
 
 # The Windows py launcher can exist without a registered Python 3 runtime.
 # Probe it first, then fall back to python.exe instead of failing installation.
@@ -31,6 +30,24 @@ if ($null -eq $pythonCommand -and (Get-Command python -ErrorAction SilentlyConti
 if ($null -eq $pythonCommand) {
     throw '利用可能な Python 3 が見つかりません。Python 3 をインストールしてから再実行してください。'
 }
+# Install into a persistent per-user directory.  Running from a downloaded ZIP
+# extraction directory would break Claude Desktop when that folder is removed.
+# Direct setup.ps1 usage without -Install keeps its previous in-place behavior.
+if ($Install) {
+    if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA が見つかりません。' }
+    $targetDir = Join-Path $env:LOCALAPPDATA 'YMM4MCP\mcp-server'
+    if ([IO.Path]::GetFullPath($sourceDir).TrimEnd('\') -ine
+        [IO.Path]::GetFullPath($targetDir).TrimEnd('\')) {
+        [IO.Directory]::CreateDirectory($targetDir) | Out-Null
+        # robocopy preserves the directory layout and skips ephemeral Python
+        # environments/caches.  Exit codes 0..7 mean success on Windows.
+        & robocopy.exe $sourceDir $targetDir /E /XJ /XD '.venv' '__pycache__' '.git' /XF '*.pyc' /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+        if ($LASTEXITCODE -ge 8) { throw 'MCP サーバーの永続インストールに失敗しました。' }
+    }
+    $serverDir = $targetDir
+}
+$venvDir = Join-Path $serverDir '.venv'
+$venvPython = Join-Path $venvDir 'Scripts\python.exe'
 & $pythonCommand @pythonArgs -m venv $venvDir
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
     throw 'Python の仮想環境を作成できませんでした。'
