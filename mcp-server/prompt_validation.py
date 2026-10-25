@@ -17,7 +17,7 @@ def validate_prompt_arguments(arguments: object) -> dict:
     theme = args.get("theme")
     if (not isinstance(theme, str) or not theme.strip() or
             len(theme) > MAX_THEME_CHARS or
-            any((ord(c) < 32 and c not in "\t\n\r") or ord(c) == 127 for c in theme)):
+            any((ord(c) < 32 and c not in "\t\n\r") or 127 <= ord(c) <= 159 for c in theme)):
         raise ValueError("theme は必須で、16,384文字以内の有効なテキストで指定してください")
 
     if "video_path" in args:
@@ -28,7 +28,8 @@ def validate_prompt_arguments(arguments: object) -> dict:
             raise ValueError("video_path は制御文字を含まない空でない文字列で指定してください")
         drive, _ = ntpath.splitdrive(path)
         if not (ntpath.isabs(path) and
-                (len(drive) == 2 and drive[1] == ":" or drive.startswith("\\\\"))):
+                (len(drive) == 2 and drive[0].isascii() and drive[0].isalpha()
+                 and drive[1] == ":" or drive.startswith("\\\\"))):
             raise ValueError("video_path はWindowsの絶対パスで指定してください")
 
     if "duration_seconds" in args:
