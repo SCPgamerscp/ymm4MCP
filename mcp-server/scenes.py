@@ -14,6 +14,12 @@ def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[d
     return gaps
 
 
+def _valid_identifier(value: object) -> bool:
+    """Reject blank or control-character IDs without changing readable IDs."""
+    return (isinstance(value, str) and bool(value.strip())
+            and not any(ord(char) < 32 or ord(char) == 127 for char in value))
+
+
 def index(items: list[dict], ranges: list[dict]) -> dict:
     if not isinstance(items, list):
         raise ValueError("items must be an array")
@@ -24,7 +30,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if not isinstance(raw, dict) or set(raw) != {"id", "start_frame", "end_frame"}:
             raise ValueError("scene range requires id, start_frame, end_frame")
         scene_id = raw["id"]
-        if not isinstance(scene_id, str) or not scene_id or len(scene_id) > 64 or scene_id in ids:
+        if not _valid_identifier(scene_id) or len(scene_id) > 64 or scene_id in ids:
             raise ValueError("scene ids must be distinct nonempty strings of at most 64 characters")
         start = integer(raw["start_frame"], f"scene_ranges[{position}].start_frame")
         end = integer(raw["end_frame"], f"scene_ranges[{position}].end_frame", 1, MAX_FRAME)
@@ -44,7 +50,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         length = integer(raw.get("length"), "item.length", 1)
         end = integer(frame + length, "item.end_frame", 1, MAX_FRAME)
         identity = raw.get("item_id")
-        if not isinstance(identity, str) or not identity.strip():
+        if not _valid_identifier(identity):
             raise ValueError("item_id is required")
         if identity in seen_item_ids:
             raise ValueError("duplicate item_id in timeline snapshot")
