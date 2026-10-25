@@ -192,6 +192,24 @@ def analyze_video_file(
                 pass
 
 
+def _safe_frame_path(frames_dir: str, filename: Any) -> Optional[str]:
+    """Allow only existing PNG frames contained in the export directory.
+
+    Resolve symlinks before checking containment, so untrusted export metadata
+    cannot make the Gemini client read and upload files outside the export.
+    """
+    if not isinstance(filename, str) or not filename.lower().endswith(".png"):
+        return None
+    root = os.path.realpath(frames_dir)
+    path = os.path.realpath(os.path.join(root, filename))
+    try:
+        if os.path.commonpath((root, path)) != root:
+            return None
+    except ValueError:  # Different drives on Windows.
+        return None
+    return path if os.path.isfile(path) else None
+
+
 def analyze_frames_dir(
     frames_dir: str,
     frames_meta: Optional[list[dict]] = None,
@@ -212,6 +230,13 @@ def analyze_frames_dir(
         return {"success": False, "error": msg}
     if not os.path.isdir(frames_dir):
         return {"success": False, "error": f"フォルダが見つかりません: {frames_dir}"}
+
+    if (isinstance(max_images, bool) or not isinstance(max_images, int)
+            or not 1 <= max_images <= 1000):
+        return {"success": False, "error": "max_images must be an integer in 1..1000"}
+    if frames_meta is not None and (not isinstance(frames_meta, list)
+                                    or any(not isinstance(m, dict) for m in frames_meta)):
+        return {"success": False, "error": "frames_meta must be an array of objects"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
 
@@ -236,8 +261,8 @@ def analyze_frames_dir(
     try:
         client = _client()
         for e in entries:
-            path = os.path.join(frames_dir, e["file"])
-            if not os.path.isfile(path):
+            path = _safe_frame_path(frames_dir, e["file"])
+            if path is None:
                 continue
             with open(path, "rb") as fh:
                 img_bytes = fh.read()
@@ -246,6 +271,10 @@ def analyze_frames_dir(
             t_label = f"{t_ms/1000.0:.2f}s" if isinstance(t_ms, (int, float)) else "?"
             contents.append(genai_types.Part.from_text(text=f"[上の画像の時刻 = {t_label}, frame={e.get('frame')}]"))
             time_table_lines.append(f"  画像{len(time_table_lines)}: time={t_label} frame={e.get('frame')}")
+
+        if not time_table_lines:
+            return {"success": False, "error": "解析可能なPNGフレームがありません",
+                    "source": "frames_dir"}
 
         # 音声があれば添付
         if audio_path and os.path.isfile(audio_path):
