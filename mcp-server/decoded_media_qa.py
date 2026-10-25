@@ -179,7 +179,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "error", "-xerror", "-i", str(target),
                        "-map", "0:v" if kind == "video" else "0:a",
-                       "-abort_on", "empty_output", "-f", "null", "-"]
+                       # Every mapped stream must produce decoded output. A
+                       # populated first track must not hide an empty second.
+                       "-abort_on", "empty_output+empty_output_stream",
+                       "-f", "null", "-"]
             try:
                 decoded = run(command, timeout)
             except FileNotFoundError:
