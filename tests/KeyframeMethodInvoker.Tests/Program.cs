@@ -55,6 +55,25 @@ Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new ThrowingBindingAnim
 Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new NoOpBindingAnimation()),
     "a no-op SetKeyFrames must not be reported as success");
 
+var overloaded = new OverloadedBindingAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), overloaded),
+    "prefer the strongly typed SetKeyFrames overload over a broad object overload");
+Check(ReferenceEquals(overloaded.KeyFrames, shared) && overloaded.BroadCalls == 0,
+    "a broad overload must not shadow the strongly typed overload");
+
+var fallbackOverload = new FallbackBindingAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), fallbackOverload),
+    "try a compatible fallback after a throwing SetKeyFrames overload");
+Check(ReferenceEquals(fallbackOverload.KeyFrames, shared) && fallbackOverload.TypedCalls == 1,
+    "failed typed overload must allow fallback without replacing the collection");
+
+var noOpOverload = new NoOpOverloadBindingAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), noOpOverload),
+    "try another compatible overload after a silent no-op");
+Check(ReferenceEquals(noOpOverload.KeyFrames, shared) && noOpOverload.TypedCalls == 1,
+    "no-op typed overload must not be treated as success");
+
+
 Console.WriteLine("Keyframe method invocation and host binding tests passed");
 
 internal sealed class RejectingAnimation
@@ -128,4 +147,28 @@ internal sealed class NoOpBindingAnimation
 {
     public MockKeyFrames? KeyFrames { get; private set; }
     public void SetKeyFrames(MockKeyFrames frames) { }
+}
+
+internal sealed class OverloadedBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int BroadCalls { get; private set; }
+    public void SetKeyFrames(object frames) { BroadCalls++; throw new NotSupportedException(); }
+    public void SetKeyFrames(MockKeyFrames frames) => KeyFrames = frames;
+}
+
+internal sealed class FallbackBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int TypedCalls { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { TypedCalls++; throw new NotSupportedException(); }
+    public void SetKeyFrames(object frames) => KeyFrames = (MockKeyFrames)frames;
+}
+
+internal sealed class NoOpOverloadBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int TypedCalls { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { TypedCalls++; }
+    public void SetKeyFrames(object frames) => KeyFrames = (MockKeyFrames)frames;
 }
