@@ -53,7 +53,7 @@ class MediaVerifyTests(unittest.TestCase):
             mp4 = Path(directory) / "clip.mp4"
             mp4.write_bytes(b"\x00\x00\x00\x20ftypisom" + b"\x00" * 24)
             wav = Path(directory) / "audio.wav"
-            wav.write_bytes(b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 24)
+            wav.write_bytes(b"RIFF" + (28).to_bytes(4, "little") + b"WAVE" + b"\x00" * 24)
             empty = Path(directory) / "empty.mp4"
             empty.write_bytes(b"not-an-mp4-header!!!!" + b"\x00" * 20)
             self.assertTrue(jobs.verify_media_file(str(mp4), "mp4")["ok"])
