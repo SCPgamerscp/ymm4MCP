@@ -116,10 +116,12 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         layers.setdefault(layer, []).append((frame, end, index))
         if subtitle_layers is not None:
             kind = item.get("type")
-            kind = kind.casefold() if isinstance(kind, str) else ""
-            if kind.endswith("voiceitem") or kind == "voice":
+            # Compare the actual CLR type name, not an arbitrary suffix such as
+            # NotVoiceItem. Preserve support for namespace and nested type names.
+            kind = kind.replace("+", ".").rsplit(".", 1)[-1].casefold() if isinstance(kind, str) else ""
+            if kind in ("voiceitem", "voice"):
                 voices.append((frame, end, index))
-            elif layer in subtitle_layers and (kind.endswith("textitem") or kind == "text"):
+            elif layer in subtitle_layers and kind in ("textitem", "text"):
                 subtitles.append((frame, end, index))
         if duration is not None and end > duration:
             problems.append({"code": "EXCEEDS_DURATION", "severity": "error", "index": index,
