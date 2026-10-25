@@ -37,7 +37,7 @@ namespace YMM4McpPlugin
         internal static bool IsValidIdempotencyKey(string key) =>
             key.Length <= 128
             && (key.Length == 0 || key.Trim() == key)
-            && !key.Any(c => c <= '\\u001f' || c == '\\u007f');
+            && !key.Any(c => c <= '\u001f' || c == '\u007f');
 
         internal static bool HasDialogOnlyMethod(IEnumerable<MethodInfo> methods, string requestedFormat) =>
             methods.Any(method => MatchesFormat(method.Name, requestedFormat)
