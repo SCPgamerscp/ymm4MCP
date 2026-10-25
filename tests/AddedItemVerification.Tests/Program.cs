@@ -1,4 +1,5 @@
 using YMM4McpPlugin;
+using System.Globalization;
 
 static void Check(bool condition, string message)
 {
@@ -27,6 +28,22 @@ Check(AddedItemVerification.UniqueExpectedNewcomer(
 Check(AddedItemVerification.UniqueExpectedNewcomer(
       Array.Empty<object>(), "VideoItem") == null,
       "empty newcomer list silently accepted");
+Check(AddedItemVerification.LengthMatches(12, 12), "matching length rejected");
+Check(AddedItemVerification.LengthMatches(12L, 12), "matching long length rejected");
+Check(!AddedItemVerification.LengthMatches(13, 12), "wrong length accepted");
+Check(!AddedItemVerification.LengthMatches("12", 12), "string length accepted");
+
+var savedCulture = CultureInfo.CurrentCulture;
+try
+{
+    CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+    Check(ItemSnapshotFormatting.Format(1.25m) == "1.25", "decimal revision is locale dependent");
+    Check(ItemSnapshotFormatting.Format(2.5d) == "2.5", "floating revision is locale dependent");
+    Check(ItemSnapshotFormatting.Format(1234L) == "1234", "integer revision changed");
+    Check(ItemSnapshotFormatting.Format(null) == "", "null revision changed");
+    Check(ItemSnapshotFormatting.Format("日本語") == "日本語", "string revision changed");
+}
+finally { CultureInfo.CurrentCulture = savedCulture; }
 Console.WriteLine("Added item verification tests passed");
 
 public class VideoItem { }
