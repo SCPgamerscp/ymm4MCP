@@ -132,7 +132,7 @@ TOOLS = [
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
-            "action='get_info'(status/project/items/scenes/media/assets/missing_assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints), "
+            "action='get_info'(status/project/items/scenes/media/assets/missing_assets/characters/capabilities/effects_list/effect_metadata/selection/commands/effects/keyframes/jobs/job/edit_state/checkpoints/decoded_export_qa), "
             "'control'(play/stop/save/open/save_as/export/cancel_job/resume_job/checkpoint/rollback/undo/redo/split/align), "
             "'add_item'(video/audio/image/text/voice/tachie/face), "
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
