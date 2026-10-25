@@ -51,6 +51,11 @@ namespace YMM4McpPlugin
                         format = U16(fmt, 0); channels = U16(fmt, 2); rate = checked((int)U32(fmt, 4));
                         byteRate = U32(fmt, 8);
                         align = U16(fmt, 12); bits = U16(fmt, 14);
+                        // WAVE_FORMAT_EXTENSIBLE's cbSize must fit within the fmt chunk.
+                        // Otherwise malformed headers can claim extension bytes that do not exist.
+                        if (format == 0xfffe &&
+                            (size < 40 || U16(fmt, 16) < 22 || U16(fmt, 16) > size - 18))
+                            return Fail("AUDIO_FILE_INVALID", "WAVE_FORMAT_EXTENSIBLE fmt の長さが不正です");
                         // WAVE_FORMAT_EXTENSIBLE carries the actual PCM/float format in its subtype GUID.
                         if (format == 0xfffe && size >= 40 && U16(fmt, 16) >= 22 &&
                             U16(fmt, 18) is > 0 && U16(fmt, 18) <= bits)
@@ -68,6 +73,10 @@ namespace YMM4McpPlugin
                     }
                     file.Position = next + (size & 1);
                 }
+                // A partial chunk header at the end of the RIFF payload is corruption,
+                // not a valid end-of-chunks marker.
+                if (file.Position != end)
+                    return Fail("AUDIO_FILE_INVALID", "WAV のチャンクヘッダーが不完全です");
                 bool pcm = format == 1 && bits is 16 or 24 or 32;
                 bool ieeeFloat = format == 3 && bits == 32;
                 if ((!pcm && !ieeeFloat) || channels is < 1 or > 2 || rate is < 1 or > 384000 ||
