@@ -40,11 +40,22 @@ internal static class TimelineInputValidation
         AtLeast(GetInt(body, "layer", -1), 0, "layer");
     }
 
+    // Match the scene/QA identifier contract: keep readable Unicode, reject ASCII control characters.
+    private static bool IsValidItemId(JsonElement id)
+    {
+        if (id.ValueKind != JsonValueKind.String) return false;
+        string? value = id.GetString();
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (char character in value)
+            if (character < ' ' || character == '\u007f') return false;
+        return true;
+    }
+
     internal static void RequireItemTarget(Dictionary<string, JsonElement> body)
     {
         if (body.TryGetValue("item_id", out var id))
         {
-            if (id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString()))
+            if (!IsValidItemId(id))
                 throw new ArgumentException("item_id must be a non-empty string");
             return;
         }
@@ -56,7 +67,7 @@ internal static class TimelineInputValidation
         if (body.TryGetValue("clear", out var clear) && clear.ValueKind == JsonValueKind.True) return;
         if (body.TryGetValue("item_id", out var id))
         {
-            if (id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString()))
+            if (!IsValidItemId(id))
                 throw new ArgumentException("item_id must be a non-empty string");
             return;
         }
