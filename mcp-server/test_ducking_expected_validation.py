@@ -49,6 +49,16 @@ class DuckingValidationTests(unittest.TestCase):
                 self.assertFalse(ducking.verify_keyframes(
                     self.report, "r2", invalid, 100))
 
+    def test_overflowing_host_keyframe_value_fails_closed(self):
+        broken = {
+            **self.report,
+            "animations": [{"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 100.0},
+                {"at": 20, "value": 10 ** 400},
+            ]}],
+        }
+        self.assertFalse(ducking.verify_keyframes(broken, "r2", self.points, 100))
+
     def test_malformed_bgm_and_voice_objects_raise_value_error(self):
         for invalid in (None, "audio", []):
             with self.subTest(bgm=invalid), self.assertRaises(ValueError):
