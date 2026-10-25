@@ -245,7 +245,7 @@ namespace YMM4McpPlugin
             {
                 if (IsNumeric(old.GetType()))
                 {
-                    var converted = Convert.ChangeType(value, old.GetType(), CultureInfo.InvariantCulture);
+                    if (!TryConvertNumeric(value, old.GetType(), out var converted)) return false;
                     values[index] = converted;
                     if (Number(values[index], out var actual)
                         && actual == Convert.ToDouble(converted, CultureInfo.InvariantCulture))
@@ -256,7 +256,7 @@ namespace YMM4McpPlugin
                 var property = old.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
                 if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
                 var previous = property.GetValue(old);
-                var convertedValue = Convert.ChangeType(value, property.PropertyType, CultureInfo.InvariantCulture);
+                if (!TryConvertNumeric(value, property.PropertyType, out var convertedValue)) return false;
                 property.SetValue(old, convertedValue);
                 if (Number(old, out var current)
                     && current == Convert.ToDouble(convertedValue, CultureInfo.InvariantCulture))
@@ -275,15 +275,36 @@ namespace YMM4McpPlugin
                 var type = original.GetType();
                 if (IsNumeric(type))
                 {
-                    entry = Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
-                    return true;
+                    return TryConvertNumeric(value, type, out entry);
                 }
                 var property = type.GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
                 if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
                 var created = Activator.CreateInstance(type);
                 if (created == null) return false;
-                property.SetValue(created, Convert.ChangeType(value, property.PropertyType, CultureInfo.InvariantCulture));
+                if (!TryConvertNumeric(value, property.PropertyType, out var converted)) return false;
+                property.SetValue(created, converted);
                 entry = created;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Convert.ChangeType rounds fractional doubles when the target is an
+        // integer and can overflow float to Infinity without throwing.
+        // Neither outcome represents the value the caller requested.
+        private static bool TryConvertNumeric(double value, Type type, out object? converted)
+        {
+            converted = null;
+            if (!double.IsFinite(value) || !IsNumeric(type)) return false;
+            if (type != typeof(float) && type != typeof(double) && type != typeof(decimal)
+                && value != Math.Truncate(value))
+                return false;
+            try
+            {
+                var result = Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
+                if (result is float f && !float.IsFinite(f)) return false;
+                if (result is double d && !double.IsFinite(d)) return false;
+                converted = result;
                 return true;
             }
             catch { return false; }
