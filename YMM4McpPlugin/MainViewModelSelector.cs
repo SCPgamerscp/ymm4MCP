@@ -13,15 +13,25 @@ namespace YMM4McpPlugin
         {
             object? active = null, visible = null, other = null;
             bool multipleActive = false, multipleVisible = false, multipleOther = false;
-            foreach (var (context, isActive, isVisible) in windows)
+            if (windows == null) return null;
+            try
             {
-                if (context == null || !IsMainViewModel(context.GetType())) continue;
-                if (isActive)
-                    Consider(context, ref active, ref multipleActive);
-                else if (isVisible)
-                    Consider(context, ref visible, ref multipleVisible);
-                else
-                    Consider(context, ref other, ref multipleOther);
+                foreach (var (context, isActive, isVisible) in windows)
+                {
+                    if (context == null || !IsMainViewModel(context.GetType())) continue;
+                    if (isActive)
+                        Consider(context, ref active, ref multipleActive);
+                    else if (isVisible)
+                        Consider(context, ref visible, ref multipleVisible);
+                    else
+                        Consider(context, ref other, ref multipleOther);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // Window collections can change while a YMM4 editor is closing.
+                // A partial enumeration is not safe evidence of a unique editor.
+                return null;
             }
             if (active != null) return multipleActive ? null : active;
             if (visible != null) return multipleVisible ? null : visible;
