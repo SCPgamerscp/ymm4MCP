@@ -124,13 +124,20 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             elif layer in subtitle_layers and kind in ("textitem", "text"):
                 subtitles.append((frame, end, index))
         if duration is not None and end > duration:
-            problems.append({"code": "EXCEEDS_DURATION", "severity": "error", "index": index,
-                             "item_ids": _item_ids(items, [index]), "frame_range": [frame, end],
-                             "project_duration": duration,
-                             "suggested_fix": {"action": "edit_item", "sub_action": "property",
-                                               "item_id": item.get("item_id"),
-                                               "prop": "Frame" if frame >= duration else "Length",
-                                               "value": max(0, duration - 1) if frame >= duration else duration - frame}})
+            problem = {"code": "EXCEEDS_DURATION", "severity": "error", "index": index,
+                       "item_ids": _item_ids(items, [index]), "frame_range": [frame, end],
+                       "project_duration": duration}
+            if frame < duration:
+                # Trimming an item that starts within the project fixes its
+                # end frame without moving unrelated timeline content.
+                problem["suggested_fix"] = {"action": "edit_item", "sub_action": "property",
+                                            "item_id": item.get("item_id"),
+                                            "prop": "Length", "value": duration - frame}
+            else:
+                # Moving to duration-1 leaves any item longer than one frame
+                # out of bounds. Never propose a non-fixing automatic edit.
+                problem["message"] = "Item starts outside the project duration; review its placement"
+            problems.append(problem)
 
     for layer, spans in layers.items():
         active_end = None
@@ -261,14 +268,25 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         if not 0 <= score <= 100 or not isinstance(report.get("issues"), list):
             raise ValueError("validate reports require a 0..100 score and issues array")
         has_errors = False
+        errors = warnings = 0
         for issue in report["issues"]:
             if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"]:
                 raise ValueError("validate report issues require a code")
             if issue.get("severity") not in ("error", "warning"):
                 raise ValueError("validate report issues require error or warning severity")
-            has_errors |= issue["severity"] == "error"
+            if "item_ids" in issue and (not isinstance(issue["item_ids"], list) or
+                    any(not isinstance(identity, str) or not identity.strip()
+                        for identity in issue["item_ids"])):
+                raise ValueError("validate report item_ids must be nonempty strings")
+            if issue["severity"] == "error":
+                errors += 1
+                has_errors = True
+            else:
+                warnings += 1
         if report["passed"] == has_errors:
             raise ValueError("validate report passed status disagrees with error issues")
+        if score != max(0, 100 - errors * 20 - warnings * 5):
+            raise ValueError("validate report score disagrees with issue severities")
         return score
 
     scores = [check_report(report) for report in [*history, current]]
