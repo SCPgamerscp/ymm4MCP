@@ -60,8 +60,8 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertEqual(result["verification_scope"], "full_audio_video_decode")
         self.assertEqual(result["signal_scope"], "sampled_only")
         self.assertEqual(len(commands), 7)  # probe, four samples, two full streams
-        full_commands = [cmd for cmd, _ in commands if "-v" in cmd
-                         and cmd[cmd.index("-v") + 1] == "error"]
+        full_commands = [cmd for cmd, _ in commands if cmd[0] == "ffmpeg"
+                         and "-v" in cmd and cmd[cmd.index("-v") + 1] == "error"]
         self.assertEqual(len(full_commands), 2)
         self.assertEqual({cmd[cmd.index("-map") + 1] for cmd in full_commands},
                          {"0:v", "0:a"})
