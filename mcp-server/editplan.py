@@ -252,9 +252,25 @@ def snapshot_hash(items):
     if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
         raise ValueError("items must be an array of objects")
     fields = ("item_id", "revision", "frame", "layer", "length", "type", "text", "source_path")
-    rows = [{key: item[key] for key in fields if key in item} for item in items]
-    encoded_rows = sorted(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                          for row in rows)
+    seen_ids = set()
+    encoded_rows = []
+    for item in items:
+        item_id = item.get("item_id")
+        if (not isinstance(item_id, str) or not item_id.strip()
+                or any(ord(char) < 32 or ord(char) == 127 for char in item_id)):
+            raise ValueError("snapshot item_id must be a nonempty string without control characters")
+        if item_id in seen_ids:
+            raise ValueError("duplicate item_id in timeline snapshot")
+        seen_ids.add(item_id)
+        row = {key: item[key] for key in fields if key in item}
+        try:
+            # The default JSON encoder permits NaN/Infinity, which are not
+            # valid JSON values and must not become trusted snapshot hashes.
+            encoded_rows.append(json.dumps(
+                row, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("snapshot contains invalid or non-finite values") from exc
+    encoded_rows.sort()
     return hashlib.sha256(json.dumps(encoded_rows, ensure_ascii=False,
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
