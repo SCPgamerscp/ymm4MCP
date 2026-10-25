@@ -5,6 +5,8 @@ from editing import finite_number, integer
 
 def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3,
          attack_frames: int = 5, release_frames: int = 10) -> list[dict]:
+    if not isinstance(bgm, dict):
+        raise ValueError("bgm must be an object")
     ratio = finite_number(ratio, "duck_ratio")
     if not 0 < ratio < 1:
         raise ValueError("duck_ratio must be in (0, 1)")
@@ -19,7 +21,9 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
     if not isinstance(voices, list) or len(voices) > 500:
         raise ValueError("at most 500 voice items are supported")
     spans = []
-    for voice in voices:
+    for index, voice in enumerate(voices):
+        if not isinstance(voice, dict):
+            raise ValueError(f"voices[{index}] must be an object")
         frame = integer(voice.get("frame"), "voice.frame")
         duration = integer(voice.get("length"), "voice.length", 1)
         tail = integer(frame + duration, "voice.end")
@@ -57,8 +61,24 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         return False
     volume = [a for a in report["animations"] if isinstance(a, dict) and a.get("prop") == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
-    expected = {point["at"]: point["value"] for point in points}
-    expected.setdefault(0, base_volume)
+    # A non-finite expected value (especially NaN) must never verify as equal:
+    # abs(actual - NaN) >= tolerance is False for *every* actual value.
+    if not isinstance(points, list) or isinstance(base_volume, bool) or not isinstance(base_volume, (int, float)):
+        return False
+    try:
+        base_volume = finite_number(base_volume, "base_volume")
+        expected = {}
+        for point in points:
+            if not isinstance(point, dict):
+                return False
+            at = integer(point.get("at"), "keyframe.at")
+            raw_value = point.get("value")
+            if at in expected or isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                return False
+            expected[at] = finite_number(raw_value, "keyframe.value")
+        expected.setdefault(0, base_volume)
+    except (ValueError, OverflowError):
+        return False
     if not isinstance(found, list) or len(found) != len(expected):
         return False
     seen = set()
