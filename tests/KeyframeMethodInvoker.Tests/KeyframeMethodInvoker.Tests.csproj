@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/KeyframeMethodInvoker.cs" Link="KeyframeMethodInvoker.cs" />
+    <Compile Include="../../YMM4McpPlugin/KeyframeHostBinding.cs" Link="KeyframeHostBinding.cs" />
   </ItemGroup>
 </Project>
