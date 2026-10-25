@@ -37,6 +37,22 @@ namespace YMM4McpPlugin
                 issues.Add(new("EXPORT_VERIFY_FAILED", "error", inspection.Error));
             else
             {
+                // Unknown optional metadata is allowed, but a reported numeric value
+                // must never be non-finite or physically impossible.
+                if (inspection.DurationSeconds is double actualDuration &&
+                    (!double.IsFinite(actualDuration) || actualDuration <= 0))
+                    issues.Add(new("INVALID_DURATION_METADATA", "error", "動画の尺メタデータが不正です",
+                        Actual: inspection.DurationSeconds));
+                if (inspection.AverageFps is double actualFps &&
+                    (!double.IsFinite(actualFps) || actualFps <= 0))
+                    issues.Add(new("INVALID_FPS_METADATA", "error", "平均FPSメタデータが不正です",
+                        Actual: inspection.AverageFps));
+                if (inspection.Width is int actualWidth && actualWidth <= 0 ||
+                    inspection.Height is int actualHeight && actualHeight <= 0)
+                    issues.Add(new("INVALID_RESOLUTION_METADATA", "error", "動画の解像度メタデータが不正です"));
+                if (inspection.AudioSampleRate is int rate && (rate < 8000 || rate > 384000) ||
+                    inspection.AudioChannels is int channels && (channels < 1 || channels > 8))
+                    issues.Add(new("INVALID_AUDIO_METADATA", "error", "音声形式メタデータが不正です"));
                 if (expectedDuration.HasValue && (inspection.DurationSeconds is null ||
                     !double.IsFinite(inspection.DurationSeconds.Value) ||
                     Math.Abs(inspection.DurationSeconds.Value - expectedDuration.Value) > tolerance))
@@ -48,7 +64,7 @@ namespace YMM4McpPlugin
                 if (expectedHeight.HasValue && inspection.Height != expectedHeight)
                     issues.Add(new("HEIGHT_MISMATCH", "error", "出力高さが期待値と異なります",
                         expectedHeight, inspection.Height));
-                if (requireAudio && !inspection.HasAudio)
+                if ((requireAudio || expectedAudioSampleRate.HasValue || expectedAudioChannels.HasValue) && !inspection.HasAudio)
                     issues.Add(new("AUDIO_STREAM_MISSING", "error", "音声トラックがありません", true, false));
                 if (expectedFps.HasValue && (inspection.AverageFps is null ||
                     !double.IsFinite(inspection.AverageFps.Value) ||
