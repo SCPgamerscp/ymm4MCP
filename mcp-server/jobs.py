@@ -97,7 +97,7 @@ def _ebml_vint(data: bytes, offset: int) -> tuple[int, int] | None:
 
 def _ebml_doctype(header: bytes) -> str | None:
     """Find the declared container type inside the bounded EBML header."""
-    if header[:4] != b"\\x1a\\x45\\xdf\\xa3":
+    if header[:4] != b"\x1a\x45\xdf\xa3":
         return None
     root = _ebml_vint(header, 4)
     if root is None:
@@ -106,7 +106,7 @@ def _ebml_doctype(header: bytes) -> str | None:
     end = begin + root_size
     if end > len(header):
         return None
-    marker = header.find(b"\\x42\\x82", begin, end)
+    marker = header.find(b"\x42\x82", begin, end)
     if marker < 0:
         return None
     length = _ebml_vint(header, marker + 2)
