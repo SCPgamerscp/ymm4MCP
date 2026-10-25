@@ -13,8 +13,10 @@ async def apply(args, get, add_script):
         raise ValueError("expected_snapshot_hash must be a lowercase SHA-256 hex digest")
     plan_script(args)  # Reject malformed scripts before calling the host.
     snapshot = await get("/items")
-    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
-            "error" in snapshot or not isinstance(snapshot.get("items"), list):
+    if (not isinstance(snapshot, dict) or
+            ("success" in snapshot and snapshot["success"] is not True) or
+            "error" in snapshot or "error_code" in snapshot or
+            not isinstance(snapshot.get("items"), list)):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
     actual = editplan.snapshot_hash(snapshot["items"])
     if expected != actual:
