@@ -53,6 +53,12 @@ Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(foreignFrames), det
     "cross-item keyframe binding must be detected before editing");
 Check(!KeyframeHostBinding.TryBind(new MockItem(foreignFrames), detached),
     "cross-item binding must not be reported as successful");
+Check(KeyframeHostBinding.HasConflictingBinding(new ThrowingFrameItem(), detached),
+    "throwing item KeyFrames getter must fail closed");
+Check(!KeyframeHostBinding.TryBind(new ThrowingFrameItem(), detached),
+    "existing binding cannot be trusted when item ownership is unreadable");
+Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(shared), new ThrowingFrameAnimation()),
+    "throwing animation KeyFrames getter must fail closed");
 Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
     "cross-item binding check must not mutate the original animation");
 Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(null), detached),
@@ -201,4 +207,14 @@ internal sealed class NoOpOverloadBindingAnimation
     public int TypedCalls { get; private set; }
     public void SetKeyFrames(MockKeyFrames frames) { TypedCalls++; }
     public void SetKeyFrames(object frames) => KeyFrames = (MockKeyFrames)frames;
+}
+
+internal sealed class ThrowingFrameItem
+{
+    public MockKeyFrames KeyFrames => throw new InvalidOperationException("item frame lookup failed");
+}
+
+internal sealed class ThrowingFrameAnimation
+{
+    public MockKeyFrames KeyFrames => throw new InvalidOperationException("animation frame lookup failed");
 }
