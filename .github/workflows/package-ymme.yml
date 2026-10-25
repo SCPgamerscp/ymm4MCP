@@ -165,6 +165,29 @@ jobs:
               -not (Test-Path -LiteralPath $installedScript)) {
             throw 'Deleting the ZIP extraction must not remove the installed server'
           }
+          # Regression: if the second Claude installation fails after the first
+          # config was written, restore both original configs byte-for-byte.
+          '{"theme":"rollback-classic","mcpServers":{"other":{"command":"classic.exe"}}}' |
+            Set-Content -LiteralPath $configPath -Encoding UTF8
+          '{"theme":"rollback-store","mcpServers":{"other":{"command":"store.exe"}}}' |
+            Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
+          $originalClassic = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath))
+          $originalStore = [Convert]::ToBase64String([IO.File]::ReadAllBytes($storeConfigPath))
+          $env:YMM4MCP_TEST_FAIL_AFTER_FIRST_CONFIG_WRITE = '1'
+          try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installedDir 'setup.ps1') -ConfigureClaudeDesktop
+            if ($LASTEXITCODE -eq 0) { throw 'Expected injected setup failure' }
+          } finally {
+            Remove-Item Env:YMM4MCP_TEST_FAIL_AFTER_FIRST_CONFIG_WRITE -ErrorAction SilentlyContinue
+          }
+          if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath)) -cne $originalClassic -or
+              [Convert]::ToBase64String([IO.File]::ReadAllBytes($storeConfigPath)) -cne $originalStore) {
+            throw 'Failed Claude setup must roll back both config files byte-for-byte'
+          }
+          if (@(Get-ChildItem -LiteralPath $configDir -Filter 'claude_desktop_config.json.tmp.*').Count -ne 0 -or
+              @(Get-ChildItem -LiteralPath $storeConfigDir -Filter 'claude_desktop_config.json.tmp.*').Count -ne 0) {
+            throw 'Failed setup left staged config files behind'
+          }
           # Re-running from another extraction must preserve the same stable path.
           & cmd.exe /c "mcp-server\install.cmd"
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
