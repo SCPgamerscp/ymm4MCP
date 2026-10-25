@@ -13,16 +13,16 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from http_host_validation import parse_allowed_hosts
+
 
 def create_http_app(mcp_server, close_client):
     token = os.environ.get("YMM4_MCP_BEARER_TOKEN", "")
     if len(token) < 32 or any(not 33 <= ord(c) <= 126 for c in token):
         raise ValueError("YMM4_MCP_BEARER_TOKEN must be a distinct, random ASCII token of at least 32 characters")
-    hosts = [host.strip() for host in os.environ.get(
+    hosts = parse_allowed_hosts(os.environ.get(
         "YMM4_MCP_ALLOWED_HOSTS", "127.0.0.1,127.0.0.1:*,localhost,localhost:*"
-    ).split(",") if host.strip()]
-    if not hosts or any(host in {"*", "*:*"} or "/" in host for host in hosts):
-        raise ValueError("YMM4_MCP_ALLOWED_HOSTS must list explicit hosts")
+    ))
     manager = StreamableHTTPSessionManager(
         app=mcp_server, json_response=True, stateless=True,
         security_settings=TransportSecuritySettings(
