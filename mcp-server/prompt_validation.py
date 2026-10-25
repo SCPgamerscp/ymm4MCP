@@ -7,6 +7,20 @@ MAX_VIDEO_PATH_CHARS = 4_096
 MAX_DURATION_SECONDS = 86_400
 
 
+def _windows_media_file(path: str) -> bool:
+    """Accept local drive files or complete UNC share files, never devices."""
+    drive, tail = ntpath.splitdrive(path)
+    if not ntpath.isabs(path) or not tail or not ntpath.basename(path):
+        return False
+    if len(drive) == 2:
+        return drive[1] == ":" and drive[0].isascii() and drive[0].isalpha()
+    if drive.startswith(ntpath.sep * 2):
+        parts = drive.split(ntpath.sep)
+        return (len(parts) == 4 and parts[2] not in {"", ".", "?"}
+                and bool(parts[3]))
+    return False
+
+
 def validate_prompt_arguments(arguments: object) -> dict:
     args = {} if arguments is None else arguments
     if not isinstance(args, dict):
@@ -26,10 +40,7 @@ def validate_prompt_arguments(arguments: object) -> dict:
                 len(path) > MAX_VIDEO_PATH_CHARS or
                 any(ord(c) < 32 or ord(c) == 127 for c in path)):
             raise ValueError("video_path は制御文字を含まない空でない文字列で指定してください")
-        drive, _ = ntpath.splitdrive(path)
-        if not (ntpath.isabs(path) and
-                (len(drive) == 2 and drive[0].isascii() and drive[0].isalpha()
-                 and drive[1] == ":" or drive.startswith("\\\\"))):
+        if not _windows_media_file(path):
             raise ValueError("video_path はWindowsの絶対パスで指定してください")
 
     if "duration_seconds" in args:
