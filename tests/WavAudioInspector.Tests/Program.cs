@@ -138,6 +138,28 @@ try
     BinaryPrimitives.WriteUInt16LittleEndian(unsupported.AsSpan(20, 2), 3);
     File.WriteAllBytes(path, unsupported);
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FORMAT_UNSUPPORTED", "mismatched float format accepted");
+
+    // RIFF fmt metadata must be self-consistent; otherwise audio QA could accept corrupt input.
+    var invalidByteRate = Wave(clean);
+    BinaryPrimitives.WriteUInt32LittleEndian(invalidByteRate.AsSpan(28, 4), 1);
+    File.WriteAllBytes(path, invalidByteRate);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "inconsistent WAV byte rate accepted");
+    var invalidSampleRate = Wave(clean);
+    BinaryPrimitives.WriteUInt32LittleEndian(invalidSampleRate.AsSpan(24, 4), 16000);
+    File.WriteAllBytes(path, invalidSampleRate);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "sample rate changed without matching byte rate accepted");
+    var originalWave = Wave(clean);
+    var fmtChunk = originalWave.AsSpan(12, 24).ToArray();
+    var duplicateFmt = new byte[originalWave.Length + fmtChunk.Length];
+    originalWave.CopyTo(duplicateFmt, 0);
+    fmtChunk.CopyTo(duplicateFmt, originalWave.Length);
+    BinaryPrimitives.WriteUInt32LittleEndian(duplicateFmt.AsSpan(4, 4), (uint)(duplicateFmt.Length - 8));
+    File.WriteAllBytes(path, duplicateFmt);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "duplicate fmt chunk accepted");
+
     foreach (int bits in new[] { 24, 32 })
         foreach (bool extensible in new[] { false, true })
         {
