@@ -13,7 +13,7 @@ class PromptValidationTests(unittest.TestCase):
                 self.assertIs(validate_prompt_arguments(args), args)
 
     def test_rejects_relative_drive_relative_urls_and_root_relative_paths(self):
-        for path in ("clip.mp4", "../clip.mp4", "C:clip.mp4", "1:/clip.mp4", "/clip.mp4",
+        for path in ("clip.mp4", "../clip.mp4", "C:clip.mp4", "1:/clip.mp4", r"\\server", r"\\server\share", r"\\.\PhysicalDrive0", r"\\?\C:\Windows\System32", "/clip.mp4",
                      "https://example.com/video.mp4", "C:/clip\n.mp4"):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "video_path"):
                 validate_prompt_arguments({"theme": "実況", "video_path": path})
