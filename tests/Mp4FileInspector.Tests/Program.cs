@@ -79,6 +79,15 @@ try
     var unknownFps = Mp4FileInspector.Inspect(path);
     Check(unknownFps.Verified && unknownFps.AverageFps is null, "bad stts should leave FPS unknown");
 
+    Write(ftyp, mdat, ftyp, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate ftyp accepted");
+    Write(ftyp, mdat, moov, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate moov accepted");
+    Write(Box("ftyp", new byte[] { 0, (byte)'s', (byte)'o', (byte)'m' }, new byte[4]), mdat, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "non-printable major brand accepted");
+    Write(Box("ftyp", Encoding.ASCII.GetBytes("    "), new byte[4]), mdat, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "blank major brand accepted");
+
     Write(ftyp, mdat);
     Check(!Mp4FileInspector.Inspect(path).Verified, "missing moov accepted");
     Write(ftyp, moov);
