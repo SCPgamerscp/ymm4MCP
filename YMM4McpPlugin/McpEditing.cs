@@ -50,7 +50,7 @@ namespace YMM4McpPlugin
         {
             string Snapshot(string name)
             {
-                try { return GetPropObj(item, name)?.ToString() ?? ""; }
+                try { return ItemSnapshotFormatting.Format(GetPropObj(item, name)); }
                 catch { return ""; }
             }
             string state = string.Join("\u001f", new[]
@@ -58,7 +58,7 @@ namespace YMM4McpPlugin
                 item.GetType().FullName ?? item.GetType().Name,
                 Snapshot("Frame"), Snapshot("Layer"), Snapshot("Length"), Snapshot("Serif"),
                 Snapshot("Text"), Snapshot("FilePath"), Snapshot("Name"), Snapshot("IsEnabled"),
-                RuntimeItemRevisions.GetValue(item, _ => new RuntimeItemRevision()).Generation.ToString()
+                ItemSnapshotFormatting.Format(RuntimeItemRevisions.GetValue(item, _ => new RuntimeItemRevision()).Generation)
             });
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(state))).ToLowerInvariant();
         }
@@ -370,13 +370,24 @@ namespace YMM4McpPlugin
                 {
                     var lengthProperty = item.GetType().GetProperty("Length");
                     if (lengthProperty?.CanWrite != true)
+                    {
+                        verified = false;
                         warning = JoinWarning(warning, "追加されましたが長さを設定できません");
+                    }
                     else
+                    {
                         lengthProperty.SetValue(item, length.Value);
+                        if (!AddedItemVerification.LengthMatches(lengthProperty.GetValue(item), length.Value))
+                        {
+                            verified = false;
+                            warning = JoinWarning(warning, "追加後の長さが要求と一致しません");
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    warning = JoinWarning(warning, "追加されましたが長さの設定に失敗: " + (ex.InnerException?.Message ?? ex.Message));
+                    verified = false;
+                    warning = JoinWarning(warning, "追加されましたが長さの設定・検証に失敗: " + (ex.InnerException?.Message ?? ex.Message));
                 }
             }
 
