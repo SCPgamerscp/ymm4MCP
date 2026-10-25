@@ -32,13 +32,23 @@ namespace YMM4McpPlugin
                     if (boxes == 1 && box.Type != "ftyp") throw new InvalidDataException("ftyp is not the first box");
                     if (box.Type == "ftyp")
                     {
+                        if (brand != null)
+                            throw new InvalidDataException("Duplicate ftyp box");
                         if (box.PayloadLength < 8 || (box.PayloadLength - 8) % 4 != 0)
                             throw new InvalidDataException("ftyp must contain major_brand, minor_version and complete compatible brands");
-                        brand = Encoding.ASCII.GetString(Read(file, 4));
+                        var brandBytes = Read(file, 4);
+                        foreach (byte value in brandBytes)
+                            if (value < 0x20 || value > 0x7e)
+                                throw new InvalidDataException("ftyp major_brand contains non-printable bytes");
+                        brand = Encoding.ASCII.GetString(brandBytes);
+                        if (string.IsNullOrWhiteSpace(brand))
+                            throw new InvalidDataException("ftyp major_brand is blank");
                     }
                     else if (box.Type == "mdat") mdat |= box.PayloadLength > 0;
                     else if (box.Type == "moov")
                     {
+                        if (moov)
+                            throw new InvalidDataException("Duplicate moov box");
                         moov = true;
                         ReadMovie(file, box.End, ref duration, ref video, ref audio, ref width, ref height,
                             ref fps, ref audioRate, ref audioChannels);
