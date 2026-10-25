@@ -95,7 +95,12 @@ namespace YMM4McpPlugin
                 // its animations.  Bind a detached Animation before adding a
                 // nonzero keyframe; do not replace an existing binding.
                 if (action == "set" && relativeFrame > 0)
+                {
+                    if (KeyframeHostBinding.HasConflictingBinding(item, anim))
+                        return Failure("KEYFRAME_BINDING_CONFLICT",
+                            "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
                     KeyframeHostBinding.TryBind(item, anim);
+                }
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
@@ -268,6 +273,9 @@ namespace YMM4McpPlugin
 
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
+            // Capture before any reflected insertion. A host method can mutate
+            // Frames even when it reports false or the value update fails.
+            var before = ReadFrameList(anim);
             // Existing points (including the implicit start value) can be
             // edited without asking the shared collection to insert again.
             if (TrySetValueAt(anim, frame, value)) return true;
@@ -276,16 +284,13 @@ namespace YMM4McpPlugin
             var keyFrames = GetPropObj(anim, "KeyFrames");
             if (keyFrames != null)
             {
-                var before = ReadFrameList(anim);
-                if (TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame))
-                {
-                    if (TrySetValueAt(anim, frame, value)) return true;
-                    // A shared-frame insertion without a corresponding value
-                    // is a partial edit.  Restore the old frame list if the
-                    // host did not materialize a writable AnimationValue.
-                    if (!before.Contains(frame) && ReadFrameList(anim).Contains(frame))
-                        TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
-                }
+                TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
+                if (TrySetValueAt(anim, frame, value)) return true;
+                // A shared-frame insertion without a corresponding value is
+                // partial. Roll back even when Add reported false: some host
+                // versions mutate first and report failure afterwards.
+                if (!before.Contains(frame) && ReadFrameList(anim).Contains(frame))
+                    TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
             }
             return KeyframeCollectionMutation.TryUpsert(anim, frame, value);
         }
