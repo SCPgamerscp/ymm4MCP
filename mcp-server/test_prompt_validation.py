@@ -13,7 +13,7 @@ class PromptValidationTests(unittest.TestCase):
                 self.assertIs(validate_prompt_arguments(args), args)
 
     def test_rejects_relative_drive_relative_urls_and_root_relative_paths(self):
-        for path in ("clip.mp4", "../clip.mp4", "C:clip.mp4", "/clip.mp4",
+        for path in ("clip.mp4", "../clip.mp4", "C:clip.mp4", "1:/clip.mp4", "/clip.mp4",
                      "https://example.com/video.mp4", "C:/clip\n.mp4"):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "video_path"):
                 validate_prompt_arguments({"theme": "実況", "video_path": path})
@@ -23,7 +23,7 @@ class PromptValidationTests(unittest.TestCase):
             validate_prompt_arguments({"theme": "実況", "video_path": "C:/" + "a" * 4096})
 
     def test_rejects_oversized_or_invisible_theme(self):
-        for theme in ("a" * 16385, "実況\x00", "実況\x7f", " \t\n"):
+        for theme in ("a" * 16385, "実況\x00", "実況\x7f", "\x80", "実況\x9f", " \t\n"):
             with self.subTest(theme=theme[:30]), self.assertRaisesRegex(ValueError, "theme"):
                 validate_prompt_arguments({"theme": theme})
 
