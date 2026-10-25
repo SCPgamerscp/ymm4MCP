@@ -44,12 +44,16 @@ namespace YMM4McpPlugin
             {
                 property.SetValue(entry, converted);
                 var observed = property.GetValue(entry);
-                if (observed != null
-                    && double.TryParse(Convert.ToString(observed, CultureInfo.InvariantCulture),
-                        NumberStyles.Float, CultureInfo.InvariantCulture, out var actual)
-                    && double.IsFinite(actual)
-                    && actual == Convert.ToDouble(converted, CultureInfo.InvariantCulture))
-                    return true;
+                if (observed != null)
+                {
+                    // Converting a float to text loses its exact widened value:
+                    // float 0.1 becomes text "0.1", but widening it to double
+                    // yields 0.10000000149011612. Compare numeric values directly.
+                    var actual = Convert.ToDouble(observed, CultureInfo.InvariantCulture);
+                    if (double.IsFinite(actual)
+                        && actual == Convert.ToDouble(converted, CultureInfo.InvariantCulture))
+                        return true;
+                }
             }
             catch
             {
