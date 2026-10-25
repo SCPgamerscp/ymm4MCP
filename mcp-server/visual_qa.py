@@ -21,10 +21,36 @@ def thumbnail(image_b64: str) -> bytes:
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("preview must contain exactly one PNG frame")
             image.load()
+            # Alpha is not represented in RGB thumbnails. Discarding it can
+            # turn an invisible black/white pixel into a false QA observation.
+            # Reject partially transparent captures instead of guessing which
+            # YMM4 canvas color should be composited behind them.
+            if "A" in image.getbands() or "transparency" in image.info:
+                if image.convert("RGBA").getchannel("A").getextrema()[0] < 255:
+                    raise ValueError("preview contains transparent pixels")
             return image.convert("RGB").resize((64, 36)).tobytes()
     except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise ValueError("invalid preview PNG") from exc
 
+
+
+def _visually_unchanged(before: bytes, after: bytes) -> bool:
+    """Detect small localized motion as well as broad low-contrast changes.
+
+    Mean RGB difference alone misses a moving object that occupies only a few
+    thumbnail pixels. Require at least four pixels with a substantial channel
+    change to avoid treating isolated capture noise as meaningful motion.
+    """
+    if sum(abs(a - b) for a, b in zip(before, after)) >= len(before):
+        return False
+    strong_pixels = 0
+    for i in range(0, len(before), 3):
+        if max(abs(before[i + channel] - after[i + channel])
+               for channel in range(3)) >= 32:
+            strong_pixels += 1
+            if strong_pixels >= 4:
+                return False
+    return True
 
 def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
             min_static_frames: int = 60, black_as_error: bool = False,
@@ -90,7 +116,7 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
                            "message": "サンプリングしたプレビューがほぼ白です（意図的な白画面の可能性あり）"})
             white_start = None
         if previous is not None:
-            unchanged = sum(abs(a - b) for a, b in zip(previous, pixels)) / len(pixels) < 1
+            unchanged = _visually_unchanged(previous, pixels)
             if unchanged and static_start is None:
                 static_start = previous_frame
             if not unchanged and static_start is not None:
