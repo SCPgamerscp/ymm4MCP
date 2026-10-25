@@ -79,11 +79,34 @@ Equal(2, edits);
 Equal(5, first.Frame);
 Equal(95, last.Frame);
 
+// A zero-delta shift must not write item properties or create spurious undo entries.
+edits = 0;
+TimelineInputValidation.ApplyShift(shift, 0, (item, _, frame, _) => Set(item, frame));
+Equal(0, edits);
+
+// Validate the original source as well as the shifted destination before any write.
+Invalid(() => TimelineInputValidation.ApplyShift(
+    new List<(Item, int, int, int)> { (first, -1, 5, 0) },
+    2, (item, _, frame, _) => Set(item, frame)));
+Invalid(() => TimelineInputValidation.ApplyShift(
+    new List<(Item, int, int, int)> { (first, 5, 5, -1) },
+    2, (item, _, frame, _) => Set(item, frame)));
+Invalid(() => TimelineInputValidation.ApplyShift(
+    new List<(Item, int, int, int)> { (first, 5, 0, 0) },
+    2, (item, _, frame, _) => Set(item, frame)));
+Equal(0, edits);
+Equal(5, first.Frame);
+
 var overlap = new List<(Item item, int frame, int length, int layer)>
 {
     (first, 0, 10, 0), (last, 5, 5, 0)
 };
 edits = 0;
+// A malformed layer must fail before overlap resolution moves any other item.
+Invalid(() => TimelineInputValidation.ApplyResolve(
+    new List<(Item, int, int, int)> { (first, 0, 10, 0), (last, 5, 5, -1) },
+    0, (item, _, frame, _, _) => Set(item, frame)));
+Equal(0, edits);
 var overflow = new Item(int.MaxValue - 3);
 var invalidOverlap = new List<(Item item, int frame, int length, int layer)>(overlap)
 {
