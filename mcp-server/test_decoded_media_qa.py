@@ -45,6 +45,32 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertTrue(all(isinstance(cmd, list) for cmd, _ in commands))
         self.assertTrue(all(timeout <= 30 for _, timeout in commands))
 
+    def test_sampled_black_frames_and_long_silence_are_nonblocking_warnings(self):
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return process(stdout=self.metadata)
+            if "-vf" in command:
+                return process(stderr="[blackdetect @ 0x1] black_start:0 black_end:2 black_duration:2")
+            return process(stderr=("[silencedetect @ 0x1] silence_start: 1\n"
+                                   "[silencedetect @ 0x1] silence_end: 4.5 | silence_duration: 3.5"))
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["signal_scope"], "sampled_only")
+        self.assertEqual(len(report["black_frames"]), 2)
+        self.assertEqual(len(report["long_silences"]), 2)
+        self.assertEqual(report["long_silences"][0]["duration_seconds"], 3.5)
+        self.assertEqual(report["black_frames"][1]["sample_start_seconds"], 22.5)
+        self.assertEqual({item["severity"] for item in report["issues"]}, {"warning"})
+        self.assertEqual({item["code"] for item in report["issues"]},
+                         {"EXPORT_SAMPLE_BLACK_FRAMES", "EXPORT_SAMPLE_LONG_SILENCE"})
+
+    def test_incomplete_signal_events_do_not_create_false_reports(self):
+        self.assertEqual(qa._signal_ranges("silence_start: 2", "silence_start", "silence_end"), [])
+        self.assertEqual(qa._signal_ranges("silence_end: 4", "silence_start", "silence_end"), [])
+        self.assertEqual(qa._signal_ranges("black_start: 5 black_end: 4",
+                                           "black_start", "black_end"), [])
+
     def test_decode_failure_does_not_claim_success(self):
         def fake(command, timeout):
             if command[0] == "ffprobe":
