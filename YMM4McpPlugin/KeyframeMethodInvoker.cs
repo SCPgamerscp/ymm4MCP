@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 
 namespace YMM4McpPlugin
 {
@@ -12,13 +13,17 @@ namespace YMM4McpPlugin
     {
         public static bool TryInvokeNamed(object target, IEnumerable<string> names, params object[] args)
         {
+            if (target == null || names == null || args == null) return false;
             var methods = target.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             foreach (var name in names)
             {
                 foreach (var method in methods.Where(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
                 {
+                    // An asynchronous operation has not completed when reflection returns
+                    // its Task. Reporting success here would silently lose a failed edit.
+                    if (method.ContainsGenericParameters || IsAsyncReturn(method.ReturnType)) continue;
                     var parameters = method.GetParameters();
-                    if (parameters.Length < args.Length) continue;
+                    if (parameters.Length < args.Length || parameters.Any(p => p.ParameterType.IsByRef)) continue;
                     try
                     {
                         var call = new object?[parameters.Length];
@@ -26,7 +31,13 @@ namespace YMM4McpPlugin
                         for (int i = 0; i < parameters.Length; i++)
                         {
                             if (i < args.Length)
-                                call[i] = Convert.ChangeType(args[i], parameters[i].ParameterType, CultureInfo.InvariantCulture);
+                            {
+                                if (!TryConvertArgument(args[i], parameters[i].ParameterType, out call[i]))
+                                {
+                                    compatible = false;
+                                    break;
+                                }
+                            }
                             else if (parameters[i].HasDefaultValue)
                                 call[i] = parameters[i].DefaultValue;
                             else
@@ -49,6 +60,65 @@ namespace YMM4McpPlugin
                 }
             }
             return false;
+        }
+
+        private static bool IsAsyncReturn(Type type) =>
+            typeof(Task).IsAssignableFrom(type)
+            || type == typeof(ValueTask)
+            || (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>));
+
+        private static bool IsIntegerType(Type type) => Type.GetTypeCode(type) is
+            TypeCode.Byte or TypeCode.SByte or TypeCode.Int16 or TypeCode.UInt16
+            or TypeCode.Int32 or TypeCode.UInt32 or TypeCode.Int64 or TypeCode.UInt64;
+
+        private static bool TryConvertArgument(object? argument, Type destination, out object? converted)
+        {
+            converted = null;
+            var target = Nullable.GetUnderlyingType(destination) ?? destination;
+            if (argument == null)
+                return !destination.IsValueType || Nullable.GetUnderlyingType(destination) != null;
+            // Convert.ChangeType cannot convert an object to System.Object, a
+            // derived class to its base class, or a value to Nullable<T>.
+            if (target.IsInstanceOfType(argument))
+            {
+                converted = argument;
+                return true;
+            }
+            if (target.IsEnum)
+            {
+                if (argument is string name && Enum.TryParse(target, name, false, out var parsed)
+                    && parsed != null && Enum.IsDefined(target, parsed))
+                {
+                    converted = parsed;
+                    return true;
+                }
+                return false;
+            }
+            if (argument is not IConvertible || !typeof(IConvertible).IsAssignableFrom(target))
+                return false;
+            try
+            {
+                // Convert.ChangeType rounds fractional doubles to integers. Never
+                // silently move a keyframe to a different frame number.
+                if (IsIntegerType(target))
+                {
+                    var numeric = Convert.ToDecimal(argument, CultureInfo.InvariantCulture);
+                    if (numeric != decimal.Truncate(numeric)) return false;
+                }
+                converted = Convert.ChangeType(argument, target, CultureInfo.InvariantCulture);
+                if (converted is double d && !double.IsFinite(d)
+                    || converted is float f && !float.IsFinite(f))
+                {
+                    converted = null;
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception) when (true)
+            {
+                converted = null;
+                return false;
+            }
         }
     }
 }
