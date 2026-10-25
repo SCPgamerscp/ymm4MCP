@@ -59,6 +59,17 @@ CheckUnchanged(valueNoOp.Frames, valueNoOp.Values, "value insert ignored");
 var flaky = new FlakyImmutableAnimation();
 Check(!KeyframeCollectionMutation.TryUpsert(flaky, 20, 5.0),
     "throwing immutable property getter escaped the fallback");
+
+// Integer-backed keyframes must not silently round 2.5 to 2 on replace
+// or insert. Both failed operations must leave the original data intact.
+var integerValues = new TestAnimation(new FaultyList { 10 }, new FaultyList { 1, 2 });
+Check(!KeyframeCollectionMutation.TryUpsert(integerValues, 10, 2.5),
+    "fractional integer-backed replacement was rounded");
+CheckUnchanged(integerValues.Frames, integerValues.Values, "fractional replacement");
+Check(!KeyframeCollectionMutation.TryUpsert(integerValues, 20, 2.5),
+    "fractional integer-backed insertion was rounded");
+CheckUnchanged(integerValues.Frames, integerValues.Values, "fractional insertion");
+
 Console.WriteLine("Keyframe collection rollback tests passed");
 
 internal sealed class TestAnimation
