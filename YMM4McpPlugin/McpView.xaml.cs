@@ -23,9 +23,14 @@ namespace YMM4McpPlugin
         private void OpenRepository(object sender, RequestNavigateEventArgs e)
         {
             e.Handled = true;
+            if (!RepositoryLinkPolicy.TryGetSafeUrl(e.Uri, out var safeUrl))
+            {
+                MessageBox.Show("許可されていないリンクです。", "YMM4 MCP");
+                return;
+            }
             try
             {
-                Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo(safeUrl) { UseShellExecute = true });
             }
             catch (Exception ex)
             {
