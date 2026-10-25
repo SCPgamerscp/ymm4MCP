@@ -280,11 +280,16 @@ namespace YMM4McpPlugin
             // edited without asking the shared collection to insert again.
             if (TrySetValueAt(anim, frame, value)) return true;
             if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value)) return true;
-            if (TryInvokeNamed(anim, KeyframeMethodNames, frame) && TrySetValueAt(anim, frame, value)) return true;
+            // A host method may insert the frame and then return false/throw.
+            // Recheck before invoking another insertion method to avoid duplicates.
+            if (!ReadFrameList(anim).Contains(frame))
+                TryInvokeNamed(anim, KeyframeMethodNames, frame);
+            if (TrySetValueAt(anim, frame, value)) return true;
             var keyFrames = GetPropObj(anim, "KeyFrames");
             if (keyFrames != null)
             {
-                TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
+                if (!ReadFrameList(anim).Contains(frame))
+                    TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
                 if (TrySetValueAt(anim, frame, value)) return true;
                 // A shared-frame insertion without a corresponding value is
                 // partial. Roll back even when Add reported false: some host
