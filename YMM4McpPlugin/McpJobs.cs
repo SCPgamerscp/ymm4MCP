@@ -19,6 +19,7 @@ namespace YMM4McpPlugin
             WriteIndented = true
         };
         private readonly object _jobsLock = new();
+        private readonly object _persistJobsLock = new();
         private readonly Dictionary<string, McpJob> _jobs = new();
         private readonly Dictionary<string, string> _jobKeys = new();
 
@@ -124,18 +125,29 @@ namespace YMM4McpPlugin
                 {
                     foreach (var snap in snapshots.TakeLast(30))
                     {
-                        if (string.IsNullOrEmpty(snap.Id) || _jobs.ContainsKey(snap.Id)) continue;
-                        var job = snap.ToJob();
-                        if (job.Status is "queued" or "running")
+                        // A corrupt entry must not prevent restoring valid jobs.
+                        if (snap == null || !JobSnapshotSafety.IsRestorable(
+                            snap.Id, snap.Kind, snap.Status, snap.IdempotencyKey)
+                            || _jobs.ContainsKey(snap.Id))
+                            continue;
+                        try
                         {
-                            job.Status = "interrupted";
-                            job.Phase = "interrupted";
-                            job.Message = "YMM4再起動により中断されました。resumeで再投入できます";
-                            job.ErrorCode = "JOB_INTERRUPTED";
+                            var job = snap.ToJob();
+                            if (job.Status is "queued" or "running")
+                            {
+                                job.Status = "interrupted";
+                                job.Phase = "interrupted";
+                                job.Message = "YMM4再起動により中断されました。resumeで再投入できます";
+                                job.ErrorCode = "JOB_INTERRUPTED";
+                            }
+                            _jobs[job.Id] = job;
+                            if (!string.IsNullOrEmpty(job.IdempotencyKey))
+                                _jobKeys[job.IdempotencyKey] = job.Id;
                         }
-                        _jobs[job.Id] = job;
-                        if (!string.IsNullOrEmpty(job.IdempotencyKey))
-                            _jobKeys[job.IdempotencyKey] = job.Id;
+                        catch (Exception)
+                        {
+                            // Ignore this malformed snapshot; retain other jobs.
+                        }
                     }
                 }
             }
@@ -159,19 +171,22 @@ namespace YMM4McpPlugin
 
         private void PersistJobs()
         {
-            try
+            // Serialize snapshot creation and disk replacement together. Otherwise
+            // concurrent progress updates can publish older state after newer state.
+            lock (_persistJobsLock)
             {
-                McpSettings.PrepareDirectory();
-                JobSnapshot[] snapshots;
-                lock (_jobsLock)
+                try
                 {
-                    snapshots = _jobs.Values.OrderByDescending(j => j.UpdatedAt).Take(30).Select(JobSnapshot.From).ToArray();
+                    McpSettings.PrepareDirectory();
+                    JobSnapshot[] snapshots;
+                    lock (_jobsLock)
+                    {
+                        snapshots = _jobs.Values.OrderByDescending(j => j.UpdatedAt).Take(30).Select(JobSnapshot.From).ToArray();
+                    }
+                    JobSnapshotSafety.WriteAtomic(JobsFilePath, JsonSerializer.Serialize(snapshots, JobJson));
                 }
-                string temp = JobsFilePath + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(snapshots, JobJson));
-                File.Move(temp, JobsFilePath, true);
+                catch (Exception ex) { Log("ジョブ保存に失敗: " + ex.Message); }
             }
-            catch (Exception ex) { Log("ジョブ保存に失敗: " + ex.Message); }
         }
 
         private McpJob? FindIdempotentJob(string? key)
