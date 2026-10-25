@@ -337,34 +337,6 @@ namespace YMM4McpPlugin
         }
 
         private static bool TryInvokeNamed(object target, IEnumerable<string> names, params object[] args)
-        {
-            var methods = target.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            foreach (var name in names)
-            {
-                foreach (var method in methods.Where(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                {
-                    var parameters = method.GetParameters();
-                    if (parameters.Length < args.Length) continue;
-                    try
-                    {
-                        var call = new object?[parameters.Length];
-                        for (int i = 0; i < parameters.Length; i++)
-                        {
-                            if (i < args.Length)
-                                call[i] = Convert.ChangeType(args[i], parameters[i].ParameterType, CultureInfo.InvariantCulture);
-                            else if (parameters[i].HasDefaultValue)
-                                call[i] = parameters[i].DefaultValue;
-                            else
-                                call = null;
-                        }
-                        if (call == null) continue;
-                        method.Invoke(target, call);
-                        return true;
-                    }
-                    catch { }
-                }
-            }
-            return false;
-        }
+            => KeyframeMethodInvoker.TryInvokeNamed(target, names, args);
     }
 }
