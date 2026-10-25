@@ -32,6 +32,13 @@ namespace YMM4McpPlugin
                 && (parameters.Length == 1 || parameters[1].ParameterType == typeof(string));
         }
 
+        // Match the MCP server's idempotency-key contract.  Internal whitespace is
+        // allowed, but ASCII control characters must never reach persisted job keys.
+        internal static bool IsValidIdempotencyKey(string key) =>
+            key.Length <= 128
+            && (key.Length == 0 || key.Trim() == key)
+            && !key.Any(c => c <= '\\u001f' || c == '\\u007f');
+
         internal static bool HasDialogOnlyMethod(IEnumerable<MethodInfo> methods, string requestedFormat) =>
             methods.Any(method => MatchesFormat(method.Name, requestedFormat)
                 && method.GetParameters().Length == 0);
