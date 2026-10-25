@@ -66,10 +66,10 @@ class ExportContainerHeaderTests(unittest.TestCase):
                 self.assertFalse(self.verify("clip.webm", payload)["ok"])
 
     def test_ebml_void_payload_cannot_impersonate_doctype(self):
-        fake = b"\\x42\\x82\\x84junk"
-        void = b"\\xec" + bytes([0x80 + len(fake)]) + fake
-        real = b"\\x42\\x82\\x84webm"
-        header = b"\\x1a\\x45\\xdf\\xa3"
+        fake = b"\x42\x82\x84junk"
+        void = b"\xec" + bytes([0x80 + len(fake)]) + fake
+        real = b"\x42\x82\x84webm"
+        header = b"\x1a\x45\xdf\xa3"
         good = header + bytes([0x80 + len(void + real)]) + void + real
         bad = header + bytes([0x80 + len(void)]) + void
         self.assert_verified_header_only(self.verify("clip.webm", good))
