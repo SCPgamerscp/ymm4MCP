@@ -87,7 +87,8 @@ def verify_media_file(path: str, expected_format: str | None = None) -> dict:
         with target.open("rb") as stream:
             size = stream.seek(0, 2)
             stream.seek(0)
-            header = stream.read(12)
+            # Read only the ISO BMFF box header (including optional extended size).
+            header = stream.read(24)
     except FileNotFoundError:
         return missing
     except OSError:
@@ -101,7 +102,20 @@ def verify_media_file(path: str, expected_format: str | None = None) -> dict:
         if header[4:8] != b"ftyp":
             return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": "MP4のftypボックスがありません",
                     "bytes": size, "output_path": path, "format": fmt}
-        brand = header[8:12].decode("latin1", "replace")
+        # A matching "ftyp" marker alone does not establish a valid MP4:
+        # the box must fit in the file and contain major_brand + minor_version.
+        box_size = int.from_bytes(header[:4], "big")
+        if box_size == 1:
+            # ISO BMFF extended-size box: size(4) + type(4) + largesize(8).
+            box_size = int.from_bytes(header[8:16], "big")
+            minimum_size, brand_offset = 24, 16
+        else:
+            minimum_size, brand_offset = 16, 8
+        if not minimum_size <= box_size <= size:
+            return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED",
+                    "error": "MP4のftypボックスサイズが不正です",
+                    "bytes": size, "output_path": path, "format": fmt}
+        brand = header[brand_offset:brand_offset + 4].decode("latin1", "replace")
         return {"ok": True, "format": "mp4", "bytes": size, "output_path": path,
                 "has_video": True, "brand": brand, "verified": True}
     if fmt == "wav":
