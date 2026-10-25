@@ -74,11 +74,23 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
                 memberships += 1
         if not memberships:
             unassigned.append(identity)
-    for scene in scenes:
-        scene["continues_from_previous_item_ids"] = list(dict.fromkeys(
-            item["item_id"] for item in scene["items"] if item["frame"] < scene["start_frame"]))
-        scene["continues_into_next_item_ids"] = list(dict.fromkeys(
-            item["item_id"] for item in scene["items"] if item["end_frame"] > scene["end_frame"]))
+    for scene_position, scene in enumerate(scenes):
+        # A continuation must actually intersect the adjacent scene. Merely
+        # crossing the current scene's edge (or ending in a gap) is not enough.
+        previous_scene = scenes[scene_position - 1] if scene_position else None
+        next_scene = scenes[scene_position + 1] if scene_position + 1 < len(scenes) else None
+        scene["continues_from_previous_item_ids"] = [
+            item["item_id"] for item in scene["items"]
+            if previous_scene is not None
+            and item["frame"] < previous_scene["end_frame"]
+            and item["end_frame"] > previous_scene["start_frame"]
+        ]
+        scene["continues_into_next_item_ids"] = [
+            item["item_id"] for item in scene["items"]
+            if next_scene is not None
+            and item["frame"] < next_scene["end_frame"]
+            and item["end_frame"] > next_scene["start_frame"]
+        ]
         intervals = [(item["visible_start_frame"], item["visible_end_frame"])
                      for item in scene["items"]]
         gaps = _uncovered(intervals, scene["start_frame"], scene["end_frame"])
@@ -89,7 +101,10 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         for item in scene["items"]:
             by_layer.setdefault(item["layer"], []).append(item)
         scene["layer_occupancy"] = []
-        for layer, members in by_layer.items():
+        # Keep layer occupancy deterministic when the host changes item order.
+        # A missing layer is sorted after all numbered layers.
+        for layer in sorted(by_layer, key=lambda value: (value is None, value if value is not None else 0)):
+            members = by_layer[layer]
             layer_gaps = _uncovered([(item["visible_start_frame"], item["visible_end_frame"])
                                      for item in members], scene["start_frame"], scene["end_frame"])
             uncovered = sum(g["end_frame"] - g["start_frame"] for g in layer_gaps)
