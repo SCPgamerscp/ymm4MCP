@@ -19,6 +19,7 @@ APIキー:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -46,6 +47,11 @@ def _get_default_model() -> str:
     return "gemini-2.5-flash"
 
 DEFAULT_MODEL = _get_default_model()
+
+# Limit memory retained for inline Gemini frame/audio payloads.
+MAX_FRAME_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_AUDIO_BYTES = 128 * 1024 * 1024
+MAX_TOTAL_BYTES = 256 * 1024 * 1024
 
 # デフォルトの検出指示(イベント全種類)。AIがカスタムプロンプトを渡せば上書きされる。
 DEFAULT_EVENT_INSTRUCTION = (
@@ -121,6 +127,21 @@ def _extract_json(text: str) -> dict:
                 or not isinstance(parsed.get("events"), list)
                 or any(not isinstance(event, dict) for event in parsed["events"])):
             raise ValueError("summary must be text and events must be an array of objects")
+        if len(parsed["events"]) > 5000:
+            raise ValueError("events exceeds the 5000 event limit")
+        for index, event in enumerate(parsed["events"]):
+            start = event.get("time_sec")
+            if (isinstance(start, bool) or not isinstance(start, (int, float))
+                    or not math.isfinite(start) or start < 0):
+                raise ValueError(f"events[{index}].time_sec must be finite and nonnegative")
+            end = event.get("end_sec", start)
+            if end is not None and (
+                    isinstance(end, bool) or not isinstance(end, (int, float))
+                    or not math.isfinite(end) or end < start):
+                raise ValueError(f"events[{index}].end_sec must not precede time_sec")
+        # Gemini can return valid events out of order. Preserve relative order
+        # for ties while guaranteeing the chronological contract for callers.
+        parsed["events"].sort(key=lambda event: event["time_sec"])
         return parsed
     except Exception as e:
         return {"summary": "", "events": [], "_parse_error": f"JSON解析失敗: {e}", "_raw": text[:2000]}
@@ -154,6 +175,9 @@ def analyze_video_file(
     Gemini の File API に動画をアップロードし、映像+音声を時系列解析させて
     タイムスタンプ付きイベントJSONを得る。
     """
+    if (not isinstance(video_path, str) or not video_path.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in video_path)):
+        return {"success": False, "error": "video_path must be a nonempty path without control characters"}
     ok, msg = is_available()
     if not ok:
         return {"success": False, "error": msg}
@@ -260,17 +284,33 @@ def analyze_frames_dir(
     time_table_lines = []
     try:
         client = _client()
+        total_payload_bytes = 0
+        analyzed_images = 0
         for e in entries:
             path = _safe_frame_path(frames_dir, e["file"])
             if path is None:
                 continue
+            if os.path.getsize(path) > MAX_FRAME_IMAGE_BYTES:
+                return {"success": False, "error": "PNG frame exceeds the upload size limit",
+                        "source": "frames_dir"}
             with open(path, "rb") as fh:
-                img_bytes = fh.read()
+                img_bytes = fh.read(MAX_FRAME_IMAGE_BYTES + 1)
+            if (len(img_bytes) > MAX_FRAME_IMAGE_BYTES
+                    or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
+                return {"success": False, "error": "Frame payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+            analyzed_images += 1
             t_ms = e.get("timeMs")
-            t_label = f"{t_ms/1000.0:.2f}s" if isinstance(t_ms, (int, float)) else "?"
-            contents.append(genai_types.Part.from_text(text=f"[上の画像の時刻 = {t_label}, frame={e.get('frame')}]"))
-            time_table_lines.append(f"  画像{len(time_table_lines)}: time={t_label} frame={e.get('frame')}")
+            valid_time = (not isinstance(t_ms, bool) and isinstance(t_ms, (int, float))
+                          and 0 <= t_ms <= 1_000_000_000_000 and math.isfinite(t_ms))
+            t_label = f"{t_ms/1000.0:.2f}s" if valid_time else "?"
+            frame = e.get("frame")
+            frame_label = (frame if type(frame) is int and 0 <= frame <= 2_147_483_647
+                           else "?")
+            contents.append(genai_types.Part.from_text(text=f"[上の画像の時刻 = {t_label}, frame={frame_label}]"))
+            time_table_lines.append(f"  画像{len(time_table_lines)}: time={t_label} frame={frame_label}")
 
         if not time_table_lines:
             return {"success": False, "error": "解析可能なPNGフレームがありません",
@@ -278,8 +318,16 @@ def analyze_frames_dir(
 
         # 音声があれば添付
         if audio_path and os.path.isfile(audio_path):
+            if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
+                return {"success": False, "error": "Audio exceeds the upload size limit",
+                        "source": "frames_dir"}
             with open(audio_path, "rb") as fh:
-                wav_bytes = fh.read()
+                wav_bytes = fh.read(MAX_AUDIO_BYTES + 1)
+            if (len(wav_bytes) > MAX_AUDIO_BYTES
+                    or total_payload_bytes + len(wav_bytes) > MAX_TOTAL_BYTES):
+                return {"success": False, "error": "Audio payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
             contents.append(genai_types.Part.from_text(
                 text="↑これは上記フレーム区間全体の音声です。画像の時刻と対応付けて音響イベントを解析してください。"))
@@ -300,7 +348,7 @@ def analyze_frames_dir(
             "success": True,
             "source": "frames_dir",
             "frames_dir": frames_dir,
-            "analyzed_images": len([c for c in contents if getattr(c, "inline_data", None)]) or len(entries),
+            "analyzed_images": analyzed_images,
             "model": model,
         }
     except Exception as e:
