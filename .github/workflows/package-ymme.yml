@@ -128,7 +128,10 @@ jobs:
             Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
           '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"}}}' |
             Set-Content -LiteralPath $configPath -Encoding UTF8
-          & cmd.exe /c "mcp-server\install.cmd"
+          # Simulate an extracted Release ZIP that the user later deletes.
+          $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
+          Copy-Item -LiteralPath 'mcp-server' -Destination $extracted -Recurse -Force
+          & (Join-Path $extracted 'install.cmd')
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd failed' }
           $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
@@ -148,7 +151,21 @@ jobs:
               -not (Test-Path -LiteralPath $config.mcpServers.ymm4.args[0])) {
             throw 'MCP server script path was not configured'
           }
-          # Re-running must keep unrelated configuration and not create duplicate entries.
+          # The configuration must not depend on the temporary extraction path.
+          $installedDir = Join-Path $env:LOCALAPPDATA 'YMM4MCP\mcp-server'
+          $installedPython = Join-Path $installedDir '.venv\Scripts\python.exe'
+          $installedScript = Join-Path $installedDir 'server.py'
+          if ($config.mcpServers.ymm4.command -cne $installedPython -or
+              @($config.mcpServers.ymm4.args)[0] -cne $installedScript -or
+              $storeConfig.mcpServers.ymm4.command -cne $installedPython) {
+            throw 'Claude Desktop must use persistent installed paths'
+          }
+          Remove-Item -LiteralPath $extracted -Recurse -Force
+          if (-not (Test-Path -LiteralPath $installedPython) -or
+              -not (Test-Path -LiteralPath $installedScript)) {
+            throw 'Deleting the ZIP extraction must not remove the installed server'
+          }
+          # Re-running from another extraction must preserve the same stable path.
           & cmd.exe /c "mcp-server\install.cmd"
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
           $again = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
