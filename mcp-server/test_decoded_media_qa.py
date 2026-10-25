@@ -67,7 +67,38 @@ class DecodedMediaQATests(unittest.TestCase):
                          {"0:v", "0:a"})
         self.assertTrue(all("-ss" not in cmd and "-t" not in cmd
                             and "-abort_on" in cmd for cmd in full_commands))
+        self.assertTrue(all(cmd[cmd.index("-abort_on") + 1]
+                            == "empty_output+empty_output_stream" for cmd in full_commands))
+        sampled_commands = [cmd for cmd, _ in commands if cmd[0] == "ffmpeg"
+                            and "-ss" in cmd]
+        self.assertTrue(all(cmd[cmd.index("-abort_on") + 1] == "empty_output"
+                            for cmd in sampled_commands))
         self.assertTrue(all(timeout <= 900 for _, timeout in commands))
+
+    def test_full_decode_fails_if_second_audio_stream_is_empty(self):
+        # With only empty_output, FFmpeg can succeed because the first mapped
+        # audio stream produced packets even though the second produced none.
+        metadata = json.dumps({
+            "format": {"duration": "30.5"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"},
+                        {"codec_type": "audio"}],
+        })
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return process(stdout=metadata)
+            if "-map" in command and command[command.index("-map") + 1] == "0:a":
+                abort_flags = command[command.index("-abort_on") + 1]
+                if "empty_output_stream" not in abort_flags:
+                    return process()  # Reproduces the old false-positive path.
+                return process(1, stderr="second mapped audio stream is empty")
+            return process()
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), full_decode=True)
+        self.assertEqual(report["audio_streams"], 2)
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["fully_decoded"])
+        self.assertIn("EXPORT_FULL_DECODE_FAILED",
+                      {issue["code"] for issue in report["issues"]})
 
     def test_full_decode_detects_middle_corruption_not_seen_in_samples(self):
         def fake(command, timeout):
