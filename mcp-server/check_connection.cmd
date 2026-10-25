@@ -3,11 +3,14 @@ setlocal EnableExtensions
 set "exit_code=1"
 pushd "%~dp0" 2>nul
 if errorlevel 1 goto :directory_error
-if not exist ".venv\Scripts\python.exe" goto :python_error
-if not exist "check_connection.py" goto :script_error
+rem Prefer the persistent installation, which remains after deleting the ZIP folder.
+set "server_dir=%CD%"
+if defined LOCALAPPDATA if exist "%LOCALAPPDATA%\YMM4MCP\mcp-server\.venv\Scripts\python.exe" set "server_dir=%LOCALAPPDATA%\YMM4MCP\mcp-server"
+if not exist "%server_dir%\.venv\Scripts\python.exe" goto :python_error
+if not exist "%server_dir%\check_connection.py" goto :script_error
 
 echo Checking the YMM4 plugin connection...
-".venv\Scripts\python.exe" "check_connection.py"
+"%server_dir%\.venv\Scripts\python.exe" "%server_dir%\check_connection.py"
 set "exit_code=%ERRORLEVEL%"
 if not "%exit_code%"=="0" goto :check_error
 echo Connection verified.
