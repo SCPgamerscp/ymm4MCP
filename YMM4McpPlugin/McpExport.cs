@@ -269,8 +269,8 @@ namespace YMM4McpPlugin
             }
             if (timeout < 1 || timeout > 7200) throw new ArgumentException("timeout_seconds must be an integer in 1..7200");
             string key = GetStr(body, "idempotency_key", "");
-            if (key.Length > 128 || (key.Length > 0 && key.Trim() != key))
-                throw new ArgumentException("idempotency_key must be a 1..128 character string without surrounding whitespace");
+            if (!ExportInvocationPolicy.IsValidIdempotencyKey(key))
+                throw new ArgumentException("idempotency_key must be at most 128 characters, without surrounding whitespace or control characters");
             return (path, format, overwrite, timeout, key.Length == 0 ? null : key);
         }
 
