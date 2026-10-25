@@ -21,6 +21,13 @@ def thumbnail(image_b64: str) -> bytes:
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("preview must contain exactly one PNG frame")
             image.load()
+            # Alpha is not represented in RGB thumbnails. Discarding it can
+            # turn an invisible black/white pixel into a false QA observation.
+            # Reject partially transparent captures instead of guessing which
+            # YMM4 canvas color should be composited behind them.
+            if "A" in image.getbands() or "transparency" in image.info:
+                if image.convert("RGBA").getchannel("A").getextrema()[0] < 255:
+                    raise ValueError("preview contains transparent pixels")
             return image.convert("RGB").resize((64, 36)).tobytes()
     except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise ValueError("invalid preview PNG") from exc
