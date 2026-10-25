@@ -95,6 +95,29 @@ class GeminiFrameOrderIntegrityTests(unittest.TestCase):
         self.assertTrue(self.analyze()["success"])
         self.client.models.generate_content.assert_called_once()
 
+    def test_wrong_audio_extension_is_rejected(self):
+        bad = self.folder / "sound.mp3"
+        bad.write_bytes(b"ID3")
+        result = self.analyze(audio_path=str(bad))
+        self.assertFalse(result["success"])
+        self.assertIn("WAV", result["error"])
+        self.client.models.generate_content.assert_not_called()
+
+    def test_wrong_wav_signature_is_rejected(self):
+        bad = self.folder / "sound.wav"
+        bad.write_bytes(b"ID3not-a-wav-file")
+        result = self.analyze(audio_path=str(bad))
+        self.assertFalse(result["success"])
+        self.assertIn("RIFF/WAVE", result["error"])
+        self.client.models.generate_content.assert_not_called()
+
+    def test_valid_wav_header_is_accepted(self):
+        audio = self.folder / "sound.wav"
+        audio.write_bytes(b"RIFF\x04\x00\x00\x00WAVE")
+        result = self.analyze(audio_path=str(audio))
+        self.assertTrue(result["success"])
+        self.client.models.generate_content.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
