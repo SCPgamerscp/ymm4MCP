@@ -89,8 +89,9 @@ if ($ConfigureClaudeDesktop) {
         Write-Output "Claude Desktop の設定は更新済みです: $configPath"
     } else {
         if (Test-Path -LiteralPath $configPath) {
+            # File.Replace creates the backup atomically on Windows.
+            # Windows PowerShell 5.1/.NET Framework rejects a null backup path.
             $backupPath = "$configPath.bak.$([guid]::NewGuid().ToString('N'))"
-            Copy-Item -LiteralPath $configPath -Destination $backupPath
         }
         $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
         $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"
@@ -98,7 +99,7 @@ if ($ConfigureClaudeDesktop) {
             $json = $config | ConvertTo-Json -Depth 100
             [IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
             if (Test-Path -LiteralPath $configPath) {
-                [IO.File]::Replace($tempPath, $configPath, $null)
+                [IO.File]::Replace($tempPath, $configPath, $backupPath)
             } else {
                 [IO.File]::Move($tempPath, $configPath)
             }
