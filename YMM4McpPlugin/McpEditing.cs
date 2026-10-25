@@ -129,14 +129,6 @@ namespace YMM4McpPlugin
             return result;
         }
 
-        private static bool MatchesItemType(object item, string typeName)
-        {
-            var name = item.GetType().Name;
-            return name.Equals(typeName, StringComparison.Ordinal)
-                || name.EndsWith(typeName, StringComparison.OrdinalIgnoreCase)
-                || name.Contains(typeName, StringComparison.OrdinalIgnoreCase);
-        }
-
         private static MethodInfo? FindAddMethod(object model, string name, bool voice, bool character)
         {
             var methods = model.GetType()
@@ -364,32 +356,13 @@ namespace YMM4McpPlugin
             catch { return null; }
             if (newcomers.Length == 0) return null;
 
-            var typed = newcomers.Where(i => MatchesItemType(i, typeName)).ToArray();
-            object item;
-            bool verified;
-            if (typed.Length == 1)
-            {
-                item = typed[0];
-                verified = true;
-            }
-            else if (newcomers.Length == 1)
-            {
-                item = newcomers[0];
-                verified = false;
-                warning = JoinWarning(warning, "型名が想定と異なるため検証を緩和しました: " + item.GetType().Name);
-            }
-            else if (typed.Length > 1)
-            {
-                item = typed[0];
-                verified = false;
-                warning = JoinWarning(warning, $"新規アイテムが{typed.Length}件あります。再追加せず items で確認してください");
-            }
-            else
-            {
-                item = newcomers[0];
-                verified = false;
-                warning = JoinWarning(warning, $"新規アイテムが{newcomers.Length}件あります。再追加せず items で確認してください");
-            }
+            // A successful native call is not proof that a specific timeline item was
+            // added. Do not mutate or report an arbitrary newcomer when verification
+            // is missing or ambiguous: the caller must re-read the timeline instead.
+            var selected = AddedItemVerification.UniqueExpectedNewcomer(newcomers, typeName);
+            if (selected == null) return null;
+            object item = selected;
+            bool verified = true;
 
             if (length.HasValue)
             {
