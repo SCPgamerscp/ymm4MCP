@@ -9,7 +9,9 @@ from ymm4_connection import ConnectionConfigurationError, connection_settings
 
 def check() -> dict:
     base, headers = connection_settings()
-    with httpx.Client(timeout=5.0) as client:
+    # This endpoint is strictly loopback. Environment HTTP(S)_PROXY settings
+    # must never receive the plugin's X-Ymm4-Token credential.
+    with httpx.Client(timeout=5.0, trust_env=False) as client:
         response = client.get(base + "/status", headers=headers)
         response.raise_for_status()
         status = response.json()
