@@ -38,7 +38,7 @@ except Exception as e:  # pragma: no cover
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 MAX_MODEL_CONFIG_BYTES = 64 * 1024
-_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\\Z")
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 
 
 def _get_default_model() -> str:
