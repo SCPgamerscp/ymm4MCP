@@ -42,6 +42,18 @@ namespace YMM4McpPlugin
             return digest;
         }
 
+        // Reserve the full candidate size before attempting I/O: a digest may
+        // be rejected after hashing (stale metadata), but that work still
+        // counts against the scan-wide hashing budget.
+        internal static bool TryReserveHashBudget(long bytes, ref long reservedBytes)
+        {
+            if (bytes < 0 || reservedBytes < 0 || reservedBytes > TotalHashLimit
+                || bytes > HashLimit || bytes > TotalHashLimit - reservedBytes)
+                return false;
+            reservedBytes += bytes;
+            return true;
+        }
+
         public static AssetScanResult Scan(string directory, string? query = null, bool recursive = false,
             bool hash = false, int maxResults = 100)
         {
@@ -96,7 +108,7 @@ namespace YMM4McpPlugin
                     string? sha = null;
                     if (hash)
                     {
-                        if (bytes > HashLimit || bytes > TotalHashLimit - hashedBytes)
+                        if (!TryReserveHashBudget(bytes, ref hashedBytes))
                             hashTruncated = true;
                         else
                         {
@@ -104,7 +116,6 @@ namespace YMM4McpPlugin
                             {
                                 sha = HashFile(file, bytes, modifiedUtc);
                                 if (sha == null) hashTruncated = true;
-                                else hashedBytes += bytes;
                             }
                             catch (IOException) { hashTruncated = true; }
                             catch (UnauthorizedAccessException) { hashTruncated = true; }
