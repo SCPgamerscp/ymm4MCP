@@ -3,6 +3,7 @@ import json
 import math
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from jobs import is_absolute_media_path
@@ -135,6 +136,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         # would round -t to zero and could falsely pass an empty sample.
         if not isinstance(streams, list) or not math.isfinite(duration) or duration < 0.000001:
             raise ValueError("invalid metadata")
+        # The A/V cap below does not cover subtitle/data/attachment tracks.
+        # Bound the entire stream table before iterating over untrusted metadata.
+        if len(streams) > 128:
+            return failure("EXPORT_STREAM_LIMIT", "ストリーム数が多すぎます（最大128）")
         seen_indices = set()
         for stream in streams:
             if (not isinstance(stream, dict)
@@ -163,11 +168,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 if "sample_rate" in stream:
                     rate = stream["sample_rate"]
                     if (not isinstance(rate, str) or not rate.isascii()
-                            or not rate.isdecimal() or int(rate) <= 0):
+                            or not rate.isdecimal() or not 1 <= int(rate) <= 768_000):
                         raise ValueError("invalid audio sample rate")
                 if "channels" in stream:
                     channels = stream["channels"]
-                    if type(channels) is not int or channels <= 0:
+                    if type(channels) is not int or not 1 <= channels <= 64:
                         raise ValueError("invalid audio channel count")
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
@@ -200,6 +205,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     black_frames = []
     long_silences = []
     audio_peaks = []
+    # Per-command timeouts alone allow up to 32 slow subprocesses. Bound
+    # the complete synchronous sampling pass to two minutes.
+    sample_deadline = time.monotonic() + 120
     for start in starts:
         length = min(float(sample_seconds), duration - start)
         if length <= 0:
@@ -219,8 +227,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                        "-map", f"0:v:{ordinal}" if kind == "video" else f"0:a:{ordinal}",
                        "-vf" if kind == "video" else "-af", signal_filter,
                        "-abort_on", "empty_output", "-f", "null", "-"]
+            remaining = sample_deadline - time.monotonic()
+            if remaining <= 0:
+                return failure("EXPORT_DECODE_TIMEOUT", "動画サンプルの総検証時間を超えました")
             try:
-                decoded = run(command, 30)
+                decoded = run(command, min(30, remaining))
             except FileNotFoundError:
                 return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
             except subprocess.TimeoutExpired:
@@ -270,6 +281,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         # No signal filters are used here: sample-only diagnostics above remain
         # bounded, and full-file stderr is restricted to decoding errors.
         timeout = min(900, max(60, int(math.ceil(duration * 4))))
+        # Both video and audio share a single full-decode budget.
+        full_deadline = time.monotonic() + 900
         for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
             if not present:
                 continue
@@ -280,8 +293,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                        # populated first track must not hide an empty second.
                        "-abort_on", "empty_output+empty_output_stream",
                        "-f", "null", "-"]
+            remaining = full_deadline - time.monotonic()
+            if remaining <= 0:
+                full_decode_ok = False
+                issues.append({"code": "EXPORT_FULL_DECODE_TIMEOUT",
+                               "severity": "error", "stream_type": kind})
+                break
             try:
-                decoded = run(command, timeout)
+                decoded = run(command, min(timeout, remaining))
             except FileNotFoundError:
                 return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
             except subprocess.TimeoutExpired:
