@@ -22,6 +22,7 @@ import asyncio
 import asset_qa
 import script_guard
 import json
+import math
 import os
 import ntpath
 import re
@@ -1932,10 +1933,18 @@ async def ymm4_post_long(path: str, body: dict, timeout: float = 600.0) -> dict:
 
 
 def _sec_to_frame(time_sec: Any, fps: int, base_frame: int) -> Any:
-    """秒 → YMM4フレーム番号に変換する。"""
+    """Convert seconds to a bounded YMM4 frame without trusting model output."""
+    if (type(time_sec) not in (int, float) or type(fps) is not int or
+            type(base_frame) is not int or not 1 <= fps <= 240 or
+            not 0 <= base_frame <= MAX_FRAME):
+        return None
     try:
-        return base_frame + int(round(float(time_sec) * fps))
-    except (TypeError, ValueError):
+        seconds = float(time_sec)
+        if not math.isfinite(seconds) or seconds < 0:
+            return None
+        frame = base_frame + round(seconds * fps)
+        return frame if 0 <= frame <= MAX_FRAME else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -1960,7 +1969,7 @@ async def _get_fps_from_ymm4(default: int = 30) -> int:
     try:
         data = await ymm4_get("/project/fps")
         fps = data.get("fps")
-        if isinstance(fps, int) and fps > 0:
+        if type(fps) is int and 1 <= fps <= 240:
             return fps
     except Exception:
         pass
@@ -1993,10 +2002,10 @@ async def analyze_video(args: dict) -> dict:
         video_path = args.get("video_path", "")
         if not video_path:
             return {"success": False, "error": "source='file'にはvideo_pathが必要です"}
-        base_frame = int(args.get("base_frame", 0))
+        base_frame = integer(args.get("base_frame", 0), "base_frame")
         fps = args.get("fps")
-        if not isinstance(fps, int) or fps <= 0:
-            fps = await _get_fps_from_ymm4(30)
+        fps = (integer(fps, "fps", 1, 240) if fps is not None
+               else await _get_fps_from_ymm4(30))
 
         # Gemini呼び出しはブロッキングなので別スレッドで
         result = await asyncio.to_thread(
