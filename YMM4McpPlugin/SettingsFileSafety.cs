@@ -36,6 +36,14 @@ namespace YMM4McpPlugin
 
             using var document = JsonDocument.Parse(json);
             RejectDuplicateKeys(document.RootElement);
+            // JsonSerializer ignores unknown properties by default. In settings
+            // controlling the listener, a typo must not silently fall back to
+            // AutoStart=true or a different port.
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("MCP設定JSONはオブジェクトで指定してください");
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (property.Name is not ("Port" or "AutoStart" or "AllowAdvanced"))
+                    throw new InvalidDataException("MCP設定JSONに不明なキーがあります: " + property.Name);
             return json;
         }
 
