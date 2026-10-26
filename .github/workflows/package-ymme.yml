@@ -139,14 +139,15 @@ jobs:
           # check. A correct installer must fall back to python.exe.
           $fakeLauncherDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-outdated-py'
           [IO.Directory]::CreateDirectory($fakeLauncherDir) | Out-Null
-          @'
-@echo off
-setlocal EnableDelayedExpansion
-set "code=%~3"
-if not "!code:version_info[0]=!"=="!code!" exit /b 0
-if not "!code:(3, 10)=!"=="!code!" exit /b 1
-exit /b 91
-'@ | Set-Content -LiteralPath (Join-Path $fakeLauncherDir 'py.cmd') -Encoding Ascii
+          $launcherLines = @(
+            '@echo off',
+            'setlocal EnableDelayedExpansion',
+            'set "code=%~3"',
+            'if not "!code:version_info[0]=!"=="!code!" exit /b 0',
+            'if not "!code:(3, 10)=!"=="!code!" exit /b 1',
+            'exit /b 91'
+          )
+          Set-Content -LiteralPath (Join-Path $fakeLauncherDir 'py.cmd') -Value $launcherLines -Encoding Ascii
           $originalPath = $env:PATH
           try {
             $env:PATH = "$fakeLauncherDir;$originalPath"
