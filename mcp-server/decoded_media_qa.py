@@ -63,6 +63,21 @@ def _audio_peak_db(log):
     return max(peaks) if peaks else None
 
 
+def _optional_stream_time(value, *, signed=False):
+    """Parse optional ffprobe stream times without accepting ambiguous values."""
+    if value is None or value == "N/A":
+        return None
+    sign = r"[+-]?" if signed else ""
+    if (type(value) is not str or not re.fullmatch(
+            sign + r"(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+            value)):
+        raise ValueError("invalid stream time")
+    seconds = float(value)
+    if not math.isfinite(seconds) or (not signed and seconds < 0):
+        raise ValueError("invalid stream time")
+    return seconds
+
+
 def _reject_nonfinite_json(value):
     """Strict JSON does not permit NaN or Infinity tokens."""
     raise ValueError("non-standard JSON number: " + value)
@@ -165,7 +180,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration:stream=index,codec_type,width,height,sample_rate,channels",
+                     "format=duration:stream=index,codec_type,width,height,sample_rate,channels,duration,start_time",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -223,6 +238,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     raise ValueError("invalid video dimensions")
             # The presence of an audio stream is not evidence of a usable
             # audio format when ffprobe reports zero or malformed parameters.
+            if stream["codec_type"] in ("video", "audio"):
+                if "duration" in stream:
+                    _optional_stream_time(stream["duration"])
+                if "start_time" in stream:
+                    _optional_stream_time(stream["start_time"], signed=True)
             if stream["codec_type"] == "audio":
                 if "sample_rate" in stream:
                     rate = stream["sample_rate"]
@@ -254,6 +274,19 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if len(videos) + len(audios) > 16:
         return failure("EXPORT_STREAM_LIMIT", "映像・音声ストリームが多すぎます（最大16）")
     issues = []
+    # A successful tail decode only proves that some samples exist in the
+    # final window. Track metadata can reveal an earlier end within it.
+    for kind, tracks in (("video", videos), ("audio", audios)):
+        for ordinal, stream in enumerate(tracks):
+            track_duration = _optional_stream_time(stream.get("duration"))
+            track_start = _optional_stream_time(stream.get("start_time", "0"), signed=True)
+            if track_duration is not None and track_start is not None:
+                missing = duration - (track_start + track_duration)
+                if missing > 1.0:
+                    issues.append({"code": "EXPORT_STREAM_ENDS_EARLY",
+                                   "severity": "warning", "stream_type": kind,
+                                   "stream_ordinal": ordinal,
+                                   "missing_tail_seconds": round(missing, 3)})
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
     if require_audio and not audios:
