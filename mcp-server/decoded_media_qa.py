@@ -336,10 +336,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if require_audio and not audios:
         issues.append({"code": "EXPORT_AUDIO_STREAM_MISSING", "severity": "error"})
     starts = [0.0]
-    # For videos between one and two sample windows long, also inspect the
-    # tail. Previously only the first window was decoded, leaving the end
-    # unchecked (including truncated or missing audio near the end).
-    # Longer videos intentionally sample the first and last windows only.
+    # Cover the middle of longer exports, not only the beginning and tail.
+    # Three disjoint windows are enough to catch a broken middle segment
+    # without turning synchronous sampling into an unbounded full decode.
+    if duration >= 3 * sample_seconds:
+        starts.append((duration - sample_seconds) / 2)
     if duration > sample_seconds:
         starts.append(max(0.0, duration - sample_seconds))
     samples = []
