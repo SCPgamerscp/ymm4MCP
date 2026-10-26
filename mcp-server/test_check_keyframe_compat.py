@@ -20,6 +20,8 @@ class FakeYmm4:
         self.fail_set = None
         self.bad_value = None
         self.fail_remove = None
+        self.corrupt_original_on_remove = None
+        self.corrupt_other_on_remove = None
 
     def __call__(self, request):
         assert request.headers.get("X-Ymm4-Token") == "fake-test-token"
@@ -50,6 +52,11 @@ class FakeYmm4:
         elif action == "remove":
             if prop != self.fail_remove:
                 self.frames[prop] = [f for f in self.frames[prop] if f["at"] != at]
+            if prop == self.corrupt_original_on_remove:
+                self.frames[prop][0]["value"] += 1
+            if prop == self.corrupt_other_on_remove:
+                other = "X" if prop == "Zoom" else "Zoom"
+                self.frames[other][0]["value"] += 1
             self.revision += 1
         return httpx.Response(200, json={"success": True})
 
@@ -108,6 +115,24 @@ class LiveProbeProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED"):
             probe(fake)
         self.assertEqual(len(fake.frames["Zoom"]), 2)
+
+    def test_cleanup_rejects_corruption_of_original_keyframe(self):
+        fake = FakeYmm4()
+        fake.corrupt_original_on_remove = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*Zoom"):
+            probe(fake)
+        self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
+        self.assertNotEqual(fake.frames["Zoom"][0]["value"], 1.0)
+        self.assertEqual(len(fake.posts), 2)
+
+    def test_cleanup_rejects_collateral_damage_to_other_animation(self):
+        fake = FakeYmm4()
+        fake.corrupt_other_on_remove = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*X"):
+            probe(fake)
+        self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
+        self.assertNotEqual(fake.frames["X"][0]["value"], 0.0)
+        self.assertEqual(len(fake.posts), 2)
 
 
 if __name__ == "__main__":
