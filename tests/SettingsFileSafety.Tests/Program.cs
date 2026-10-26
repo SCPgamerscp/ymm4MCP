@@ -35,6 +35,9 @@ try
     ExpectInvalid(path, "{\"AutoStart\":false,\"AutoStart\":true}");
     ExpectInvalid(path, "{\"nested\":{\"token\":\"first\",\"token\":\"second\"}}");
     ExpectInvalid(path, "{\"items\":[{\"key\":1,\"key\":2}]}");
+    ExpectInvalid(path, "{\"AutoStrat\":true}");
+    ExpectInvalid(path, "{\"port\":8765}");
+    ExpectInvalid(path, "{\"Port\":8765,\"UnexpectedFlag\":true}");
 
     // A 64KiB cap must apply to actual bytes, not a stale FileInfo length.
     File.WriteAllText(path, "{\"padding\":\"" + new string('x', 65536) + "\"}");
