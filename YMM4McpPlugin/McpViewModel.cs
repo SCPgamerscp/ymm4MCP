@@ -17,6 +17,8 @@ namespace YMM4McpPlugin
         private int _port = Server.Settings.Port;
         private bool _autoStart = Server.Settings.AutoStart;
         private bool _allowAdvanced = Server.Settings.AllowAdvanced;
+        private SettingsViewSnapshot _observedSettings = new(Server.Settings.Port,
+            Server.Settings.AutoStart, Server.Settings.AllowAdvanced);
 
         static McpViewModel()
         {
@@ -52,12 +54,33 @@ namespace YMM4McpPlugin
         private void SaveSettings()
         {
             if (IsRunning) throw new InvalidOperationException("設定変更前にサーバーを停止してください");
+            if (!_observedSettings.Matches(Server.Settings.Port, Server.Settings.AutoStart,
+                                           Server.Settings.AllowAdvanced))
+            {
+                // Another tool window saved newer values. Never overwrite them
+                // with a stale view; show the latest settings before retrying.
+                SyncSettingsFromServer();
+                throw new InvalidOperationException(
+                    "別のツールウィンドウで設定が更新されました。最新の値を確認してから再設定してください");
+            }
             var candidate = new McpSettings { Port = Port, AutoStart = AutoStart, AllowAdvanced = AllowAdvanced };
             candidate.Save();
             Server.Settings.Port = candidate.Port;
             Server.Settings.AutoStart = candidate.AutoStart;
             Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
+            _observedSettings = new(candidate.Port, candidate.AutoStart, candidate.AllowAdvanced);
+            // Successful persistence resolves an earlier corrupt-settings warning.
+            Server.Settings.LoadWarning = "";
+            _startupError = "";
             Refresh();
+        }
+
+        private void SyncSettingsFromServer()
+        {
+            Port = Server.Settings.Port;
+            AutoStart = Server.Settings.AutoStart;
+            AllowAdvanced = Server.Settings.AllowAdvanced;
+            _observedSettings = new(Port, AutoStart, AllowAdvanced);
         }
 
         private void RunSafely(Action action)
@@ -72,9 +95,7 @@ namespace YMM4McpPlugin
             _attached = true;
             Server.LogMessage += AddLog;
             Server.StateChanged += Refresh;
-            Port = Server.Settings.Port;
-            AutoStart = Server.Settings.AutoStart;
-            AllowAdvanced = Server.Settings.AllowAdvanced;
+            SyncSettingsFromServer();
             if (_startupError.Length > 0) AddLog(_startupError);
             Refresh();
         }
