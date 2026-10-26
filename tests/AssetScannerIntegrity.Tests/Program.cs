@@ -66,6 +66,33 @@ try
     var limited = AssetScanner.Scan(root, maxResults: 1);
     Check(limited.Assets.Length == 1 && limited.Truncated,
         "result cap must continue to mark incomplete asset results");
+
+    // Empty directories count against the recursive traversal work limit,
+    // even though they do not increase the public file-only Scanned count.
+    string emptyTree = Path.Combine(root, "empty-tree");
+    Directory.CreateDirectory(emptyTree);
+    for (int i = 0; i < 16; i++)
+        Directory.CreateDirectory(Path.Combine(emptyTree, $"empty-{i:D2}"));
+    var boundedDirectories = AssetScanner.Scan(emptyTree, recursive: true, traversalLimit: 8);
+    Check(boundedDirectories.Success && boundedDirectories.Scanned == 0 && boundedDirectories.Truncated,
+        "empty subdirectories must consume the traversal budget and mark an incomplete scan");
+    var allDirectories = AssetScanner.Scan(emptyTree, recursive: true, traversalLimit: 32);
+    Check(allDirectories.Scanned == 0 && !allDirectories.Truncated,
+        "a completed empty-directory traversal must not report file scans or truncation");
+
+    string nestedMedia = Path.Combine(emptyTree, "empty-15", "nested-asset.png");
+    File.WriteAllBytes(nestedMedia, new byte[] { 9, 8, 7 });
+    var nested = AssetScanner.Scan(emptyTree, query: "nested-asset", recursive: true, traversalLimit: 32);
+    Check(nested.Assets.Length == 1 && nested.Assets[0].Name == "nested-asset.png"
+        && nested.Scanned == 1 && !nested.Truncated,
+        "explicit traversal must find nested media without counting directories as files");
+    var nonrecursive = AssetScanner.Scan(emptyTree, query: "nested-asset", recursive: false);
+    Check(nonrecursive.Assets.Length == 0 && nonrecursive.Scanned == 0 && !nonrecursive.Truncated,
+        "nonrecursive scans must not enter subdirectories");
+    bool rejectedUnsafeLimit = false;
+    try { AssetScanner.Scan(emptyTree, traversalLimit: 20001); }
+    catch (ArgumentOutOfRangeException) { rejectedUnsafeLimit = true; }
+    Check(rejectedUnsafeLimit, "callers must not bypass the production traversal ceiling");
 }
 finally { Directory.Delete(root, recursive: true); }
 
