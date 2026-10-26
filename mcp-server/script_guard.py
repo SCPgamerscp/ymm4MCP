@@ -33,11 +33,9 @@ async def apply(args, get, add_script):
     result = await add_script(args, expected_snapshot=expected)
     # A malformed or contradictory result cannot certify a successful write.
     if (not isinstance(result, dict) or
-            ("success" in result and result["success"] is not True
-             and result["success"] is not False) or
-            (isinstance(result, dict) and result.get("success") is True
-             and ("error" in result or "error_code" in result)) or
-            (isinstance(result, dict) and "success" not in result)):
+            (result.get("success") is not True and result.get("success") is not False) or
+            (result.get("success") is True
+             and ("error" in result or "error_code" in result))):
         return {"success": False, "error_code": "SCRIPT_RESULT_INVALID",
                 "error": "Script host returned a malformed or contradictory result"}
     # A failed dry run must not be decorated with a trusted snapshot marker.
