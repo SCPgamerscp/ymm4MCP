@@ -55,40 +55,75 @@ namespace YMM4McpPlugin
         }
 
         public static AssetScanResult Scan(string directory, string? query = null, bool recursive = false,
-            bool hash = false, int maxResults = 100)
+            bool hash = false, int maxResults = 100, int traversalLimit = EnumerationLimit)
         {
             if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
                 throw new ArgumentException("directory must be an absolute path");
             if (maxResults is < 1 or > 500) throw new ArgumentException("max_results must be in 1..500");
+            if (traversalLimit is < 1 or > EnumerationLimit)
+                throw new ArgumentOutOfRangeException(nameof(traversalLimit));
             directory = Path.GetFullPath(directory);
             if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
+            // Enumerate each directory explicitly. Recursive EnumerateFiles only yields
+            // files, so a tree of empty directories could previously evade the work cap.
+            // An inaccessible subtree must not be silently treated as a complete scan.
             var options = new EnumerationOptions
             {
-                RecurseSubdirectories = recursive,
-                IgnoreInaccessible = true,
+                RecurseSubdirectories = false,
+                IgnoreInaccessible = false,
                 AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
             };
-            // Do not let 5000 unrelated files hide a matching media file.
-            // Both eligible candidates and total enumeration remain bounded.
             var paths = new List<string>();
+            var pendingDirectories = new Queue<string>();
+            pendingDirectories.Enqueue(directory);
             int scanned = 0;
+            int visitedEntries = 0; // Includes directories, not just files.
             bool truncated = false;
             bool hashTruncated = false;
-            try
+            bool stop = false;
+            while (pendingDirectories.Count > 0 && !stop)
             {
-                foreach (var path in Directory.EnumerateFiles(directory, "*", options))
+                string current = pendingDirectories.Dequeue();
+                try
                 {
-                    if (scanned >= EnumerationLimit) { truncated = true; break; }
-                    scanned++;
-                    if (!Extensions.Contains(Path.GetExtension(path)) ||
-                        (query != null && !Path.GetFileName(path).Contains(query, StringComparison.OrdinalIgnoreCase)))
-                        continue;
-                    if (paths.Count >= ScanLimit) { truncated = true; break; }
-                    paths.Add(path);
+                    foreach (var entry in Directory.EnumerateFileSystemEntries(current, "*", options))
+                    {
+                        if (visitedEntries >= traversalLimit)
+                        {
+                            truncated = true;
+                            stop = true;
+                            break;
+                        }
+                        visitedEntries++;
+                        FileAttributes attributes;
+                        try { attributes = File.GetAttributes(entry); }
+                        catch (IOException) { truncated = true; continue; }
+                        catch (UnauthorizedAccessException) { truncated = true; continue; }
+                        // Recheck attributes: an entry can become a symlink after
+                        // enumeration, and must never be followed into another tree.
+                        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.System)) != 0)
+                            continue;
+                        if ((attributes & FileAttributes.Directory) != 0)
+                        {
+                            if (recursive) pendingDirectories.Enqueue(entry);
+                            continue;
+                        }
+                        scanned++;
+                        if (!Extensions.Contains(Path.GetExtension(entry)) ||
+                            (query != null && !Path.GetFileName(entry).Contains(query, StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                        if (paths.Count >= ScanLimit)
+                        {
+                            truncated = true;
+                            stop = true;
+                            break;
+                        }
+                        paths.Add(entry);
+                    }
                 }
+                catch (IOException) { truncated = true; }
+                catch (UnauthorizedAccessException) { truncated = true; }
             }
-            catch (IOException) { truncated = true; }
-            catch (UnauthorizedAccessException) { truncated = true; }
 
             var assets = new List<AssetEntry>();
             long hashedBytes = 0;
