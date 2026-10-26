@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   python-tests:
-    if: github.event_name == 'pull_request'
+    # Release jobs must never ship a Python server whose tests were skipped.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -212,8 +212,12 @@ jobs:
 
   release:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    needs: package
+    needs: [package, python-tests]
     runs-on: windows-latest
+    # Serialize manual and tag releases to avoid competing tag/asset writes.
+    concurrency:
+      group: ymm4mcp-release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
