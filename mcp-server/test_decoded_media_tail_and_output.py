@@ -125,5 +125,53 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertFalse(report["passed"])
 
 
+    def test_rejects_impossible_or_incomplete_video_dimensions(self):
+        for dimensions in (
+            {"width": 0, "height": 1080},
+            {"width": -1, "height": 1080},
+            {"width": True, "height": 1080},
+            {"width": "1920", "height": 1080},
+            {"width": 1920},
+            {"height": 1080},
+            {"width": 16385, "height": 1080},
+        ):
+            with self.subTest(dimensions=dimensions):
+                streams = [{"codec_type": "video", **dimensions},
+                           {"codec_type": "audio"}]
+                report = self.inspect_with_probe(json.dumps({
+                    "format": {"duration": "12"}, "streams": streams}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+                self.assertFalse(report["passed"])
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "width": 1920, "height": 1080},
+                        {"codec_type": "audio"}]}))
+        self.assertTrue(valid["passed"], valid)
+
+    def test_rejects_unusable_audio_sample_rate_and_channels(self):
+        for fields in (
+            {"sample_rate": "0", "channels": 2},
+            {"sample_rate": "-48000", "channels": 2},
+            {"sample_rate": "48k", "channels": 2},
+            {"sample_rate": 48000, "channels": 2},
+            {"sample_rate": None, "channels": 2},
+            {"sample_rate": "48000", "channels": 0},
+            {"sample_rate": "48000", "channels": False},
+            {"sample_rate": "48000", "channels": "2"},
+        ):
+            with self.subTest(fields=fields):
+                report = self.inspect_with_probe(json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video"},
+                                {"codec_type": "audio", **fields}]}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+                self.assertFalse(report["passed"])
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"},
+                        {"codec_type": "audio", "sample_rate": "48000", "channels": 2}]}))
+        self.assertTrue(valid["passed"], valid)
+
+
 if __name__ == "__main__":
     unittest.main()
