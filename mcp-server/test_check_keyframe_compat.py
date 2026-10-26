@@ -1,0 +1,114 @@
+"""Mocked protocol regression tests; the real YMM4 test is opt-in only."""
+import json
+import unittest
+
+import httpx
+
+from check_keyframe_compat import ProbeError, run_probe
+
+
+BASE = "http://127.0.0.1:8765/api"
+HEADERS = {"X-Ymm4-Token": "fake-test-token"}
+
+
+class FakeYmm4:
+    def __init__(self):
+        self.frames = {"Zoom": [{"at": 0, "value": 1.0}],
+                       "X": [{"at": 0, "value": 0.0}]}
+        self.posts = []
+        self.revision = 1
+        self.fail_set = None
+        self.bad_value = None
+        self.fail_remove = None
+
+    def __call__(self, request):
+        assert request.headers.get("X-Ymm4-Token") == "fake-test-token"
+        assert request.url.host == "127.0.0.1"
+        if request.method == "GET":
+            prop = request.url.params.get("prop")
+            if prop not in self.frames:
+                return httpx.Response(200, json={"success": True, "animations": [],
+                                                  "revision": f"r{self.revision}"})
+            return httpx.Response(200, json={"success": True, "animations": [
+                {"prop": prop, "keyframes": [dict(f) for f in self.frames[prop]]}],
+                "revision": f"r{self.revision}"})
+        body = json.loads(request.content)
+        self.posts.append(body)
+        prop, at, action = body["prop"], body["at"], body["action"]
+        if body["expected_revision"] != f"r{self.revision}":
+            return httpx.Response(200, json={"success": False,
+                                              "error_code": "REVISION_CONFLICT"})
+        if action == "set":
+            value = body["value"]
+            if prop == self.bad_value:
+                value += 10
+            self.frames[prop].append({"at": at, "value": value})
+            self.revision += 1
+            if prop == self.fail_set:
+                return httpx.Response(200, json={"success": False,
+                                                  "error_code": "KEYFRAME_METHOD_UNAVAILABLE"})
+        elif action == "remove":
+            if prop != self.fail_remove:
+                self.frames[prop] = [f for f in self.frames[prop] if f["at"] != at]
+            self.revision += 1
+        return httpx.Response(200, json={"success": True})
+
+
+def probe(fake):
+    with httpx.Client(transport=httpx.MockTransport(fake), trust_env=False) as client:
+        run_probe(client, BASE, HEADERS, "native:test/with spaces", 24,
+                  {"Zoom": 1.25, "X": 80.0})
+
+
+class LiveProbeProtocolTests(unittest.TestCase):
+    def test_success_sets_reads_and_removes_both_properties(self):
+        fake = FakeYmm4()
+        probe(fake)
+        self.assertEqual(len(fake.posts), 4)
+        self.assertEqual([p["action"] for p in fake.posts],
+                         ["set", "set", "remove", "remove"])
+        self.assertEqual([p["prop"] for p in fake.posts],
+                         ["Zoom", "X", "X", "Zoom"])
+        self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
+        self.assertEqual([f["at"] for f in fake.frames["X"]], [0])
+
+    def test_existing_keyframe_aborts_before_any_write(self):
+        fake = FakeYmm4()
+        fake.frames["X"].append({"at": 24, "value": 42.0})
+        with self.assertRaisesRegex(ProbeError, "already exists"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+
+    def test_missing_animation_aborts_before_any_write(self):
+        fake = FakeYmm4()
+        del fake.frames["X"]
+        with self.assertRaisesRegex(ProbeError, "unavailable"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+
+    def test_post_can_fail_after_mutation_and_still_clean_up(self):
+        fake = FakeYmm4()
+        fake.fail_set = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "KEYFRAME_METHOD_UNAVAILABLE"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
+        self.assertEqual(len(fake.frames["Zoom"]), 1)
+
+    def test_readback_mismatch_cleans_up_and_fails(self):
+        fake = FakeYmm4()
+        fake.bad_value = "X"
+        with self.assertRaisesRegex(ProbeError, "wrong value"):
+            probe(fake)
+        self.assertEqual(len(fake.frames["Zoom"]), 1)
+        self.assertEqual(len(fake.frames["X"]), 1)
+
+    def test_cleanup_failure_is_reported_not_hidden(self):
+        fake = FakeYmm4()
+        fake.fail_remove = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED"):
+            probe(fake)
+        self.assertEqual(len(fake.frames["Zoom"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
