@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace YMM4McpPlugin
 {
@@ -37,6 +38,21 @@ namespace YMM4McpPlugin
                 issues.Add(new("EXPORT_VERIFY_FAILED", "error", inspection.Error));
             else
             {
+                // A verified MP4 must have a valid container identity and usable
+                // resolution. Optional metadata (such as frame rate) may be absent.
+                if (string.IsNullOrWhiteSpace(inspection.Brand) ||
+                    inspection.Brand.Length != 4 ||
+                    inspection.Brand.Any(ch => ch < 0x20 || ch > 0x7e))
+                    issues.Add(new("INVALID_BRAND_METADATA", "error",
+                        "MP4 ブランドメタデータが不正です", Actual: inspection.Brand));
+                if (inspection.Width is int w && w > 16384 ||
+                    inspection.Height is int h && h > 16384)
+                    issues.Add(new("INVALID_RESOLUTION_METADATA", "error",
+                        "動画の解像度がサポート範囲外です"));
+                if (!inspection.HasAudio &&
+                    (inspection.AudioSampleRate.HasValue || inspection.AudioChannels.HasValue))
+                    issues.Add(new("INCONSISTENT_AUDIO_METADATA", "error",
+                        "音声トラックがないのに音声形式メタデータが存在します"));
                 // Unknown optional metadata is allowed, but a reported numeric value
                 // must never be non-finite or physically impossible.
                 if (inspection.DurationSeconds is double actualDuration &&
