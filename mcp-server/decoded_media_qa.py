@@ -52,6 +52,11 @@ def _audio_peak_db(log):
     return max(peaks) if peaks else None
 
 
+def _reject_nonfinite_json(value):
+    """Strict JSON does not permit NaN or Infinity tokens."""
+    raise ValueError("non-standard JSON number: " + value)
+
+
 def failure(code, message):
     return {"success": False, "passed": False, "issues": [], "error_code": code, "error": message}
 
@@ -80,7 +85,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if not exists:
         return failure("EXPORT_FILE_MISSING", "動画ファイルがありません（Python MCP側のローカルパスを指定）")
     try:
-        if target.stat().st_size < 32:
+        initial_stat = target.stat()
+        if initial_stat.st_size < 32:
             return failure("EXPORT_FILE_EMPTY", "動画ファイルが小さすぎます")
     except OSError:
         return failure("EXPORT_VERIFY_FAILED", "動画ファイルを読み取れません")
@@ -98,9 +104,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if probe.returncode or len(probe.stdout) > 1_000_000:
         return failure("EXPORT_PROBE_FAILED", "ffprobeで動画を解析できません")
     try:
-        info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs)
+        info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs,
+                          parse_constant=_reject_nonfinite_json)
         streams = info["streams"]
-        duration = float(info["format"]["duration"])
+        raw_duration = info["format"]["duration"]
+        if (isinstance(raw_duration, bool)
+                or not isinstance(raw_duration, (int, float, str))
+                or (isinstance(raw_duration, str)
+                    and (not raw_duration or raw_duration.strip() != raw_duration))):
+            raise ValueError("invalid duration type")
+        duration = float(raw_duration)
         if not isinstance(streams, list) or not math.isfinite(duration) or duration <= 0:
             raise ValueError("invalid metadata")
         seen_indices = set()
@@ -146,6 +159,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     videos = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
     audios = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"]
+    # Sample decoding is synchronous: cap total stream work before launching
+    # per-stream subprocesses, including streams not required by the caller.
+    if len(videos) + len(audios) > 16:
+        return failure("EXPORT_STREAM_LIMIT", "映像・音声ストリームが多すぎます（最大16）")
     issues = []
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
@@ -167,9 +184,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         if length <= 0:
             continue
         samples.append({"start_seconds": round(start, 3), "duration_seconds": round(length, 3)})
-        for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
-            if not present:
-                continue
+        # A successful first track cannot certify another broken track.
+        for kind, ordinal, stream in (
+                [("video", i, track) for i, track in enumerate(videos)]
+                + [("audio", i, track) for i, track in enumerate(audios)]):
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
             signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98"
@@ -177,7 +195,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "info", "-xerror", "-ss", format(start, ".3f"),
                        "-i", str(target), "-t", format(length, ".3f"),
-                       "-map", "0:v:0" if kind == "video" else "0:a:0",
+                       "-map", f"0:v:{ordinal}" if kind == "video" else f"0:a:{ordinal}",
                        "-vf" if kind == "video" else "-af", signal_filter,
                        "-abort_on", "empty_output", "-f", "null", "-"]
             try:
@@ -190,13 +208,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 return failure("EXPORT_DECODE_FAILED", "ffmpegを実行できません")
             if decoded.returncode:
                 issues.append({"code": "EXPORT_DECODE_FAILED", "severity": "error",
-                               "stream_type": kind, "start_seconds": round(start, 3),
+                               "stream_type": kind, "stream_ordinal": ordinal,
+                               "start_seconds": round(start, 3),
                                "details": (decoded.stderr or "")[-500:]})
                 continue
             if kind == "audio":
                 peak = _audio_peak_db(decoded.stderr or "")
                 if peak is not None:
                     peak_event = {"sample_start_seconds": round(start, 3),
+                                  "stream_ordinal": ordinal,
                                   "peak_dbfs": round(peak, 3)}
                     audio_peaks.append(peak_event)
                     # Near-0 dBFS samples may be clipped, but a peak alone
@@ -211,6 +231,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name):
                 event = {"sample_start_seconds": round(start, 3),
+                         "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
                          "filter_end_seconds": round(signal_end, 3),
                          "duration_seconds": round(signal_end - signal_start, 3)}
@@ -257,6 +278,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
                                "severity": "error", "stream_type": kind,
                                "details": (decoded.stderr or "")[-500:]})
+    # A video replaced or modified during ffprobe/ffmpeg cannot be certified
+    # using observations from different file versions.
+    try:
+        final_stat = target.stat()
+    except OSError:
+        return failure("EXPORT_VERIFY_FAILED", "検証後に動画ファイルを読み取れません")
+    identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    if identity(initial_stat) != identity(final_stat):
+        return failure("EXPORT_FILE_CHANGED", "検証中に動画ファイルが変更されました")
     passed = not any(issue["severity"] == "error" for issue in issues)
     fully_decoded = bool(full_decode and full_decode_ok and passed)
     return {"success": True,
