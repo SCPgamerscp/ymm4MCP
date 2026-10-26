@@ -36,15 +36,28 @@ except Exception as e:  # pragma: no cover
     _GENAI_IMPORT_ERROR = str(e)
 
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+MAX_MODEL_CONFIG_BYTES = 64 * 1024
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\\Z")
+
+
 def _get_default_model() -> str:
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     try:
         if os.path.isfile(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f).get("default_model", "gemini-2.5-flash")
-    except Exception:
+            # A local corrupt/oversized config must not prevent video analysis.
+            with open(config_path, "rb") as f:
+                raw = f.read(MAX_MODEL_CONFIG_BYTES + 1)
+            if len(raw) > MAX_MODEL_CONFIG_BYTES:
+                return DEFAULT_GEMINI_MODEL
+            config = json.loads(raw.decode("utf-8-sig"))
+            if isinstance(config, dict):
+                model = config.get("default_model")
+                if isinstance(model, str) and _MODEL_ID.fullmatch(model):
+                    return model
+    except (OSError, UnicodeError, ValueError):
         pass
-    return "gemini-2.5-flash"
+    return DEFAULT_GEMINI_MODEL
 
 DEFAULT_MODEL = _get_default_model()
 
