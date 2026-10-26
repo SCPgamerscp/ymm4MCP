@@ -753,5 +753,69 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertTrue(report["passed"], report)
         self.assertFalse(any("MISMATCH" in i["code"] for i in report["issues"]))
 
+
+    def test_nonzero_container_origin_does_not_invent_track_gaps(self):
+        metadata = json.dumps({
+            "format": {"duration": "20", "start_time": "10.5"},
+            "streams": [{"codec_type": "video", "start_time": "10.5",
+                         "duration": "20"},
+                        {"codec_type": "audio", "start_time": "10.5",
+                         "duration": "20"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any(i["code"] in (
+            "EXPORT_STREAM_STARTS_LATE", "EXPORT_STREAM_EXCEEDS_CONTAINER",
+            "EXPORT_STREAM_ENDS_EARLY") for i in report["issues"]))
+
+    def test_track_delay_is_relative_to_container_origin(self):
+        metadata = json.dumps({
+            "format": {"duration": "20", "start_time": "10"},
+            "streams": [{"codec_type": "video", "start_time": "12",
+                         "duration": "18"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        warning = next(i for i in report["issues"]
+                       if i["code"] == "EXPORT_STREAM_STARTS_LATE")
+        self.assertEqual(warning["missing_head_seconds"], 2.0)
+        self.assertFalse(any(i["code"] == "EXPORT_STREAM_EXCEEDS_CONTAINER"
+                             for i in report["issues"]))
+
+    def test_invalid_container_start_time_fails_closed(self):
+        for start in (True, 5, "NaN", "1_0", "1e9999"):
+            with self.subTest(start=start):
+                metadata = json.dumps({
+                    "format": {"duration": "20", "start_time": start},
+                    "streams": [{"codec_type": "video"}]})
+                report = self.inspect_with_probe(metadata)
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
+    def test_signal_warnings_include_absolute_video_timestamps(self):
+        metadata = json.dumps({
+            "format": {"duration": "12.5"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            log = ("black_start: 1 black_end: 3 freeze_start: 4 freeze_end: 6"
+                   if "0:v:0" in command else "silence_start: 2 silence_end: 4")
+            return subprocess.CompletedProcess(command, 0, "", log)
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        for key, relative_start, relative_end in (
+                ("black_frames", 1, 3), ("frozen_frames", 4, 6),
+                ("long_silences", 2, 4)):
+            event = next(e for e in report[key] if e["sample_start_seconds"] == 4.5)
+            self.assertEqual(event["video_start_seconds"], 4.5 + relative_start)
+            self.assertEqual(event["video_end_seconds"], 4.5 + relative_end)
+
+    def test_file_identity_detects_restored_mtime_with_changed_ctime(self):
+        from types import SimpleNamespace
+        original = SimpleNamespace(st_dev=1, st_ino=2, st_size=100,
+                                   st_mtime_ns=500, st_ctime_ns=700)
+        changed = SimpleNamespace(st_dev=1, st_ino=2, st_size=100,
+                                  st_mtime_ns=500, st_ctime_ns=701)
+        self.assertNotEqual(qa._file_identity(original), qa._file_identity(changed))
+
 if __name__ == "__main__":
     unittest.main()
