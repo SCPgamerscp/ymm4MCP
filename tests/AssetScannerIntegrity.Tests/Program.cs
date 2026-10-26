@@ -36,6 +36,29 @@ try
     Check(AssetScanner.HashFile(info, bytes.Length + 1, info.LastWriteTimeUtc) == null,
         "stale file length must not certify a digest");
 
+    // A rejected digest still consumes hashing work. The budget is reserved
+    // before the read and is not refunded if metadata verification fails.
+    long staleBudget = 0;
+    Check(AssetScanner.TryReserveHashBudget(bytes.Length, ref staleBudget),
+        "stale candidate should reserve hash work");
+    Check(AssetScanner.HashFile(info, bytes.Length, originalWrite) == null,
+        "stale digest must be rejected");
+    Check(staleBudget == bytes.Length, "rejected digest must retain its budget charge");
+
+    const long chunk = 64L * 1024 * 1024;
+    long totalBudget = 0;
+    for (int i = 0; i < 4; i++)
+        Check(AssetScanner.TryReserveHashBudget(chunk, ref totalBudget),
+            "each 64 MiB attempt must fit within 256 MiB total");
+    Check(totalBudget == 4 * chunk, "attempted bytes must be accounted for");
+    Check(!AssetScanner.TryReserveHashBudget(1, ref totalBudget),
+        "a fifth attempt must be blocked after exhausting total budget");
+    Check(totalBudget == 4 * chunk, "rejected reservation must not change the counter");
+    long freshBudget = 0;
+    Check(!AssetScanner.TryReserveHashBudget(chunk + 1, ref freshBudget),
+        "oversized single file must not be hashed");
+    Check(freshBudget == 0, "oversized file must not consume hash budget");
+
     File.WriteAllBytes(Path.Combine(root, "duplicate.png"), bytes);
     var duplicates = AssetScanner.Scan(root, hash: true);
     Check(duplicates.Duplicates.Length == 1 && duplicates.Duplicates[0].Length == 2,
