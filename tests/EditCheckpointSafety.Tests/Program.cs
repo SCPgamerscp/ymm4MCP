@@ -35,7 +35,7 @@ foreach (var invalid in new[]
     new[] { "item-1", "item-1" },
     new[] { "item-1", "" },
     new[] { "item-1", " item-2" },
-    new[] { "item-1", "item\\n2" },
+    new[] { "item-1", "item\n2" },
 })
 {
     try
