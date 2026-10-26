@@ -54,6 +54,18 @@ Check(!EditCheckpointSafety.SameProject("C:\\one.ymmp", "C:\\two.ymmp"),
 Check(EditCheckpointSafety.SameProject("C:\\one.ymmp", "C:\\ONE.ymmp"),
     "Windows project path comparison should be case-insensitive");
 
+string ownedDir = Path.Combine(Path.GetTempPath(), "ymm4-owned-backups");
+Check(EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "cp_12345678.ymmp"), ownedDir),
+    "owned checkpoint backup rejected");
+Check(!EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "..", "outside", "cp_12345678.ymmp"), ownedDir),
+    "backup cleanup escaped its directory");
+Check(!EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "other.ymmp"), ownedDir),
+    "non-checkpoint backup accepted for deletion");
+Check(!EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "cp_12345678.txt"), ownedDir),
+    "non-ymmp file accepted for deletion");
+Check(!EditCheckpointSafety.IsOwnedBackupPath(null, ownedDir),
+    "null backup path accepted for deletion");
+
 string root = Path.Combine(Path.GetTempPath(), "ymm4-checkpoint-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try
