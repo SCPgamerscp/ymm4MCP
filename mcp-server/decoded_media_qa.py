@@ -3,7 +3,7 @@ import json
 import math
 import re
 import subprocess
-import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -22,7 +22,7 @@ def _unique_object_pairs(pairs):
     return result
 
 
-def _signal_ranges(log, start_name, end_name):
+def _signal_ranges(log, start_name, end_name, window_duration=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
                          + r"):\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])")
@@ -38,12 +38,18 @@ def _signal_ranges(log, start_name, end_name):
             # FFmpeg may report negative silence_start during filter preroll.
             # Clamp it rather than turning '-1.5' into a positive 1.5.
             value = max(0.0, value)
+            if window_duration is not None:
+                value = min(value, window_duration)
             if name == start_name:
                 start = value
             elif start is not None:
                 if value > start:
                     ranges.append((start, value))
                 start = None
+    # A black/silent interval that reaches EOF has no matching *_end line.
+    # Close it at the decoded window boundary rather than silently dropping it.
+    if start is not None and window_duration is not None and start < window_duration:
+        ranges.append((start, window_duration))
     return ranges
 
 
@@ -80,26 +86,58 @@ def failure(code, message):
 
 
 def run(command, timeout):
-    """Bound captured process output in memory, including hostile FFmpeg logs.
+    """Drain both child pipes without unbounded RAM or temporary-disk usage.
 
-    Child output is spooled to temporary files instead of accumulating in
-    subprocess.PIPE. Keep the first 1 MiB + 1 byte of stdout (so oversized
-    ffprobe metadata remains detectable), and the final 1 MiB of stderr for
-    error diagnostics and signal hints.
+    Keep the first 1,000,001 stdout bytes for ffprobe's metadata limit and
+    the final 1,000,000 stderr bytes for diagnostics. Discard excess bytes as
+    they arrive so even a noisy FFmpeg process cannot fill a temporary disk.
     """
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        completed = subprocess.run(command, stdin=subprocess.DEVNULL,
-                                   stdout=stdout, stderr=stderr,
-                                   timeout=timeout, check=False)
-        stdout.seek(0)
-        output = stdout.read(1_000_001).decode("utf-8")
-        stderr.seek(0, 2)
-        size = stderr.tell()
-        stderr.seek(max(0, size - 1_000_000))
-        diagnostics = stderr.read().decode("utf-8", errors="replace")
-    return subprocess.CompletedProcess(command, completed.returncode,
-                                       output, diagnostics)
+    stdout_head = bytearray()
+    stderr_tail = bytearray()
+    errors = []
 
+    def drain(pipe, keep_head):
+        try:
+            while True:
+                chunk = pipe.read(65_536)
+                if not chunk:
+                    break
+                if keep_head:
+                    room = 1_000_001 - len(stdout_head)
+                    if room > 0:
+                        stdout_head.extend(chunk[:room])
+                else:
+                    stderr_tail.extend(chunk)
+                    if len(stderr_tail) > 1_000_000:
+                        del stderr_tail[:-1_000_000]
+        except OSError as exc:
+            errors.append(exc)
+        finally:
+            pipe.close()
+
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        stdout_thread = threading.Thread(target=drain, args=(process.stdout, True),
+                                         daemon=True)
+        stderr_thread = threading.Thread(target=drain, args=(process.stderr, False),
+                                         daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            stdout_thread.join()
+            stderr_thread.join()
+            raise
+        stdout_thread.join()
+        stderr_thread.join()
+    if errors:
+        raise OSError("failed to capture FFmpeg process output") from errors[0]
+    return subprocess.CompletedProcess(
+        command, returncode, stdout_head.decode("utf-8"),
+        stderr_tail.decode("utf-8", errors="replace"))
 
 def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     """Sample both ends and optionally decode all video/audio streams end-to-end."""
@@ -287,7 +325,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             start_name, end_name = (("black_start", "black_end") if kind == "video"
                                     else ("silence_start", "silence_end"))
             for signal_start, signal_end in _signal_ranges(
-                    decoded.stderr or "", start_name, end_name):
+                    decoded.stderr or "", start_name, end_name, length):
                 event = {"sample_start_seconds": round(start, 6),
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
