@@ -14,6 +14,9 @@ namespace YMM4McpPlugin
     internal static class AssetScanner
     {
         private const int ScanLimit = 5000;
+        // Bound the work even when the requested folder contains no media.
+        // Unlike ScanLimit, this counts unrelated files too.
+        private const int EnumerationLimit = 20000;
         private const long HashLimit = 64L * 1024 * 1024;
         private const long TotalHashLimit = 256L * 1024 * 1024;
         private static readonly HashSet<string> Extensions = new(StringComparer.OrdinalIgnoreCase)
@@ -21,6 +24,23 @@ namespace YMM4McpPlugin
             ".mp4", ".mov", ".mkv", ".webm", ".avi", ".wav", ".mp3", ".flac", ".ogg",
             ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"
         };
+
+        // The file's metadata must still describe the bytes that were hashed.
+        // FileInfo.OpenRead uses FileShare.Read, preventing concurrent writers
+        // on Windows while the stream is open. Recheck size, timestamp, and
+        // reparse-point status after hashing to reject stale scan metadata.
+        internal static string? HashFile(FileInfo file, long expectedBytes, DateTime expectedLastWriteUtc)
+        {
+            using var stream = file.OpenRead();
+            if (stream.Length != expectedBytes) return null;
+            string digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            file.Refresh();
+            if (!file.Exists || file.Length != expectedBytes
+                || file.LastWriteTimeUtc != expectedLastWriteUtc
+                || (file.Attributes & FileAttributes.ReparsePoint) != 0)
+                return null;
+            return digest;
+        }
 
         public static AssetScanResult Scan(string directory, string? query = null, bool recursive = false,
             bool hash = false, int maxResults = 100)
@@ -36,21 +56,27 @@ namespace YMM4McpPlugin
                 IgnoreInaccessible = true,
                 AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
             };
-            // Gather at most ScanLimit paths before hashing. The filesystem's enumeration
-            // order is unspecified, so selecting and hashing in that order would produce
-            // different results (and duplicate groups) on repeated scans.
+            // Do not let 5000 unrelated files hide a matching media file.
+            // Both eligible candidates and total enumeration remain bounded.
             var paths = new List<string>();
             int scanned = 0;
             bool truncated = false;
             bool hashTruncated = false;
-            foreach (var path in Directory.EnumerateFiles(directory, "*", options))
+            try
             {
-                if (++scanned > ScanLimit) { truncated = true; break; }
-                if (!Extensions.Contains(Path.GetExtension(path)) ||
-                    (query != null && !Path.GetFileName(path).Contains(query, StringComparison.OrdinalIgnoreCase)))
-                    continue;
-                paths.Add(path);
+                foreach (var path in Directory.EnumerateFiles(directory, "*", options))
+                {
+                    if (scanned >= EnumerationLimit) { truncated = true; break; }
+                    scanned++;
+                    if (!Extensions.Contains(Path.GetExtension(path)) ||
+                        (query != null && !Path.GetFileName(path).Contains(query, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    if (paths.Count >= ScanLimit) { truncated = true; break; }
+                    paths.Add(path);
+                }
             }
+            catch (IOException) { truncated = true; }
+            catch (UnauthorizedAccessException) { truncated = true; }
 
             var assets = new List<AssetEntry>();
             long hashedBytes = 0;
@@ -60,11 +86,13 @@ namespace YMM4McpPlugin
                 if (assets.Count >= maxResults) { truncated = true; break; }
                 try
                 {
-                    // Files can disappear or become inaccessible between enumeration and
-                    // inspection; skip them instead of aborting the entire library scan.
+                    // A file can disappear or be replaced by a symlink after
+                    // enumeration. Never follow a newly introduced reparse point.
                     var file = new FileInfo(path);
+                    if ((file.Attributes & FileAttributes.ReparsePoint) != 0) continue;
                     long bytes = file.Length;
-                    string modified = file.LastWriteTimeUtc.ToString("O");
+                    DateTime modifiedUtc = file.LastWriteTimeUtc;
+                    string modified = modifiedUtc.ToString("O");
                     string? sha = null;
                     if (hash)
                     {
@@ -74,16 +102,9 @@ namespace YMM4McpPlugin
                         {
                             try
                             {
-                                using var stream = file.OpenRead();
-                                // Do not publish a hash for a file whose size changed
-                                // after its metadata was read.
-                                if (stream.Length != bytes)
-                                    hashTruncated = true;
-                                else
-                                {
-                                    sha = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-                                    hashedBytes += bytes;
-                                }
+                                sha = HashFile(file, bytes, modifiedUtc);
+                                if (sha == null) hashTruncated = true;
+                                else hashedBytes += bytes;
                             }
                             catch (IOException) { hashTruncated = true; }
                             catch (UnauthorizedAccessException) { hashTruncated = true; }
