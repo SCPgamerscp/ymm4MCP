@@ -21,6 +21,42 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("duplicate logical binding id: " + logicalId);
         }
 
+        // Reconcile may extend a partially applied plan, or replace a bound item
+        // that has been deleted. Never remap a binding while its old native item
+        // still exists, and never persist a binding to a nonexistent item.
+        internal static bool CompatibleBindingUpdate(
+            IEnumerable<(string Id, string ItemId, string? Revision)> previous,
+            IEnumerable<(string Id, string ItemId, string? Revision)> proposed,
+            IReadOnlyCollection<string>? liveItemIds)
+        {
+            if (previous == null || proposed == null || liveItemIds == null)
+                return false;
+            var live = new HashSet<string>(liveItemIds, StringComparer.Ordinal);
+            if (live.Count != liveItemIds.Count || live.Any(string.IsNullOrWhiteSpace))
+                return false;
+            var incoming = new Dictionary<string, (string ItemId, string? Revision)>(StringComparer.Ordinal);
+            var claimedItems = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in proposed)
+            {
+                if (!live.Contains(item.ItemId) || !claimedItems.Add(item.ItemId)
+                    || !incoming.TryAdd(item.Id, (item.ItemId, item.Revision)))
+                    return false;
+            }
+            var oldIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in previous)
+            {
+                if (!oldIds.Add(item.Id)) return false;
+                if (live.Contains(item.ItemId))
+                {
+                    if (!incoming.TryGetValue(item.Id, out var next)
+                        || !string.Equals(next.ItemId, item.ItemId, StringComparison.Ordinal)
+                        || !string.Equals(next.Revision, item.Revision, StringComparison.Ordinal))
+                        return false;
+                }
+            }
+            return true;
+        }
+
         // A checkpoint is only safe to use when every native item can be identified
         // uniquely. An empty list is valid for a genuinely empty timeline.
         internal static void ValidateSnapshotItemIds(IEnumerable<string> itemIds)
