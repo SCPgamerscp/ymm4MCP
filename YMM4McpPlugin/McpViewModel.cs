@@ -24,6 +24,7 @@ namespace YMM4McpPlugin
                 Application.Current.Exit += (_, _) => Server.Stop();
             var context = AssemblyLoadContext.GetLoadContext(typeof(McpViewModel).Assembly);
             if (context != null) context.Unloading += _ => Server.Stop();
+            _startupError = Server.Settings.LoadWarning;
             if (Server.Settings.AutoStart)
                 try { Server.Start(); } catch (Exception ex) { _startupError = ex.Message; }
         }

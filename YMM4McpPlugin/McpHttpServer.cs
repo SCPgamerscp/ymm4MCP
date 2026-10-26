@@ -59,16 +59,28 @@ namespace YMM4McpPlugin
                     string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
                     string temp = McpSettings.ConnectionPath + ".tmp";
                     File.WriteAllText(temp, JsonSerializer.Serialize(new { api_base = BaseUrl + "api", token }));
-                    File.Move(temp, McpSettings.ConnectionPath, true);
                     _token = token;
                     _allowAdvanced = Settings.AllowAdvanced;
                     _listener = listener;
-                    _ = ListenLoop(listener);
                     RestorePersistedJobs();
                     RestoreEditBindings();
                     RestoreCheckpoints();
+                    // Only publish a working listener after all startup recovery
+                    // steps succeed. Until then clients cannot discover its token.
+                    File.Move(temp, McpSettings.ConnectionPath, true);
+                    _ = ListenLoop(listener);
                 }
-                catch { listener.Close(); throw; }
+                catch
+                {
+                    listener.Close();
+                    if (ReferenceEquals(_listener, listener)) _listener = null;
+                    _token = "";
+                    // A failed startup must not leave a temporary bearer token.
+                    try { File.Delete(McpSettings.ConnectionPath + ".tmp"); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                    throw;
+                }
             }
             StateChanged?.Invoke();
             Log($"MCPサーバー起動: {BaseUrl}");
