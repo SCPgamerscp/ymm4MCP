@@ -6,6 +6,8 @@ from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
 
+from editing import MAX_FRAME
+
 
 def thumbnail(image_b64: str) -> bytes:
     if not isinstance(image_b64, str) or len(image_b64) > 14_000_000:
@@ -60,9 +62,9 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     """Only mark observed frames; gaps between samples are never called exact boundaries."""
     if not isinstance(samples, list) or not 1 <= len(samples) <= 40:
         raise ValueError("samples must contain 1..40 captures")
-    if isinstance(step_frames, bool) or not isinstance(step_frames, int) or step_frames < 1:
+    if isinstance(step_frames, bool) or not isinstance(step_frames, int) or not 1 <= step_frames <= MAX_FRAME:
         raise ValueError("step_frames must be positive")
-    if isinstance(min_static_frames, bool) or not isinstance(min_static_frames, int) or min_static_frames < 1:
+    if isinstance(min_static_frames, bool) or not isinstance(min_static_frames, int) or not 1 <= min_static_frames <= MAX_FRAME:
         raise ValueError("min_static_frames must be positive")
     if not isinstance(black_as_error, bool) or not isinstance(white_as_error, bool):
         raise ValueError("black_as_error and white_as_error must be boolean")
@@ -70,7 +72,7 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     for sample in samples:
         if (not isinstance(sample, tuple) or len(sample) != 2 or
                 isinstance(sample[0], bool) or not isinstance(sample[0], int) or
-                sample[0] <= last_frame or not isinstance(sample[1], bytes) or
+                sample[0] <= last_frame or sample[0] > MAX_FRAME or not isinstance(sample[1], bytes) or
                 len(sample[1]) != 64 * 36 * 3):
             raise ValueError("samples must have ascending frames and complete RGB thumbnails")
         last_frame = sample[0]
