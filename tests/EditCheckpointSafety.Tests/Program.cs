@@ -27,6 +27,45 @@ ExpectInvalid("scene-4", "native:\0bad");
 ExpectInvalid(new string('x', 513), "native:other");
 Check(EditCheckpointSafety.MaxBindings == 5000, "binding limit changed unexpectedly");
 
+// Reconcile must extend partial plans without allowing live native bindings to
+// be silently remapped or revised. A deleted native item may be replaced.
+var original = new (string Id, string ItemId, string? Revision)[]
+{
+    ("scene-a", "native:a", "rev-a")
+};
+var expanded = new (string Id, string ItemId, string? Revision)[]
+{
+    ("scene-a", "native:a", "rev-a"),
+    ("scene-b", "native:b", "rev-b")
+};
+Check(EditCheckpointSafety.CompatibleBindingUpdate(original, expanded,
+        new[] { "native:a", "native:b" }),
+    "partial EditPlan binding extension must be allowed");
+Check(EditCheckpointSafety.CompatibleBindingUpdate(expanded,
+        new[] { expanded[1], expanded[0] }, new[] { "native:a", "native:b" }),
+    "reordering identical bindings must not cause a conflict");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(original,
+        new[] { ("scene-a", "native:b", "rev-b") }, new[] { "native:a", "native:b" }),
+    "a surviving native item must not be remapped");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(original,
+        new[] { ("scene-a", "native:a", "changed") }, new[] { "native:a" }),
+    "a surviving native item revision must not be changed");
+Check(EditCheckpointSafety.CompatibleBindingUpdate(original,
+        new[] { ("scene-a", "native:b", "rev-b") }, new[] { "native:b" }),
+    "a deleted native item may be replaced during reconcile");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(original,
+        new[] { ("scene-a", "native:missing", "rev-b") }, new[] { "native:b" }),
+    "replacement bindings must point to live native items");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(original, expanded,
+        new[] { "native:a", "native:a", "native:b" }),
+    "ambiguous live item IDs must fail closed");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(original, expanded, null),
+    "missing timeline snapshot must not authorize remaps");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(original,
+        new[] { ("scene-a", "native:a", "rev-a"), ("scene-b", "native:a", "rev-b") },
+        new[] { "native:a" }),
+    "two logical bindings must not claim the same native item");
+
 // A missing or ambiguous snapshot must never authorize destructive rollback.
 EditCheckpointSafety.ValidateSnapshotItemIds(Array.Empty<string>());
 EditCheckpointSafety.ValidateSnapshotItemIds(new[] { "item-1", "item-2" });
