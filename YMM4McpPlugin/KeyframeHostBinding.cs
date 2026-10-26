@@ -26,6 +26,12 @@ namespace YMM4McpPlugin
             }
         }
 
+        // Never report a nonzero keyframe insertion as successful when the
+        // animation could not be attached to the item's shared KeyFrames.
+        // Frame zero does not create a new shared keyframe.
+        internal static bool CanSetAt(object item, object animation, int relativeFrame)
+            => relativeFrame == 0 || TryBind(item, animation);
+
         internal static bool TryBind(object item, object animation)
         {
             var flags = BindingFlags.Public | BindingFlags.Instance;
@@ -34,14 +40,13 @@ namespace YMM4McpPlugin
             object? existing;
             try { existing = animationProperty.GetValue(animation); }
             catch { return false; }
-            // An Animation already attached to a different item's collection
-            // must not be edited as though it belonged to this timeline item.
-            if (existing != null) return !HasConflictingBinding(item, animation);
-
+            // A non-null animation binding is only valid if it is the exact
+            // shared collection owned by the requested timeline item.
             object? shared;
             try { shared = item.GetType().GetProperty("KeyFrames", flags)?.GetValue(item); }
             catch { return false; }
             if (shared == null) return false;
+            if (existing != null) return ReferenceEquals(existing, shared);
 
             // Use the documented SetKeyFrames(KeyFrames) API rather than trying
             // to assign the getter-only Animation.KeyFrames property.
