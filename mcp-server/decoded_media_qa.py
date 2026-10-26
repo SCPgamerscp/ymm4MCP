@@ -120,37 +120,52 @@ def failure(code, message):
 
 
 def run(command, timeout):
-    """Drain both child pipes without unbounded RAM or temporary-disk usage.
+    """Capture bounded subprocess diagnostics without exhausting RAM or disk.
 
-    Keep the first 1,000,001 stdout bytes for ffprobe's metadata limit and
-    the final 1,000,000 stderr bytes for diagnostics. Discard excess bytes as
-    they arrive so even a noisy FFmpeg process cannot fill a temporary disk.
+    Both pipes are drained concurrently. A child exceeding either output cap
+    is killed and rejected, rather than silently treating truncated output
+    as successful media verification.
     """
+    stdout_limit = 1_000_001  # One byte beyond the accepted ffprobe JSON limit.
+    stderr_limit = 1_000_000
     stdout_head = bytearray()
     stderr_tail = bytearray()
     errors = []
-
-    def drain(pipe, keep_head):
-        try:
-            while True:
-                chunk = pipe.read(65_536)
-                if not chunk:
-                    break
-                if keep_head:
-                    room = 1_000_001 - len(stdout_head)
-                    if room > 0:
-                        stdout_head.extend(chunk[:room])
-                else:
-                    stderr_tail.extend(chunk)
-                    if len(stderr_tail) > 1_000_000:
-                        del stderr_tail[:-1_000_000]
-        except OSError as exc:
-            errors.append(exc)
-        finally:
-            pipe.close()
+    over_limit = threading.Event()
 
     with subprocess.Popen(command, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        def drain(pipe, keep_head):
+            total = 0
+            limit = stdout_limit if keep_head else stderr_limit
+            try:
+                while True:
+                    chunk = pipe.read(65_536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if keep_head:
+                        room = stdout_limit - len(stdout_head)
+                        if room > 0:
+                            stdout_head.extend(chunk[:room])
+                    else:
+                        stderr_tail.extend(chunk)
+                        if len(stderr_tail) > stderr_limit:
+                            del stderr_tail[:-stderr_limit]
+                    if total > limit:
+                        over_limit.set()
+                        # Stop the noisy process immediately. The other reader
+                        # keeps draining until the child closes both pipes.
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                        break
+            except OSError as exc:
+                errors.append(exc)
+            finally:
+                pipe.close()
+
         stdout_thread = threading.Thread(target=drain, args=(process.stdout, True),
                                          daemon=True)
         stderr_thread = threading.Thread(target=drain, args=(process.stderr, False),
@@ -169,6 +184,8 @@ def run(command, timeout):
         stderr_thread.join()
     if errors:
         raise OSError("failed to capture FFmpeg process output") from errors[0]
+    if over_limit.is_set():
+        raise OSError("FFmpeg subprocess output exceeded the capture limit")
     return subprocess.CompletedProcess(
         command, returncode, stdout_head.decode("utf-8"),
         stderr_tail.decode("utf-8", errors="replace"))
