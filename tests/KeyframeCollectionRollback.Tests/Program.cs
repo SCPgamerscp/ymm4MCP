@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Immutable;
 using YMM4McpPlugin;
 
 static void Check(bool condition, string message)
@@ -163,6 +164,29 @@ catch (InvalidOperationException) { refusedUnsafeFallback = true; }
 Check(refusedUnsafeFallback,
     "unverifiable reflected Value restoration must stop the fallback chain");
 
+// Immutable collections use functional Insert/SetItem followed by two host
+// property assignments. Both assignments must commit or both must roll back.
+var immutable = new TestAnimation(
+    ImmutableList.Create(10), ImmutableList.Create(1.0, 2.0));
+Check(KeyframeCollectionMutation.TryUpsert(immutable, 20, 5.0),
+    "valid immutable keyframe insertion should succeed");
+Check(immutable.Frames.Count == 2 && Convert.ToInt32(immutable.Frames[1]) == 20
+    && immutable.Values.Count == 3 && Convert.ToDouble(immutable.Values[2]) == 5.0,
+    "immutable insertion did not commit both collections");
+
+// A host Frames setter can install the new immutable list and then throw,
+// then reject the rollback. Returning false would let a later fallback edit
+// the partially mutated animation, so this must throw instead.
+var unsafeImmutable = new FailingImmutableAnimation(
+    ImmutableList.Create(10), ImmutableList.Create(1.0, 2.0));
+bool rejectedUnrestoredImmutable = false;
+try { KeyframeCollectionMutation.TryUpsert(unsafeImmutable, 20, 5.0); }
+catch (InvalidOperationException) { rejectedUnrestoredImmutable = true; }
+Check(rejectedUnrestoredImmutable,
+    "unrestorable immutable frame assignment must stop fallback edits");
+Check(unsafeImmutable.Frames.Count == 2 && unsafeImmutable.Values.Count == 2,
+    "immutable rollback test did not exercise a partially committed frame update");
+
 Console.WriteLine("Keyframe collection rollback tests passed");
 
 internal sealed class TestAnimation
@@ -212,6 +236,33 @@ internal sealed class FlakyImmutableAnimation
             return frames;
         }
         set => frames = value;
+    }
+    public IList Values { get => values; set => values = value; }
+}
+
+internal sealed class FailingImmutableAnimation
+{
+    private IList frames;
+    private IList values;
+    private int frameWrites;
+    public FailingImmutableAnimation(IList frames, IList values)
+    {
+        this.frames = frames;
+        this.values = values;
+    }
+    public IList Frames
+    {
+        get => frames;
+        set
+        {
+            frameWrites++;
+            if (frameWrites == 1)
+            {
+                frames = value;
+                throw new InvalidOperationException("frame setter threw after commit");
+            }
+            throw new InvalidOperationException("frame setter refuses rollback");
+        }
     }
     public IList Values { get => values; set => values = value; }
 }
