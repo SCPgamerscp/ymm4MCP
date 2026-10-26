@@ -31,7 +31,14 @@ namespace YMM4McpPlugin
 
             // Do not replace malformed UTF-8 bytes with U+FFFD in a security-
             // sensitive configuration. Preserve the BOM supported by ReadAllText.
-            string json = new UTF8Encoding(false, true).GetString(buffer, 0, length);
+            string json;
+            try { json = new UTF8Encoding(false, true).GetString(buffer, 0, length); }
+            catch (DecoderFallbackException ex)
+            {
+                // McpSettings.Load catches InvalidDataException and falls back to
+                // AutoStart=false with a visible warning instead of breaking UI init.
+                throw new InvalidDataException("MCP設定ファイルが正しいUTF-8ではありません", ex);
+            }
             if (json.Length > 0 && json[0] == '\uFEFF')
                 json = json.Substring(1);
 
