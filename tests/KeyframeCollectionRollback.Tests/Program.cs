@@ -187,6 +187,43 @@ Check(rejectedUnrestoredImmutable,
 Check(unsafeImmutable.Frames.Count == 2 && unsafeImmutable.Values.Count == 2,
     "immutable rollback test did not exercise a partially committed frame update");
 
+// Float-backed values must be verified through the same conversion as the
+// actual collection entry: Convert.ToDouble(0.1f) is not equal to 0.1.
+var floatMutable = new TestAnimation(
+    new FaultyList { 10 }, new FaultyList { 1.0f, 2.0f });
+Check(KeyframeCollectionMutation.TryUpsert(floatMutable, 20, 0.1),
+    "float-backed mutable insertion should succeed");
+Check(floatMutable.Values.Count == 3
+    && floatMutable.Values[2] is float insertedFloat && insertedFloat == 0.1f,
+    "float-backed mutable insertion wrote the wrong value");
+Check(KeyframeCollectionMutation.TryUpsert(floatMutable, 10, 0.1),
+    "float-backed mutable replacement should succeed");
+Check(floatMutable.Values[1] is float replacedFloat && replacedFloat == 0.1f,
+    "float-backed mutable replacement wrote the wrong value");
+
+var floatProperty = new FloatKeyframeValue { Value = 2.0f };
+var floatPropertyAnimation = new TestAnimation(
+    new FaultyList { 10 },
+    new FaultyList { new FloatKeyframeValue { Value = 1.0f }, floatProperty });
+Check(KeyframeCollectionMutation.TryUpsert(floatPropertyAnimation, 10, 0.1),
+    "float-backed Value property replacement should succeed");
+Check(floatProperty.Value == 0.1f,
+    "float-backed Value property replacement wrote the wrong value");
+
+var floatImmutable = new TestAnimation(
+    ImmutableList.Create(10), ImmutableList.Create(1.0f, 2.0f));
+Check(KeyframeCollectionMutation.TryUpsert(floatImmutable, 20, 0.1),
+    "float-backed immutable insertion should succeed");
+Check(floatImmutable.Values.Count == 3
+    && floatImmutable.Values[2] is float immutableInserted
+    && immutableInserted == 0.1f,
+    "float-backed immutable insertion wrote the wrong value");
+Check(KeyframeCollectionMutation.TryUpsert(floatImmutable, 10, 0.1),
+    "float-backed immutable replacement should succeed");
+Check(floatImmutable.Values[1] is float immutableReplaced
+    && immutableReplaced == 0.1f,
+    "float-backed immutable replacement wrote the wrong value");
+
 Console.WriteLine("Keyframe collection rollback tests passed");
 
 internal sealed class TestAnimation
@@ -288,4 +325,9 @@ internal sealed class ThrowingKeyframeValue
                 throw new InvalidOperationException("setter always throws after mutation");
         }
     }
+}
+
+internal sealed class FloatKeyframeValue
+{
+    public float Value { get; set; }
 }
