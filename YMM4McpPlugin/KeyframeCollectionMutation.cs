@@ -64,11 +64,20 @@ namespace YMM4McpPlugin
             try { values.Insert(valueIndex, entry); }
             catch
             {
-                RestoreSingleInsert(values, originalValues);
+                if (!RestoreSingleInsert(values, originalValues))
+                    throw new InvalidOperationException(
+                        "Keyframe value insertion failed and the original collection could not be restored.");
                 return false;
             }
             if (values.Count != originalValues.Length + 1)
-                return false; // A silent no-op is not a successful insertion.
+            {
+                // A non-conforming IList may mutate several entries, or silently
+                // replace an existing entry without changing its Count.
+                if (!RestoreSingleInsert(values, originalValues))
+                    throw new InvalidOperationException(
+                        "Keyframe value insertion changed the collection without a recoverable single insert.");
+                return false;
+            }
             try
             {
                 frames.Insert(insertAt, frameEntry);
@@ -84,8 +93,11 @@ namespace YMM4McpPlugin
 
             // Do not blindly RemoveAt(requestedIndex): a non-conforming IList
             // may have inserted elsewhere, which would delete an original value.
-            RestoreSingleInsert(frames, originalFrames);
-            RestoreSingleInsert(values, originalValues);
+            bool framesRestored = RestoreSingleInsert(frames, originalFrames);
+            bool valuesRestored = RestoreSingleInsert(values, originalValues);
+            if (!framesRestored || !valuesRestored)
+                throw new InvalidOperationException(
+                    "Keyframe insertion failed and at least one original collection could not be restored.");
             return false;
         }
 
@@ -105,14 +117,27 @@ namespace YMM4McpPlugin
             catch { return false; }
         }
 
-        // Restore only when removing exactly one element reproduces the
-        // original sequence. This also handles insert-then-throw at a wrong
-        // index without deleting a pre-existing frame or value.
-        private static void RestoreSingleInsert(IList list, object?[] before)
+        // Never report a safe failure unless the original sequence is intact.
+        // A third-party IList may ignore Insert, mutate without changing Count,
+        // insert multiple elements, or throw after a mutation.
+        private static bool MatchesSnapshot(IList list, object?[] before)
         {
             try
             {
-                if (list.Count != before.Length + 1) return;
+                if (list.Count != before.Length) return false;
+                for (int i = 0; i < before.Length; i++)
+                    if (!Equals(list[i], before[i])) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static bool RestoreSingleInsert(IList list, object?[] before)
+        {
+            if (MatchesSnapshot(list, before)) return true;
+            try
+            {
+                if (list.Count != before.Length + 1) return false;
                 for (int removed = 0; removed < list.Count; removed++)
                 {
                     bool matches = true;
@@ -125,13 +150,14 @@ namespace YMM4McpPlugin
                         }
                     }
                     if (!matches) continue;
-                    list.RemoveAt(removed);
-                    return;
+                    try { list.RemoveAt(removed); }
+                    catch { /* RemoveAt may mutate and then throw. */ }
+                    return MatchesSnapshot(list, before);
                 }
             }
-            catch { /* Fail closed; the caller reports failure. */ }
+            catch { /* The collection may be in an unrecoverable state. */ }
+            return MatchesSnapshot(list, before);
         }
-
 
         // ImmutableList<T> implements IList but rejects in-place Insert/SetItem.
         // Only replace collections when both owners expose public writable properties.
