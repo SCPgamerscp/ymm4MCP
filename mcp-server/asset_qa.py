@@ -38,6 +38,7 @@ def report(availability: dict) -> dict:
 
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
+                source["path"].strip() != source["path"] or
                 not is_absolute_media_path(source["path"])):
             raise ValueError("asset source entries require a valid path")
         item_ids = source.get("item_ids")
