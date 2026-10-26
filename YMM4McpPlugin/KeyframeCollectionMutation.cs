@@ -291,30 +291,53 @@ namespace YMM4McpPlugin
         {
             if (index < 0 || index >= values.Count || values[index] == null) return false;
             var old = values[index]!;
-            try
+            if (IsNumeric(old.GetType()))
             {
-                if (IsNumeric(old.GetType()))
+                if (!TryConvertNumeric(value, old.GetType(), out var converted)) return false;
+                try
                 {
-                    if (!TryConvertNumeric(value, old.GetType(), out var converted)) return false;
                     values[index] = converted;
                     if (Number(values[index], out var actual)
                         && actual == Convert.ToDouble(converted, CultureInfo.InvariantCulture))
                         return true;
-                    values[index] = old;
-                    return false;
                 }
-                var property = old.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
-                if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
-                var previous = property.GetValue(old);
-                if (!TryConvertNumeric(value, property.PropertyType, out var convertedValue)) return false;
-                property.SetValue(old, convertedValue);
-                if (Number(old, out var current)
-                    && current == Convert.ToDouble(convertedValue, CultureInfo.InvariantCulture))
-                    return true;
-                property.SetValue(old, previous);
+                catch { /* The IList may have changed before throwing. */ }
+
+                try
+                {
+                    if (Equals(values[index], old)) return false;
+                    values[index] = old;
+                    if (Equals(values[index], old)) return false;
+                }
+                catch { /* Restoration must be verified below. */ }
+                throw new InvalidOperationException(
+                    "Keyframe replacement failed and the original numeric value could not be restored.");
             }
+
+            var property = old.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
+            if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
+            object? previous;
+            try { previous = property.GetValue(old); }
             catch { return false; }
-            return false;
+            if (!TryConvertNumeric(value, property.PropertyType, out var convertedValue)) return false;
+            try
+            {
+                property.SetValue(old, convertedValue);
+                if (Number(old, out var actual)
+                    && actual == Convert.ToDouble(convertedValue, CultureInfo.InvariantCulture))
+                    return true;
+            }
+            catch { /* A reflected setter can mutate before throwing. */ }
+
+            try
+            {
+                if (Equals(property.GetValue(old), previous)) return false;
+                property.SetValue(old, previous);
+                if (Equals(property.GetValue(old), previous)) return false;
+            }
+            catch { /* Do not continue editing an unverified value. */ }
+            throw new InvalidOperationException(
+                "Keyframe replacement failed and the original Value property could not be restored.");
         }
 
         private static bool CreateValue(object original, double value, out object? entry)
