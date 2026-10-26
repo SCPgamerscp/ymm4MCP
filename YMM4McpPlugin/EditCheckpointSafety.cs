@@ -57,6 +57,30 @@ namespace YMM4McpPlugin
             return true;
         }
 
+        // Persisted edits.json is untrusted input, even if normal API writes were
+        // validated. Never restore malformed or ambiguous idempotency bindings.
+        internal static bool ValidStoredBindingRecord(
+            string? key, string? planHash,
+            IEnumerable<(string? Id, string? ItemId)>? items)
+        {
+            if (string.IsNullOrWhiteSpace(key) || key.Length > 128 || key.Trim() != key
+                || planHash == null || planHash.Length is < 16 or > 128
+                || items == null)
+                return false;
+            var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+            var nativeIds = new HashSet<string>(StringComparer.Ordinal);
+            int count = 0;
+            foreach (var (id, itemId) in items)
+            {
+                if (++count > MaxBindings || id == null || itemId == null
+                    || !nativeIds.Add(itemId))
+                    return false;
+                try { ValidateBinding(id, itemId, logicalIds); }
+                catch (ArgumentException) { return false; }
+            }
+            return true;
+        }
+
         // A checkpoint is only safe to use when every native item can be identified
         // uniquely. An empty list is valid for a genuinely empty timeline.
         internal static void ValidateSnapshotItemIds(IEnumerable<string> itemIds)
