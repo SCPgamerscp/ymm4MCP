@@ -52,6 +52,31 @@ namespace YMM4McpPlugin
             }
         }
 
+        // Checkpoint records are restored from JSON. Never allow a forged
+        // BackupPath to delete files outside the private checkpoint directory.
+        internal static bool IsOwnedBackupPath(string? path, string backupDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(backupDirectory))
+                return false;
+            try
+            {
+                string full = Path.GetFullPath(path);
+                string parent = Path.GetDirectoryName(full) ?? "";
+                string name = Path.GetFileName(full);
+                return string.Equals(parent, Path.GetFullPath(backupDirectory),
+                           StringComparison.OrdinalIgnoreCase) &&
+                       name.StartsWith("cp_", StringComparison.Ordinal) &&
+                       name.EndsWith(".ymmp", StringComparison.OrdinalIgnoreCase) &&
+                       name.Length is >= 16 and <= 72 &&
+                       name[3..^5].All(char.IsLetterOrDigit) &&
+                       name[3..^5].All(ch => ch <= 127);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        }
+
         // A failed copy must never leave a file with the final .ymmp backup name.
         internal static void CopyBackupAtomically(string source, string destination)
         {
