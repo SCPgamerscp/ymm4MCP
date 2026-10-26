@@ -2,6 +2,7 @@ name: Package YMM4 plugin
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -210,7 +211,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     needs: package
     runs-on: windows-latest
     permissions:
@@ -219,13 +220,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify tag is on main
+      - name: Verify release source is the latest main or a tag on main
         shell: pwsh
         run: |
           git fetch origin main:refs/remotes/origin/main
           if ($LASTEXITCODE -ne 0) { throw 'Could not fetch main' }
-          git merge-base --is-ancestor HEAD origin/main
-          if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on main' }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Manual release must run from main' }
+            $current = (git rev-parse HEAD).Trim()
+            $latest = (git rev-parse origin/main).Trim()
+            if ($LASTEXITCODE -ne 0 -or $current -ne $latest) {
+              throw 'Manual release must use the latest main commit'
+            }
+          }
+          else {
+            git merge-base --is-ancestor HEAD origin/main
+            if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on main' }
+          }
       - uses: actions/download-artifact@v4
         with:
           name: ymm4mcp-ymme
@@ -240,4 +251,25 @@ jobs:
           $packagePath = $package[0].FullName
           $serverPackage = @(Get-ChildItem -LiteralPath release -Filter 'YMM4McpServer-*.zip' -File)
           if ($serverPackage.Count -ne 1) { throw "Expected one Python server zip; found $($serverPackage.Count)" }
-          gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'
+          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Cannot read plugin version' }
+          $tag = "v$version"
+          $notes = 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            # A manual release is explicit and cannot silently overwrite a tag or release.
+            gh release view $tag --json tagName *> $null
+            if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; bump Version for a new release" }
+            gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>$null
+            if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists; use the tag-triggered release instead" }
+            gh release create $tag $packagePath $serverPackage[0].FullName --target $env:GITHUB_SHA --title $tag --notes $notes
+          }
+          else {
+            gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+          $publishedAssets = @(gh release view $tag --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw "Cannot verify GitHub Release $tag assets" }
+          $expectedAssets = @($package[0].Name, $serverPackage[0].Name)
+          if (@(Compare-Object $expectedAssets $publishedAssets).Count -ne 0) {
+            throw "Release $tag assets do not match expected packages: $($publishedAssets -join ', ')"
+          }
