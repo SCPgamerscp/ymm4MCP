@@ -25,7 +25,7 @@ def _unique_object_pairs(pairs):
 def _signal_ranges(log, start_name, end_name):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))")
+                         + r"):\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])")
     start = None
     ranges = []
     for line in log.splitlines():
@@ -50,7 +50,7 @@ def _signal_ranges(log, start_name, end_name):
 def _audio_peak_db(log):
     """Highest finite sample peak from FFmpeg astats (dBFS); not true-peak."""
     peaks = []
-    for value in re.findall(r"\bPeak level dB:\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\b", log):
+    for value in re.findall(r"\bPeak level dB:\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])", log):
         peak = float(value)
         if math.isfinite(peak):
             peaks.append(peak)
@@ -92,7 +92,7 @@ def run(command, timeout):
                                    stdout=stdout, stderr=stderr,
                                    timeout=timeout, check=False)
         stdout.seek(0)
-        output = stdout.read(1_000_001).decode("utf-8", errors="replace")
+        output = stdout.read(1_000_001).decode("utf-8")
         stderr.seek(0, 2)
         size = stderr.tell()
         stderr.seek(max(0, size - 1_000_000))
@@ -135,7 +135,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         return failure("EXPORT_PROBE_TIMEOUT", "ffprobeが時間切れです")
     except OSError:
         return failure("EXPORT_PROBE_FAILED", "ffprobeを実行できません")
-    if probe.returncode or len(probe.stdout) > 1_000_000:
+    except UnicodeDecodeError:
+        return failure("EXPORT_PROBE_FAILED", "ffprobeの出力が不正なUTF-8です")
+    if probe.returncode or len(probe.stdout.encode("utf-8")) > 1_000_000:
         return failure("EXPORT_PROBE_FAILED", "ffprobeで動画を解析できません")
     try:
         info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs,
