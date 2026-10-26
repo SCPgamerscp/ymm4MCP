@@ -9,6 +9,20 @@ class ConnectionConfigurationError(ValueError):
     pass
 
 
+# The plugin writes a small JSON descriptor. A corrupted or attacker-controlled
+# descriptor must not cause unbounded reads during every MCP request.
+MAX_DESCRIPTOR_BYTES = 64 * 1024
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate connection descriptor key: {key}")
+        result[key] = value
+    return result
+
+
 def connection_settings() -> tuple[str, dict[str, str]]:
     token = os.environ.get("YMM4_API_TOKEN", "")
     descriptor = {}
@@ -19,8 +33,12 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             path = str(Path(local) / "YMM4MCP" / "connection.json")
     if path:
         try:
-            with open(path, encoding="utf-8-sig") as source:
-                descriptor = json.load(source)
+            with open(path, "rb") as source:
+                raw = source.read(MAX_DESCRIPTOR_BYTES + 1)
+            if len(raw) > MAX_DESCRIPTOR_BYTES:
+                raise ValueError("connection descriptor is too large")
+            descriptor = json.loads(raw.decode("utf-8-sig"),
+                                    object_pairs_hook=_unique_json_object)
             if not isinstance(descriptor, dict):
                 raise ValueError("object required")
         except (OSError, ValueError) as exc:
@@ -35,7 +53,14 @@ def connection_settings() -> tuple[str, dict[str, str]]:
         )
     if not token:
         token = descriptor.get("token", "")
-    base = os.environ.get("YMM4_API_BASE") or descriptor.get("api_base") or "http://127.0.0.1:8765/api"
+    # A present but malformed base is a configuration error, not a signal to
+    # silently connect to the default port (possibly another YMM4 instance).
+    if "YMM4_API_BASE" in os.environ:
+        base = os.environ["YMM4_API_BASE"]
+    elif "api_base" in descriptor:
+        base = descriptor["api_base"]
+    else:
+        base = "http://127.0.0.1:8765/api"
     if not isinstance(base, str):
         raise ConnectionConfigurationError("YMM4_API_BASE は文字列で指定してください")
     # urllib.parse strips tabs/newlines and leading C0 controls silently.
