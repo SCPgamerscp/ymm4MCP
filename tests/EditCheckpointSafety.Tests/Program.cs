@@ -27,6 +27,33 @@ ExpectInvalid("scene-4", "native:\0bad");
 ExpectInvalid(new string('x', 513), "native:other");
 Check(EditCheckpointSafety.MaxBindings == 5000, "binding limit changed unexpectedly");
 
+// A missing or ambiguous snapshot must never authorize destructive rollback.
+EditCheckpointSafety.ValidateSnapshotItemIds(Array.Empty<string>());
+EditCheckpointSafety.ValidateSnapshotItemIds(new[] { "item-1", "item-2" });
+foreach (var invalid in new[]
+{
+    new[] { "item-1", "item-1" },
+    new[] { "item-1", "" },
+    new[] { "item-1", " item-2" },
+    new[] { "item-1", "item\\n2" },
+})
+{
+    try
+    {
+        EditCheckpointSafety.ValidateSnapshotItemIds(invalid);
+        throw new Exception("ambiguous checkpoint snapshot accepted");
+    }
+    catch (ArgumentException) { }
+}
+Check(!EditCheckpointSafety.SameProject(null, "C:\\project.ymmp"),
+    "unknown checkpoint project must fail closed");
+Check(!EditCheckpointSafety.SameProject("C:\\one.ymmp", null),
+    "unknown current project must fail closed");
+Check(!EditCheckpointSafety.SameProject("C:\\one.ymmp", "C:\\two.ymmp"),
+    "different projects must not share checkpoints");
+Check(EditCheckpointSafety.SameProject("C:\\one.ymmp", "C:\\ONE.ymmp"),
+    "Windows project path comparison should be case-insensitive");
+
 string root = Path.Combine(Path.GetTempPath(), "ymm4-checkpoint-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try
