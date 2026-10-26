@@ -1,6 +1,6 @@
 """Opt-in structural coverage requirements for caller-defined scenes."""
 
-from editing import integer
+from editing import integer, finite_number
 import scenes
 import scene_media
 
@@ -8,10 +8,11 @@ import scene_media
 def inspect(items, config):
     allowed = {"scene_ranges", "require_visual", "require_audio",
                "max_visual_gap_frames", "max_audio_gap_frames",
-               "max_visual_total_uncovered_frames", "max_audio_total_uncovered_frames"}
+               "max_visual_total_uncovered_frames", "max_audio_total_uncovered_frames",
+               "min_visual_coverage_ratio", "min_audio_coverage_ratio"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
-    required, limits, total_limits = {}, {}, {}
+    required, limits, total_limits, min_ratios = {}, {}, {}, {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -21,6 +22,13 @@ def inspect(items, config):
         total_key = f"max_{category}_total_uncovered_frames"
         total_limits[category] = (integer(config[total_key], total_key)
                                   if total_key in config else None)
+        ratio_key = f"min_{category}_coverage_ratio"
+        min_ratios[category] = None
+        if ratio_key in config:
+            ratio = finite_number(config[ratio_key], ratio_key)
+            if not 0 <= ratio <= 1:
+                raise ValueError(f"{ratio_key} must be between 0 and 1")
+            min_ratios[category] = ratio
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
     index = scene_media.with_coverage(scenes.index(items, config["scene_ranges"]))
@@ -44,5 +52,16 @@ def inspect(items, config):
                                "scene_id": scene["id"], "uncovered_ranges": reported,
                                "frame_range": [reported[0]["start_frame"], reported[-1]["end_frame"]],
                                "message": f"Scene {scene['id']} has uncovered {category} intervals"})
+            threshold = min_ratios[category]
+            if threshold is not None:
+                length = scene["end_frame"] - scene["start_frame"]
+                covered = scene[f"{category}_covered_frames"]
+                if covered / length < threshold:
+                    issues.append({"code": f"SCENE_{category.upper()}_COVERAGE_LOW",
+                                   "severity": "error", "scene_id": scene["id"],
+                                   "covered_frames": covered, "total_frames": length,
+                                   "coverage_ratio": covered / length,
+                                   "minimum_coverage_ratio": threshold,
+                                   "message": f"Scene {scene['id']} has insufficient {category} coverage"})
     return {"success": True, "passed": not issues, "issues": issues, "scenes": index["scenes"],
             "scope": "Timeline occupancy only; pixels, opacity, volume and embedded video audio are not inspected."}
