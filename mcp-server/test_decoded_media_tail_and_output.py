@@ -77,16 +77,25 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(result.stdout, "OK")
         self.assertEqual(result.stderr, "\ufffd")
 
-    def test_subprocess_output_is_bounded_even_when_child_writes_megabytes(self):
+    def test_subprocess_output_over_cap_is_rejected_not_silently_truncated(self):
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream):
+                command = [sys.executable, "-c",
+                           "import sys;sys." + stream +
+                           ".buffer.write(b'A'*1100000);sys." + stream + ".flush()"]
+                with self.assertRaisesRegex(OSError, "exceeded the capture limit"):
+                    qa.run(command, 5)
+
+    def test_subprocess_output_at_caps_remains_usable(self):
         command = [sys.executable, "-c",
-                   "import sys;sys.stdout.buffer.write(b'A'*1000100);"
-                   "sys.stderr.buffer.write(b'B'*1000010+b'END')"]
+                   "import sys;sys.stdout.buffer.write(b'A'*1000001);"
+                   "sys.stderr.buffer.write(b'B'*999997+b'END')"]
         result = qa.run(command, 5)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(len(result.stdout), 1_000_001)
         self.assertEqual(result.stdout, "A" * 1_000_001)
         self.assertEqual(len(result.stderr), 1_000_000)
         self.assertTrue(result.stderr.endswith("END"))
+
 
     def inspect_with_probe(self, metadata):
         def fake(command, timeout):
