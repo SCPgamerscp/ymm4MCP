@@ -120,17 +120,17 @@ namespace YMM4McpPlugin
             });
         }
 
-        private List<string> SnapshotItemIds()
+        private List<string>? SnapshotItemIds()
         {
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var ids = new List<string>();
                 var vm = GetMainViewModel();
-                if (vm == null) return ids;
+                if (vm == null) return null;
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
-                if (tvm == null) return ids;
+                if (tvm == null) return null;
                 var rawItems = GetPropEnum(tvm, "Items");
-                if (rawItems == null) return ids;
+                if (rawItems == null) return null;
                 foreach (var iv in rawItems)
                 {
                     var info = ReadItemInfo(iv);
@@ -273,6 +273,15 @@ namespace YMM4McpPlugin
             bool backup = GetBool(body, "backup", false);
             string id = "cp_" + Guid.NewGuid().ToString("N");
             var itemIds = SnapshotItemIds();
+            // An unavailable editor/timeline is not an empty timeline. Otherwise a
+            // later rollback could delete every item under an empty checkpoint.
+            if (itemIds == null)
+                return Failure("ITEMS_UNAVAILABLE", "チェックポイント用のタイムラインを取得できません");
+            try { EditCheckpointSafety.ValidateSnapshotItemIds(itemIds); }
+            catch (ArgumentException)
+            {
+                return Failure("ITEM_IDS_AMBIGUOUS", "タイムラインのアイテムIDが不正または重複しています");
+            }
             string? projectPath = CurrentProjectPath();
             string? backupPath = null;
             string? backupWarning = null;
@@ -376,7 +385,16 @@ namespace YMM4McpPlugin
             if (record == null)
                 return Failure("CHECKPOINT_NOT_FOUND", "チェックポイントが見つかりません: " + id);
 
-            var kept = new HashSet<string>(record.ItemIds);
+            // Native item IDs are only meaningful within the project that created
+            // the checkpoint. Unknown/unsaved projects cannot be safely matched.
+            if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
+                return Failure("CHECKPOINT_PROJECT_MISMATCH", "チェックポイント作成時と現在のプロジェクトが異なります");
+            try { EditCheckpointSafety.ValidateSnapshotItemIds(record.ItemIds); }
+            catch (ArgumentException)
+            {
+                return Failure("ITEM_IDS_AMBIGUOUS", "チェックポイントのアイテムIDが不正または重複しています");
+            }
+            var kept = new HashSet<string>(record.ItemIds, StringComparer.Ordinal);
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
@@ -395,7 +413,15 @@ namespace YMM4McpPlugin
                     if (!kept.Contains(itemId))
                         toRemove.Add(info.item);
                 }
-                var missingSnapshot = record.ItemIds.Where(itemId => !currentIds.Contains(itemId)).ToArray();
+                // A duplicated/empty live identity makes deletion ambiguous even if
+                // the checkpoint itself was valid. Fail before removing any items.
+                try { EditCheckpointSafety.ValidateSnapshotItemIds(currentIds); }
+                catch (ArgumentException)
+                {
+                    return Failure("ITEM_IDS_AMBIGUOUS", "現在のタイムラインのアイテムIDが不正または重複しています");
+                }
+                var currentSet = new HashSet<string>(currentIds, StringComparer.Ordinal);
+                var missingSnapshot = record.ItemIds.Where(itemId => !currentSet.Contains(itemId)).ToArray();
                 if (toRemove.Count == 0)
                 {
                     return new
