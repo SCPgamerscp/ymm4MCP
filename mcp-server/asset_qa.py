@@ -2,6 +2,8 @@
 
 import ntpath
 
+from jobs import is_absolute_media_path
+
 
 def _valid_item_id(value: object) -> bool:
     return (isinstance(value, str) and bool(value.strip())
@@ -36,8 +38,7 @@ def report(availability: dict) -> dict:
 
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
-                not source["path"].strip() or
-                any(ord(char) < 32 or ord(char) == 127 for char in source["path"])):
+                not is_absolute_media_path(source["path"])):
             raise ValueError("asset source entries require a valid path")
         item_ids = source.get("item_ids")
         if not isinstance(item_ids, list) or not item_ids:
