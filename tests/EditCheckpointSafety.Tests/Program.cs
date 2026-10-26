@@ -27,6 +27,19 @@ ExpectInvalid("scene-4", "native:\0bad");
 ExpectInvalid(new string('x', 513), "native:other");
 Check(EditCheckpointSafety.MaxBindings == 5000, "binding limit changed unexpectedly");
 
+// A first binding save is subject to the same live timeline checks as a retry.
+// No previous record must not mean arbitrary or nonexistent item IDs are accepted.
+var initial = Array.Empty<(string Id, string ItemId, string? Revision)>();
+var initialValid = new[] { (Id: "scene-a", ItemId: "native:a", Revision: (string?)"rev-a") };
+Check(EditCheckpointSafety.CompatibleBindingUpdate(initial, initialValid,
+        new[] { "native:a" }), "first binding save for a live item rejected");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(initial, initialValid,
+        new[] { "native:other" }), "first save accepted a nonexistent native item");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(initial, initialValid,
+        new[] { "native:a", "" }), "first save accepted a timeline with an unidentified item");
+Check(!EditCheckpointSafety.CompatibleBindingUpdate(initial, initialValid,
+        new[] { "native:a", "native:a" }), "first save accepted duplicate live identities");
+
 // Reconcile must extend partial plans without allowing live native bindings to
 // be silently remapped or revised. A deleted native item may be replaced.
 var original = new (string Id, string ItemId, string? Revision)[]
