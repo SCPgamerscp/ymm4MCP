@@ -307,6 +307,23 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
     issues = []
+    # Multiple output tracks may intentionally differ, so surface format
+    # inconsistencies as QA warnings rather than rejecting the export.
+    dimensions = {f'{v["width"]}x{v["height"]}' for v in video_details
+                  if v["width"] is not None}
+    frame_rates = {v["fps"] for v in video_details if v["fps"] is not None}
+    sample_rates = {a["sample_rate"] for a in audio_details
+                    if a["sample_rate"] is not None}
+    channel_counts = {a["channels"] for a in audio_details
+                      if a["channels"] is not None}
+    for values, code, field in (
+            (dimensions, "EXPORT_VIDEO_TRACK_RESOLUTION_MISMATCH", "resolutions"),
+            (frame_rates, "EXPORT_VIDEO_TRACK_FPS_MISMATCH", "frame_rates"),
+            (sample_rates, "EXPORT_AUDIO_TRACK_SAMPLE_RATE_MISMATCH", "sample_rates"),
+            (channel_counts, "EXPORT_AUDIO_TRACK_CHANNEL_MISMATCH", "channel_counts")):
+        if len(values) > 1:
+            issues.append({"code": code, "severity": "warning",
+                           field: sorted(values)})
     # A successful tail decode only proves that some samples exist in the
     # final window. Track metadata can reveal an earlier end within it.
     for kind, tracks in (("video", videos), ("audio", audios)):
