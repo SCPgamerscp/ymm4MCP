@@ -3,6 +3,7 @@ import json
 import math
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -79,9 +80,25 @@ def failure(code, message):
 
 
 def run(command, timeout):
-    return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, text=True, errors="replace",
-                          timeout=timeout, check=False)
+    """Bound captured process output in memory, including hostile FFmpeg logs.
+
+    Child output is spooled to temporary files instead of accumulating in
+    subprocess.PIPE. Keep the first 1 MiB + 1 byte of stdout (so oversized
+    ffprobe metadata remains detectable), and the final 1 MiB of stderr for
+    error diagnostics and signal hints.
+    """
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        completed = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                   stdout=stdout, stderr=stderr,
+                                   timeout=timeout, check=False)
+        stdout.seek(0)
+        output = stdout.read(1_000_001).decode("utf-8", errors="replace")
+        stderr.seek(0, 2)
+        size = stderr.tell()
+        stderr.seek(max(0, size - 1_000_000))
+        diagnostics = stderr.read().decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(command, completed.returncode,
+                                       output, diagnostics)
 
 
 def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
@@ -126,11 +143,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         _check_probe_depth(info)
         streams = info["streams"]
         raw_duration = info["format"]["duration"]
-        if (isinstance(raw_duration, bool)
-                or not isinstance(raw_duration, (int, float, str))
-                or (isinstance(raw_duration, str)
-                    and (not raw_duration or raw_duration.strip() != raw_duration))):
-            raise ValueError("invalid duration type")
+        # Python float() accepts underscores, Unicode digits, and whitespace,
+        # none of which is an unambiguous ffprobe decimal duration.
+        if (type(raw_duration) not in (int, float, str)
+                or (isinstance(raw_duration, str) and not re.fullmatch(
+                    r"(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+                    raw_duration))):
+            raise ValueError("invalid duration syntax")
         duration = float(raw_duration)
         # The FFmpeg command uses microsecond precision; smaller durations
         # would round -t to zero and could falsely pass an empty sample.
@@ -176,6 +195,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                         raise ValueError("invalid audio channel count")
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
+
+    # Huge or pathological durations lose the precision needed to sample the
+    # tail reliably. Refuse to certify a video whose end cannot be checked.
+    if duration > 7 * 24 * 60 * 60:
+        return failure("EXPORT_DURATION_LIMIT", "動画の長さが検証上限（7日）を超えています")
 
     # Full decode is intentionally bounded: it is opt-in, not a background job.
     # Reject oversized work rather than silently claiming a full verification.
