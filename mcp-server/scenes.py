@@ -17,7 +17,12 @@ def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[d
 def _valid_identifier(value: object) -> bool:
     """Reject blank or control-character IDs without changing readable IDs."""
     return (isinstance(value, str) and bool(value.strip())
-            and not any(ord(char) < 32 or ord(char) == 127 for char in value))
+            and not any(
+                (code := ord(char)) < 32 or 127 <= code <= 159
+                or code in (0x061C, 0x200E, 0x200F)
+                or 0x202A <= code <= 0x202E
+                or 0x2066 <= code <= 0x2069
+                for char in value))
 
 
 def index(items: list[dict], ranges: list[dict]) -> dict:
@@ -50,8 +55,11 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         length = integer(raw.get("length"), "item.length", 1)
         end = integer(frame + length, "item.end_frame", 1, MAX_FRAME)
         identity = raw.get("item_id")
-        if not _valid_identifier(identity):
-            raise ValueError("item_id is required")
+        if not _valid_identifier(identity) or len(identity) > 256:
+            raise ValueError("item_id must be a nonempty safe string of at most 256 characters")
+        if "type" in raw and (not isinstance(raw["type"], str)
+                              or not raw["type"].strip() or len(raw["type"]) > 128):
+            raise ValueError("item.type must be a nonempty string of at most 128 characters")
         if identity in seen_item_ids:
             raise ValueError("duplicate item_id in timeline snapshot")
         seen_item_ids.add(identity)
