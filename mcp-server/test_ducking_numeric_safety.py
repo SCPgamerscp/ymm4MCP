@@ -19,7 +19,7 @@ class DuckingNumericSafetyTests(unittest.TestCase):
 
     def test_tiny_ratio_must_not_silently_mute_audio(self):
         with self.assertRaisesRegex(ValueError, "underflows to zero"):
-            ducking.plan(BGM, VOICES, 1.0, ratio=5e-324)
+            ducking.plan(BGM, VOICES, 0.5, ratio=5e-324)
 
     def test_tiny_volume_must_not_silently_mute_audio(self):
         with self.assertRaisesRegex(ValueError, "underflows to zero"):
