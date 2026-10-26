@@ -110,6 +110,12 @@ def _build_prompt(event_instruction: str) -> str:
 
 def _extract_json(text: str) -> dict:
     """Geminiの応答からJSONを頑健に抽出する。コードフェンスや前後テキストを許容。"""
+    if not isinstance(text, str):
+        return {"summary": "", "events": [], "_parse_error": "Gemini response must be text"}
+    # A malformed or unexpectedly verbose model response must not allocate
+    # unbounded JSON objects while automated video QA is running.
+    if len(text) > 16 * 1024 * 1024:
+        return {"summary": "", "events": [], "_parse_error": "Gemini response exceeds 16 MiB"}
     if not text:
         return {"summary": "", "events": [], "_parse_error": "空の応答"}
     # ```json ... ``` を剥がす
@@ -285,6 +291,11 @@ def analyze_frames_dir(
     if frames_meta is not None and (not isinstance(frames_meta, list)
                                     or any(not isinstance(m, dict) for m in frames_meta)):
         return {"success": False, "error": "frames_meta must be an array of objects"}
+    # Even though only max_images frames are uploaded, sorting a huge metadata
+    # list before sampling could otherwise exhaust memory or CPU.
+    if frames_meta is not None and len(frames_meta) > 100_000:
+        return {"success": False, "source": "frames_dir",
+                "error": "frames_meta exceeds the 100000 frame metadata limit"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
 
