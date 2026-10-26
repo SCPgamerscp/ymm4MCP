@@ -49,24 +49,31 @@ namespace YMM4McpPlugin
                 return false;
 
             int valueIndex = insertAt + offset;
-            int originalValueCount = values.Count;
-            int originalFrameCount = frames.Count;
+            // Some third-party IList implementations insert at a different index
+            // without throwing. Snapshot the original order before mutating so a
+            // false success cannot attach a keyframe to the wrong frame.
+            object?[] originalValues;
+            object?[] originalFrames;
+            try
+            {
+                originalValues = values.Cast<object?>().ToArray();
+                originalFrames = frames.Cast<object?>().ToArray();
+            }
+            catch { return false; }
+
             try { values.Insert(valueIndex, entry); }
             catch
             {
-                // Some IList implementations mutate and then throw. Restore only
-                // if the insert actually added an element; otherwise RemoveAt
-                // would delete a pre-existing keyframe value.
-                if (values.Count == originalValueCount + 1)
-                    try { values.RemoveAt(valueIndex); } catch { }
+                RestoreSingleInsert(values, originalValues);
                 return false;
             }
-            if (values.Count != originalValueCount + 1)
+            if (values.Count != originalValues.Length + 1)
                 return false; // A silent no-op is not a successful insertion.
             try
             {
                 frames.Insert(insertAt, frameEntry);
-                if (frames.Count == originalFrameCount + 1
+                if (InsertedAt(frames, originalFrames, insertAt, frameEntry)
+                    && InsertedAt(values, originalValues, valueIndex, entry)
                     && frames.Count + offset == values.Count
                     && Convert.ToInt32(frames[insertAt], CultureInfo.InvariantCulture) == frame
                     && Number(values[valueIndex], out var actual)
@@ -74,12 +81,55 @@ namespace YMM4McpPlugin
                     return true;
             }
             catch { /* Restore the two collections below. */ }
-            // A failed/no-op frame insert must not remove an existing frame.
-            if (frames.Count == originalFrameCount + 1)
-                try { frames.RemoveAt(insertAt); } catch { }
-            if (values.Count == originalValueCount + 1)
-                try { values.RemoveAt(valueIndex); } catch { }
+
+            // Do not blindly RemoveAt(requestedIndex): a non-conforming IList
+            // may have inserted elsewhere, which would delete an original value.
+            RestoreSingleInsert(frames, originalFrames);
+            RestoreSingleInsert(values, originalValues);
             return false;
+        }
+
+        private static bool InsertedAt(IList list, object?[] before, int at, object? added)
+        {
+            if (at < 0 || at > before.Length || list.Count != before.Length + 1)
+                return false;
+            try
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    object? expected = i == at ? added : before[i < at ? i : i - 1];
+                    if (!Equals(list[i], expected)) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Restore only when removing exactly one element reproduces the
+        // original sequence. This also handles insert-then-throw at a wrong
+        // index without deleting a pre-existing frame or value.
+        private static void RestoreSingleInsert(IList list, object?[] before)
+        {
+            try
+            {
+                if (list.Count != before.Length + 1) return;
+                for (int removed = 0; removed < list.Count; removed++)
+                {
+                    bool matches = true;
+                    for (int i = 0; i < before.Length; i++)
+                    {
+                        if (!Equals(list[i < removed ? i : i + 1], before[i]))
+                        {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+                    list.RemoveAt(removed);
+                    return;
+                }
+            }
+            catch { /* Fail closed; the caller reports failure. */ }
         }
 
 
