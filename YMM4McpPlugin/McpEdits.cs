@@ -188,8 +188,16 @@ namespace YMM4McpPlugin
             lock (_editsLock)
             {
                 var existing = _editBindings.FirstOrDefault(b => b.IdempotencyKey == key);
-                if (existing != null && !string.Equals(existing.PlanHash, hash, StringComparison.Ordinal))
-                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to a different EditPlan");
+                // A retry with the same plan hash must not silently remap logical
+                // IDs to different native items or revisions.
+                if (existing != null &&
+                    (!string.Equals(existing.PlanHash, hash, StringComparison.Ordinal) ||
+                     existing.Items == null || existing.Items.Count != items.Count ||
+                     existing.Items.Where((old, i) =>
+                         !string.Equals(old.Id, items[i].Id, StringComparison.Ordinal) ||
+                         !string.Equals(old.ItemId, items[i].ItemId, StringComparison.Ordinal) ||
+                         !string.Equals(old.Revision, items[i].Revision, StringComparison.Ordinal)).Any()))
+                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to different EditPlan items");
                 var updated = _editBindings.Where(b => b.IdempotencyKey != key).Select(b => b.Clone()).ToList();
                 updated.Add(record);
                 if (updated.Count > 40)
@@ -313,28 +321,28 @@ namespace YMM4McpPlugin
                 BackupPath = backupPath,
                 ItemIds = itemIds
             };
-            List<CheckpointRecord> kept;
             List<CheckpointRecord> pruned;
+            // Read, persist and publish under one lock. Concurrent checkpoint
+            // requests must not overwrite each other's snapshots on disk.
             lock (_editsLock)
             {
-                kept = _checkpoints.Select(c => c.Clone()).ToList();
+                var kept = _checkpoints.Select(c => c.Clone()).ToList();
                 kept.Add(record);
                 pruned = kept.Count <= 20 ? new List<CheckpointRecord>() : kept.Take(kept.Count - 20).ToList();
                 if (pruned.Count > 0)
                     kept = kept.TakeLast(20).ToList();
+                try
+                {
+                    PersistCheckpoints(kept);
+                    _checkpoints = kept;
+                }
+                catch (Exception ex)
+                {
+                    Log("チェックポイント保存に失敗: " + ex.Message);
+                    TryDeleteBackup(backupPath);
+                    return Failure("CHECKPOINT_NOT_SAVED", "チェックポイントを保存できませんでした");
+                }
             }
-            try
-            {
-                PersistCheckpoints(kept);
-            }
-            catch (Exception ex)
-            {
-                Log("チェックポイント保存に失敗: " + ex.Message);
-                TryDeleteBackup(backupPath);
-                return Failure("CHECKPOINT_NOT_SAVED", "チェックポイントを保存できませんでした");
-            }
-            lock (_editsLock)
-                _checkpoints = kept;
             foreach (var old in pruned)
                 TryDeleteBackup(old.BackupPath);
             return new
@@ -480,8 +488,20 @@ namespace YMM4McpPlugin
                 if (!File.Exists(CheckpointsFilePath)) return;
                 var records = JsonSerializer.Deserialize<List<CheckpointRecord>>(File.ReadAllText(CheckpointsFilePath), EditJson);
                 if (records == null) return;
+                // Treat the persisted index as untrusted state. Malformed IDs or
+                // duplicate native identities must not authorize later deletion.
+                var valid = new List<CheckpointRecord>();
+                foreach (var record in records)
+                {
+                    if (record == null || string.IsNullOrEmpty(record.Id) ||
+                        !CheckpointIdPattern.IsMatch(record.Id) || record.ItemIds == null)
+                        continue;
+                    try { EditCheckpointSafety.ValidateSnapshotItemIds(record.ItemIds); }
+                    catch (ArgumentException) { continue; }
+                    valid.Add(record);
+                }
                 lock (_editsLock)
-                    _checkpoints = records.TakeLast(20).ToList();
+                    _checkpoints = valid.TakeLast(20).ToList();
             }
             catch (Exception ex) { Log("チェックポイント復元に失敗: " + ex.Message); }
         }
@@ -496,7 +516,7 @@ namespace YMM4McpPlugin
 
         private static void TryDeleteBackup(string? path)
         {
-            if (string.IsNullOrEmpty(path)) return;
+            if (!EditCheckpointSafety.IsOwnedBackupPath(path, CheckpointBackupDir)) return;
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
