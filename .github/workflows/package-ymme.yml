@@ -161,6 +161,19 @@ jobs:
               $storeConfig.mcpServers.ymm4.command -cne $installedPython) {
             throw 'Claude Desktop must use persistent installed paths'
           }
+          # Regression: a user who follows the documented manual PowerShell
+          # command after install.cmd must NOT overwrite the stable Claude
+          # settings with the disposable ZIP extraction directory.
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extracted 'setup.ps1') -ConfigureClaudeDesktop
+          if ($LASTEXITCODE -ne 0) { throw 'Manual PowerShell setup failed' }
+          $manualClassic = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $manualStore = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($manualClassic.mcpServers.ymm4.command -cne $installedPython -or
+              @($manualClassic.mcpServers.ymm4.args)[0] -cne $installedScript -or
+              $manualStore.mcpServers.ymm4.command -cne $installedPython -or
+              @($manualStore.mcpServers.ymm4.args)[0] -cne $installedScript) {
+            throw 'Manual setup must not register disposable ZIP extraction paths'
+          }
           Remove-Item -LiteralPath $extracted -Recurse -Force
           if (-not (Test-Path -LiteralPath $installedPython) -or
               -not (Test-Path -LiteralPath $installedScript)) {
