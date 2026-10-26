@@ -23,7 +23,7 @@ def _unique_object_pairs(pairs):
 def _signal_ranges(log, start_name, end_name):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\s*(\d+(?:\.\d+)?)")
+                         + r"):\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))")
     start = None
     ranges = []
     for line in log.splitlines():
@@ -33,6 +33,9 @@ def _signal_ranges(log, start_name, end_name):
                 # Do not serialize Infinity or create an invented signal span.
                 start = None
                 continue
+            # FFmpeg may report negative silence_start during filter preroll.
+            # Clamp it rather than turning '-1.5' into a positive 1.5.
+            value = max(0.0, value)
             if name == start_name:
                 start = value
             elif start is not None:
@@ -114,17 +117,21 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     and (not raw_duration or raw_duration.strip() != raw_duration))):
             raise ValueError("invalid duration type")
         duration = float(raw_duration)
-        if not isinstance(streams, list) or not math.isfinite(duration) or duration <= 0:
+        # The FFmpeg command uses microsecond precision; smaller durations
+        # would round -t to zero and could falsely pass an empty sample.
+        if not isinstance(streams, list) or not math.isfinite(duration) or duration < 0.000001:
             raise ValueError("invalid metadata")
         seen_indices = set()
         for stream in streams:
             if (not isinstance(stream, dict)
                     or not isinstance(stream.get("codec_type"), str)
-                    or not stream["codec_type"]):
+                    or stream["codec_type"] not in (
+                        "video", "audio", "subtitle", "data", "attachment", "unknown")):
                 raise ValueError("invalid stream metadata")
             if "index" in stream:
                 index = stream["index"]
-                if type(index) is not int or index < 0 or index in seen_indices:
+                if (type(index) is not int or index < 0 or index > 2_147_483_647
+                        or index in seen_indices):
                     raise ValueError("invalid or duplicate stream index")
                 seen_indices.add(index)
             # ffprobe may expose video dimensions even when the codec cannot
@@ -148,7 +155,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     channels = stream["channels"]
                     if type(channels) is not int or channels <= 0:
                         raise ValueError("invalid audio channel count")
-    except (ValueError, TypeError, KeyError, OverflowError):
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
     # Full decode is intentionally bounded: it is opt-in, not a background job.
@@ -183,7 +190,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         length = min(float(sample_seconds), duration - start)
         if length <= 0:
             continue
-        samples.append({"start_seconds": round(start, 3), "duration_seconds": round(length, 3)})
+        samples.append({"start_seconds": round(start, 6), "duration_seconds": round(length, 6)})
         # A successful first track cannot certify another broken track.
         for kind, ordinal, stream in (
                 [("video", i, track) for i, track in enumerate(videos)]
@@ -193,8 +200,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98"
                              if kind == "video" else "silencedetect=noise=-50dB:d=2,astats=metadata=0:reset=0")
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
-                       "-v", "info", "-xerror", "-ss", format(start, ".3f"),
-                       "-i", str(target), "-t", format(length, ".3f"),
+                       "-v", "info", "-xerror", "-ss", format(start, ".6f"),
+                       "-i", str(target), "-t", format(length, ".6f"),
                        "-map", f"0:v:{ordinal}" if kind == "video" else f"0:a:{ordinal}",
                        "-vf" if kind == "video" else "-af", signal_filter,
                        "-abort_on", "empty_output", "-f", "null", "-"]
@@ -209,13 +216,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             if decoded.returncode:
                 issues.append({"code": "EXPORT_DECODE_FAILED", "severity": "error",
                                "stream_type": kind, "stream_ordinal": ordinal,
-                               "start_seconds": round(start, 3),
+                               "start_seconds": round(start, 6),
                                "details": (decoded.stderr or "")[-500:]})
                 continue
             if kind == "audio":
                 peak = _audio_peak_db(decoded.stderr or "")
                 if peak is not None:
-                    peak_event = {"sample_start_seconds": round(start, 3),
+                    peak_event = {"sample_start_seconds": round(start, 6),
                                   "stream_ordinal": ordinal,
                                   "peak_dbfs": round(peak, 3)}
                     audio_peaks.append(peak_event)
@@ -230,7 +237,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                     else ("silence_start", "silence_end"))
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name):
-                event = {"sample_start_seconds": round(start, 3),
+                event = {"sample_start_seconds": round(start, 6),
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
                          "filter_end_seconds": round(signal_end, 3),
