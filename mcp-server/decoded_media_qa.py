@@ -60,6 +60,19 @@ def _reject_nonfinite_json(value):
     raise ValueError("non-standard JSON number: " + value)
 
 
+def _check_probe_depth(value, max_depth=64):
+    """Bound nested ffprobe metadata, including unused fields, without recursion."""
+    pending = [(value, 0)]
+    while pending:
+        node, depth = pending.pop()
+        if depth > max_depth:
+            raise ValueError("ffprobe metadata nesting limit exceeded")
+        if isinstance(node, dict):
+            pending.extend((child, depth + 1) for child in node.values())
+        elif isinstance(node, list):
+            pending.extend((child, depth + 1) for child in node)
+
+
 def failure(code, message):
     return {"success": False, "passed": False, "issues": [], "error_code": code, "error": message}
 
@@ -109,6 +122,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     try:
         info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs,
                           parse_constant=_reject_nonfinite_json)
+        _check_probe_depth(info)
         streams = info["streams"]
         raw_duration = info["format"]["duration"]
         if (isinstance(raw_duration, bool)
