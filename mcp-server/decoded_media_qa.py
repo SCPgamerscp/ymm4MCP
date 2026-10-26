@@ -69,7 +69,7 @@ def _optional_stream_time(value, *, signed=False):
         return None
     sign = r"[+-]?" if signed else ""
     if (type(value) is not str or not re.fullmatch(
-            sign + r"(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+            sign + r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
             value)):
         raise ValueError("invalid stream time")
     seconds = float(value)
