@@ -59,8 +59,32 @@ def has_frame(frames: list[dict], at: int) -> bool:
     return any(frame["at"] == at for frame in frames)
 
 
+def validate_test_item(client: httpx.Client, base: str,
+                       headers: dict[str, str], item_id: str, at: int) -> None:
+    """Fail before writing if the selected image or relative frame is unsafe."""
+    try:
+        response = client.get(base + "/items", headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ProbeError(f"Cannot inspect target timeline item: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ProbeError("Malformed timeline item inventory; refusing edit")
+    matches = [item for item in payload["items"]
+               if isinstance(item, dict) and item.get("item_id") == item_id]
+    if len(matches) != 1:
+        raise ProbeError("Target item must exist exactly once; refusing edit")
+    item = matches[0]
+    if "image" not in str(item.get("type", "")).lower():
+        raise ProbeError("Target item is not an image; refusing edit")
+    length = item.get("length")
+    if type(length) is not int or length <= at:
+        raise ProbeError(f"Frame {at} is outside the target item length; refusing edit")
+
+
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, at: int, values: dict[str, float]) -> None:
+    validate_test_item(client, base, headers, item_id, at)
     # Validate every property before the first write, so a missing X/Zoom
     # cannot leave the other property modified.
     baseline: dict[str, list[dict]] = {}
