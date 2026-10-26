@@ -771,7 +771,9 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         metadata = json.dumps({
             "format": {"duration": "20", "start_time": "10"},
             "streams": [{"codec_type": "video", "start_time": "12",
-                         "duration": "18"}]})
+                         "duration": "18"},
+                        {"codec_type": "audio", "start_time": "10",
+                         "duration": "20"}]})
         report = self.inspect_with_probe(metadata)
         self.assertTrue(report["passed"], report)
         warning = next(i for i in report["issues"]
