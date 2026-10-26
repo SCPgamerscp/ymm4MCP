@@ -55,7 +55,7 @@ class RequestBodyLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 413)
 
     async def test_rejects_ambiguous_or_malformed_content_length(self):
-        for values in ([b"1", b"1"], [b"not-a-number"], [b"-1"], [b" 1"], [b"1,1"]):
+        for values in ([b"1", b"1"], [b"not-a-number"], [b"-1"], [b" 1"], [b"1,1"], [b"9" * 10000]):
             with self.subTest(values=values):
                 messages = []
                 async def no_receive():
