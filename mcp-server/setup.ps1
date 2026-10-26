@@ -11,14 +11,20 @@ $serverDir = $sourceDir
 $pythonCommand = $null
 $pythonArgs = @()
 if (Get-Command py -ErrorAction SilentlyContinue) {
-    try {
-        & py -3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $pythonCommand = 'py'
-            $pythonArgs = @('-3')
+    # A user-configured py -3 default may be Python 3.9 even when a newer
+    # interpreter is registered with the Windows launcher. Probe explicit
+    # supported versions before falling back to python.exe.
+    foreach ($selector in @('-3', '-3.14', '-3.13', '-3.12', '-3.11', '-3.10')) {
+        try {
+            & py $selector -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $pythonCommand = 'py'
+                $pythonArgs = @($selector)
+                break
+            }
+        } catch {
+            # A missing launcher registration is not fatal: try the next one.
         }
-    } catch {
-        # A broken launcher must not prevent checking python.exe.
     }
 }
 if ($null -eq $pythonCommand -and (Get-Command python -ErrorAction SilentlyContinue)) {
