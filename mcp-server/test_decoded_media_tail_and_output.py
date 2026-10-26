@@ -55,8 +55,14 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
     def test_exact_two_windows_checks_second_half(self):
         self.check_windows(16.0, 8, [0.0, 8.0])
 
-    def test_long_video_still_checks_last_window_not_the_middle(self):
-        self.check_windows(30.5, 8, [0.0, 22.5])
+    def test_long_video_checks_first_middle_and_last_windows(self):
+        self.check_windows(30.5, 8, [0.0, 11.25, 22.5])
+
+    def test_exact_three_windows_checks_the_entire_duration(self):
+        self.check_windows(24.0, 8, [0.0, 8.0, 16.0])
+
+    def test_just_under_three_windows_does_not_duplicate_overlap(self):
+        self.check_windows(23.5, 8, [0.0, 15.5])
 
     def test_subprocess_stdout_requires_utf8_but_stderr_is_diagnostic(self):
         # Metadata must never be silently altered by replacement decoding.
