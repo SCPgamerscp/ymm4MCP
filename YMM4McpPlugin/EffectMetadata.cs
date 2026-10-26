@@ -15,7 +15,7 @@ internal static class EffectMetadata
 
         var parameters = effectType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.GetMethod?.IsPublic == true && p.GetIndexParameters().Length == 0)
-            .OrderBy(p => p.Name)
+            .OrderBy(p => p.Name, StringComparer.Ordinal)
             .Select(p =>
             {
                 var range = p.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == "RangeAttribute");
@@ -24,7 +24,9 @@ internal static class EffectMetadata
                 {
                     name = p.Name,
                     type = p.PropertyType.FullName ?? p.PropertyType.Name,
-                    writable = p.SetMethod?.IsPublic == true,
+                    writable = p.SetMethod is { IsPublic: true } setter &&
+                        !setter.ReturnParameter.GetRequiredCustomModifiers()
+                            .Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)),
                     minimum = range != null && range.ConstructorArguments.Count >= offset + 2
                         ? range.ConstructorArguments[offset].Value?.ToString() : null,
                     maximum = range != null && range.ConstructorArguments.Count >= offset + 2
