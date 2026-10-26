@@ -27,6 +27,37 @@ ExpectInvalid("scene-4", "native:\0bad");
 ExpectInvalid(new string('x', 513), "native:other");
 Check(EditCheckpointSafety.MaxBindings == 5000, "binding limit changed unexpectedly");
 
+// A corrupt or legacy edits.json must not bypass validation during restart.
+var stored = new (string? Id, string? ItemId)[]
+{
+    ("scene-a", "native:a"), ("scene-b", "native:b")
+};
+var storedHash = new string('a', 64);
+Check(EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash, stored),
+    "valid persisted EditPlan bindings rejected");
+Check(EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash,
+        Array.Empty<(string? Id, string? ItemId)>()),
+    "empty persisted bindings must remain valid");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord(null, storedHash, stored),
+    "missing idempotency key accepted");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord("plan-1", "short", stored),
+    "malformed persisted plan hash accepted");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash, null),
+    "missing persisted item list accepted");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash,
+        new (string? Id, string? ItemId)[] { ("same", "native:a"), ("same", "native:b") }),
+    "duplicate logical IDs in persisted bindings accepted");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash,
+        new (string? Id, string? ItemId)[] { ("a", "native:a"), ("b", "native:a") }),
+    "duplicate native IDs in persisted bindings accepted");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash,
+        new (string? Id, string? ItemId)[] { ("a", null) }),
+    "null persisted native ID accepted");
+Check(!EditCheckpointSafety.ValidStoredBindingRecord("plan-1", storedHash,
+        Enumerable.Range(0, EditCheckpointSafety.MaxBindings + 1)
+            .Select(i => ((string?)$"scene-{i}", (string?)$"native:{i}"))),
+    "oversized persisted binding list accepted");
+
 // A first binding save is subject to the same live timeline checks as a retry.
 // No previous record must not mean arbitrary or nonexistent item IDs are accepted.
 var initial = Array.Empty<(string Id, string ItemId, string? Revision)>();
