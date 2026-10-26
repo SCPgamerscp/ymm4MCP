@@ -66,9 +66,9 @@ class LiveProbeProtocolTests(unittest.TestCase):
         probe(fake)
         self.assertEqual(len(fake.posts), 4)
         self.assertEqual([p["action"] for p in fake.posts],
-                         ["set", "set", "remove", "remove"])
+                         ["set", "remove", "set", "remove"])
         self.assertEqual([p["prop"] for p in fake.posts],
-                         ["Zoom", "X", "X", "Zoom"])
+                         ["Zoom", "Zoom", "X", "X"])
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertEqual([f["at"] for f in fake.frames["X"]], [0])
 
