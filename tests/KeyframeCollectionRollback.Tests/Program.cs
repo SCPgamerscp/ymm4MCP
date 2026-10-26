@@ -55,6 +55,34 @@ Check(!KeyframeCollectionMutation.TryUpsert(valueNoOp, 20, 5.0),
     "ignored value insertion should fail");
 CheckUnchanged(valueNoOp.Frames, valueNoOp.Values, "value insert ignored");
 
+// A broken IList may insert at index zero instead of the requested index.
+// The operation must fail, and rollback must remove the actual new element,
+// not the pre-existing element at the requested index.
+var misplacedValues = new FaultyList { 1.0, 2.0 };
+misplacedValues.InsertAtFront = true;
+var wrongValueIndex = new TestAnimation(new FaultyList { 10 }, misplacedValues);
+Check(!KeyframeCollectionMutation.TryUpsert(wrongValueIndex, 20, 5.0),
+    "misplaced value insertion was reported successful");
+CheckUnchanged(wrongValueIndex.Frames, wrongValueIndex.Values, "value inserted at wrong index");
+
+var misplacedFrames = new FaultyList { 10 };
+misplacedFrames.InsertAtFront = true;
+var wrongFrameIndex = new TestAnimation(misplacedFrames, new FaultyList { 1.0, 2.0 });
+Check(!KeyframeCollectionMutation.TryUpsert(wrongFrameIndex, 20, 5.0),
+    "misplaced frame insertion was reported successful");
+CheckUnchanged(wrongFrameIndex.Frames, wrongFrameIndex.Values, "frame inserted at wrong index");
+
+// The same protection must work when the IList mutates at the wrong index
+// and then throws an exception.
+var misplacedAndThrowingValues = new FaultyList { 1.0, 2.0 };
+misplacedAndThrowingValues.InsertAtFront = true;
+misplacedAndThrowingValues.ThrowAfterInsert = true;
+var wrongIndexThrow = new TestAnimation(new FaultyList { 10 }, misplacedAndThrowingValues);
+Check(!KeyframeCollectionMutation.TryUpsert(wrongIndexThrow, 20, 5.0),
+    "wrong-index insertion with exception was reported successful");
+CheckUnchanged(wrongIndexThrow.Frames, wrongIndexThrow.Values,
+    "wrong-index value insert threw after mutation");
+
 // Immutable-style list properties can throw on re-read after initial discovery.
 var flaky = new FlakyImmutableAnimation();
 Check(!KeyframeCollectionMutation.TryUpsert(flaky, 20, 5.0),
@@ -83,10 +111,11 @@ internal sealed class FaultyList : ArrayList
 {
     public bool ThrowAfterInsert { get; set; }
     public bool IgnoreInsert { get; set; }
+    public bool InsertAtFront { get; set; }
     public override void Insert(int index, object? value)
     {
         if (IgnoreInsert) return;
-        base.Insert(index, value);
+        base.Insert(InsertAtFront ? 0 : index, value);
         if (ThrowAfterInsert) throw new InvalidOperationException("insert failed after mutation");
     }
 }
