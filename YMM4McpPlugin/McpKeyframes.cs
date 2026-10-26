@@ -91,6 +91,16 @@ namespace YMM4McpPlugin
                 if (anim == null)
                     return Failure("KEYFRAME_UNSUPPORTED", "プロパティ '" + prop + "' はAnimationではありません");
 
+                // KeyFrames belongs to the timeline item and is shared across
+                // its animations.  Bind a detached Animation before adding a
+                // nonzero keyframe; do not replace an existing binding.
+                // Remove, clear and even a set at frame zero can mutate a
+                // shared collection. Reject cross-item bindings for every action.
+                if (KeyframeHostBinding.HasConflictingBinding(item, anim))
+                    return Failure("KEYFRAME_BINDING_CONFLICT",
+                        "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
+                if (action == "set" && relativeFrame > 0)
+                    KeyframeHostBinding.TryBind(item, anim);
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
@@ -263,16 +273,68 @@ namespace YMM4McpPlugin
 
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
-            if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value)) return true;
-            if (TryInvokeNamed(anim, KeyframeMethodNames, frame) && TrySetValueAt(anim, frame, value)) return true;
+            var before = ReadFrameList(anim);
+            var valuesBefore = ReadValueList(anim);
+            var valueCountBefore = valuesBefore.Count;
+            bool isNew = frame > 0 && !before.Contains(frame);
             var keyFrames = GetPropObj(anim, "KeyFrames");
+
+            // A host Add may insert a shared Frame without inserting its
+            // AnimationValue. In that state Values.Count == Frames.Count can
+            // look like a valid no-implicit-start layout, and TrySetValueAt
+            // would overwrite the *original* start value and claim success.
+            bool Complete() => !isNew || KeyframeInsertionSafety.IsComplete(
+                before, valueCountBefore, ReadFrameList(anim), ReadValueList(anim).Count, frame);
+
+            bool UndoIncomplete(bool force = false)
+            {
+                var currentFrames = ReadFrameList(anim);
+                if (!isNew) return true;
+                if (!currentFrames.Contains(frame))
+                    return currentFrames.SequenceEqual(before)
+                        && ReadValueList(anim).SequenceEqual(valuesBefore);
+                if (!force && Complete()) return true;
+                int insertedIndex = currentFrames.IndexOf(frame);
+                int valueIndex = insertedIndex + valueCountBefore - before.Count;
+                if (keyFrames != null)
+                    TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame", "RemoveKeyframe" }, frame);
+                if (ReadFrameList(anim).Contains(frame))
+                    TryInvokeNamed(anim, KeyframeRemoveNames, frame);
+                // A host Remove may remove the frame but leave the extra
+                // AnimationValue. Never retry with misaligned collections.
+                if (ReadFrameList(anim).Contains(frame)) return false;
+                if (ReadValueList(anim).Count != valueCountBefore)
+                {
+                    if (GetPropObj(anim, "Values") is not IList values
+                        || !KeyframeInsertionSafety.TryRemoveInsertedValue(
+                            values, valueCountBefore, valueIndex))
+                        return false;
+                }
+                // A host may also mutate unrelated values or frames. Stop
+                // instead of claiming that a failed edit was rolled back.
+                return ReadFrameList(anim).SequenceEqual(before)
+                    && ReadValueList(anim).SequenceEqual(valuesBefore);
+            }
+
+            if (TrySetValueAt(anim, frame, value) && Complete()) return true;
+            if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value) && Complete()) return true;
+            if (!UndoIncomplete()) return false;
+
+            if (!ReadFrameList(anim).Contains(frame))
+                TryInvokeNamed(anim, KeyframeMethodNames, frame);
+            if (Complete() && TrySetValueAt(anim, frame, value)) return true;
+            if (!UndoIncomplete(force: true)) return false;
+
             if (keyFrames != null)
             {
-                if (TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame) && TrySetValueAt(anim, frame, value))
-                    return true;
+                if (!ReadFrameList(anim).Contains(frame))
+                    TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
+                if (Complete() && TrySetValueAt(anim, frame, value)) return true;
+                if (!UndoIncomplete(force: true)) return false;
             }
-            if (KeyframeCollectionMutation.TryUpsert(anim, frame, value)) return true;
-            return TrySetValueAt(anim, frame, value);
+            // With the original layout restored, the mutable collection
+            // fallback inserts the Frame and Value as one logical operation.
+            return KeyframeCollectionMutation.TryUpsert(anim, frame, value);
         }
 
         private static bool RemoveKeyframe(object anim, int frame)
@@ -314,15 +376,8 @@ namespace YMM4McpPlugin
                     index = frames.FindIndex(f => f == frame);
                 if (index < 0 || index >= list.Count) return false;
                 var entry = list[index];
-                if (entry != null)
-                {
-                    var vp = entry.GetType().GetProperty("Value");
-                    if (vp?.CanWrite == true)
-                    {
-                        vp.SetValue(entry, Convert.ChangeType(value, vp.PropertyType, CultureInfo.InvariantCulture));
-                        return true;
-                    }
-                }
+                if (entry != null && KeyframeValueMutation.TrySet(entry, value))
+                    return true;
             }
             foreach (var name in new[] { "DefaultValue", "Value" })
             {

@@ -36,7 +36,131 @@ Check(throws.Applied == 1, "later method should run after exception");
 
 Check(!KeyframeMethodInvoker.TryInvokeNamed(legacy, new[] { "MissingMethod" }, 10),
     "missing method must fail");
-Console.WriteLine("Keyframe method invocation tests passed");
+var shared = new MockKeyFrames();
+var detached = new MockAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), detached),
+    "detached Animation must bind to the item's shared KeyFrames");
+Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
+    "binding must use the exact shared KeyFrames instance");
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), detached),
+    "already-bound Animation should be accepted when it owns the same shared frames");
+Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(shared), detached),
+    "matching item and animation frames must not be treated as a conflict");
+Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
+    "existing binding must not be overwritten");
+var foreignFrames = new MockKeyFrames();
+Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(foreignFrames), detached),
+    "cross-item keyframe binding must be detected before editing");
+Check(!KeyframeHostBinding.TryBind(new MockItem(foreignFrames), detached),
+    "cross-item binding must not be reported as successful");
+Check(KeyframeHostBinding.HasConflictingBinding(new ThrowingFrameItem(), detached),
+    "throwing item KeyFrames getter must fail closed");
+Check(!KeyframeHostBinding.TryBind(new ThrowingFrameItem(), detached),
+    "existing binding cannot be trusted when item ownership is unreadable");
+Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(shared), new ThrowingFrameAnimation()),
+    "throwing animation KeyFrames getter must fail closed");
+Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
+    "cross-item binding check must not mutate the original animation");
+Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(null), detached),
+    "hosts without item-level KeyFrames should retain their legacy fallback");
+Check(!KeyframeHostBinding.TryBind(new MockItem(null), new MockAnimation()),
+    "missing item KeyFrames must not be fabricated");
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new WrongBindingAnimation()),
+    "incompatible SetKeyFrames signature must be rejected");
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new ThrowingBindingAnimation()),
+    "host SetKeyFrames failures must not be reported as success");
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new NoOpBindingAnimation()),
+    "a no-op SetKeyFrames must not be reported as success");
+
+var overloaded = new OverloadedBindingAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), overloaded),
+    "prefer the strongly typed SetKeyFrames overload over a broad object overload");
+Check(ReferenceEquals(overloaded.KeyFrames, shared) && overloaded.BroadCalls == 0,
+    "a broad overload must not shadow the strongly typed overload");
+
+var fallbackOverload = new FallbackBindingAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), fallbackOverload),
+    "try a compatible fallback after a throwing SetKeyFrames overload");
+Check(ReferenceEquals(fallbackOverload.KeyFrames, shared) && fallbackOverload.TypedCalls == 1,
+    "failed typed overload must allow fallback without replacing the collection");
+
+var noOpOverload = new NoOpOverloadBindingAnimation();
+Check(KeyframeHostBinding.TryBind(new MockItem(shared), noOpOverload),
+    "try another compatible overload after a silent no-op");
+Check(ReferenceEquals(noOpOverload.KeyFrames, shared) && noOpOverload.TypedCalls == 1,
+    "no-op typed overload must not be treated as success");
+
+
+// A host can insert the frame without adding a matching AnimationValue.
+// Such a partial insertion must not overwrite the original start value.
+Check(!KeyframeInsertionSafety.IsComplete(Array.Empty<int>(), 1, new[] { 24 }, 1, 24),
+    "frame-only host Add must not be mistaken for a complete keyframe");
+Check(KeyframeInsertionSafety.IsComplete(Array.Empty<int>(), 1, new[] { 24 }, 2, 24),
+    "a frame and a corresponding new value form a complete insertion");
+Check(KeyframeInsertionSafety.IsComplete(new[] { 10, 30 }, 3,
+    new[] { 10, 20, 30 }, 4, 20),
+    "a middle insertion must preserve all existing frame positions");
+Check(!KeyframeInsertionSafety.IsComplete(new[] { 10, 30 }, 3,
+    new[] { 10, 20, 31 }, 4, 20),
+    "a host insertion must not silently change unrelated frames");
+Check(!KeyframeInsertionSafety.IsComplete(new[] { 10 }, 2,
+    new[] { 10, 20 }, 2, 20),
+    "a missing new value must reject an otherwise plausible frame count");
+Check(!KeyframeInsertionSafety.IsComplete(new[] { 10 }, 2,
+    new[] { 10, 20 }, 3, 10),
+    "an existing frame must not be counted as a new insertion");
+
+// A complete host insertion can still fail its value write. Roll back both
+// the new frame (by the host) and the extra value (by this helper).
+var insertedValues = new List<double> { 1.0, 2.0, 3.0 };
+Check(KeyframeInsertionSafety.TryRemoveInsertedValue(insertedValues, 2, 1),
+    "failed host insertion must remove its default value");
+Check(insertedValues.SequenceEqual(new[] { 1.0, 3.0 }),
+    "rollback must preserve the values on either side of the insertion");
+Check(KeyframeInsertionSafety.TryRemoveInsertedValue(insertedValues, 2, 1),
+    "host removal that already restored values must be accepted");
+var fixedValues = new double[] { 1.0, 2.0 };
+Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(fixedValues, 1, 1),
+    "a fixed-size collection must not be mutated during rollback");
+Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(new List<double> { 1.0, 2.0, 3.0 }, 1, 1),
+    "unexpected value count must fail closed");
+Check(!KeyframeInsertionSafety.TryRemoveInsertedValue(new List<double> { 1.0, 2.0 }, 1, 3),
+    "invalid rollback index must fail closed");
+
+// Regression: a host Value setter may silently ignore or clamp a write.
+// Never report an existing keyframe as updated without reading it back.
+var numericValue = new WritableDoubleValue();
+Check(KeyframeValueMutation.TrySet(numericValue, 2.5) && numericValue.Value == 2.5,
+    "a valid keyframe value update must succeed");
+var ignoredValue = new IgnoringValue();
+Check(!KeyframeValueMutation.TrySet(ignoredValue, 2.5) && ignoredValue.Value == 1,
+    "a no-op host setter must not report success");
+var clampedValue = new ClampedValue();
+Check(!KeyframeValueMutation.TrySet(clampedValue, 5) && clampedValue.Value == 1,
+    "a clamped host value must be rolled back");
+var afterWriteThrows = new ThrowAfterWriteValue();
+Check(!KeyframeValueMutation.TrySet(afterWriteThrows, 2.5) && afterWriteThrows.Value == 1,
+    "a setter that mutates then throws must restore the old value");
+var integerValue = new WritableIntValue();
+Check(!KeyframeValueMutation.TrySet(integerValue, 2.5) && integerValue.Value == 1,
+    "fractional values must not round integer keyframes");
+Check(KeyframeValueMutation.TrySet(integerValue, 3) && integerValue.Value == 3,
+    "integral values should still update integer keyframes");
+var floatValue = new WritableFloatValue();
+// A float getter's shortest round-trip text ("0.1") differs from its exact
+// value widened to double (0.10000000149011612). Valid writes must succeed.
+Check(KeyframeValueMutation.TrySet(floatValue, 0.1) && floatValue.Value == 0.1f,
+    "a valid fractional float keyframe update must not be rolled back");
+Check(KeyframeValueMutation.TrySet(floatValue, -0.1) && floatValue.Value == -0.1f,
+    "negative fractional float keyframes must also be accepted");
+Check(!KeyframeValueMutation.TrySet(floatValue, 1e100) && floatValue.Value == -0.1f,
+    "a finite double must not overflow a float keyframe to infinity");
+bool unsafeRollbackRejected = false;
+try { KeyframeValueMutation.TrySet(new UnrestorableValue(), 5); }
+catch (InvalidOperationException) { unsafeRollbackRejected = true; }
+Check(unsafeRollbackRejected, "failed rollback must stop the fallback chain");
+
+Console.WriteLine("Keyframe method invocation and host binding tests passed");
 
 internal sealed class RejectingAnimation
 {
@@ -74,4 +198,126 @@ internal sealed class ThrowingAnimation
     public int Applied { get; private set; }
     public bool AddKeyFrame(int frame, double value) => throw new NotSupportedException();
     public void SetKeyFrame(int frame, double value) { Applied++; }
+}
+
+internal sealed class MockKeyFrames
+{
+    public List<int> Frames { get; } = new();
+}
+
+internal sealed class MockItem(MockKeyFrames? frames)
+{
+    public MockKeyFrames? KeyFrames { get; } = frames;
+}
+
+internal sealed class MockAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int Binds { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { KeyFrames = frames; Binds++; }
+}
+
+internal sealed class WrongBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public void SetKeyFrames(string frames) { }
+}
+
+internal sealed class ThrowingBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) => throw new InvalidOperationException("host refused");
+}
+
+internal sealed class NoOpBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { }
+}
+
+internal sealed class OverloadedBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int BroadCalls { get; private set; }
+    public void SetKeyFrames(object frames) { BroadCalls++; throw new NotSupportedException(); }
+    public void SetKeyFrames(MockKeyFrames frames) => KeyFrames = frames;
+}
+
+internal sealed class FallbackBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int TypedCalls { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { TypedCalls++; throw new NotSupportedException(); }
+    public void SetKeyFrames(object frames) => KeyFrames = (MockKeyFrames)frames;
+}
+
+internal sealed class NoOpOverloadBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int TypedCalls { get; private set; }
+    public void SetKeyFrames(MockKeyFrames frames) { TypedCalls++; }
+    public void SetKeyFrames(object frames) => KeyFrames = (MockKeyFrames)frames;
+}
+
+internal sealed class ThrowingFrameItem
+{
+    public MockKeyFrames KeyFrames => throw new InvalidOperationException("item frame lookup failed");
+}
+
+internal sealed class ThrowingFrameAnimation
+{
+    public MockKeyFrames KeyFrames => throw new InvalidOperationException("animation frame lookup failed");
+}
+
+internal sealed class WritableDoubleValue
+{
+    public double Value { get; set; } = 1;
+}
+internal sealed class WritableIntValue
+{
+    public int Value { get; set; } = 1;
+}
+internal sealed class WritableFloatValue
+{
+    public float Value { get; set; } = 1;
+}
+internal sealed class IgnoringValue
+{
+    public double Value { get => 1; set { } }
+}
+internal sealed class ClampedValue
+{
+    private double current = 1;
+    public double Value { get => current; set => current = Math.Clamp(value, 0, 3); }
+}
+internal sealed class ThrowAfterWriteValue
+{
+    private double current = 1;
+    private bool throwOnce = true;
+    public double Value
+    {
+        get => current;
+        set
+        {
+            current = value;
+            if (throwOnce)
+            {
+                throwOnce = false;
+                throw new InvalidOperationException("host setter failed after writing");
+            }
+        }
+    }
+}
+internal sealed class UnrestorableValue
+{
+    private double current = 1;
+    public double Value
+    {
+        get => current;
+        set
+        {
+            if (value == 1) throw new InvalidOperationException("rollback refused");
+            current = Math.Clamp(value, 0, 3);
+        }
+    }
 }

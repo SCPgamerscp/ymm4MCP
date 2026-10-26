@@ -32,6 +32,26 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+// Simulate the YMM4 4.56.x flow: the animation starts detached, the item
+// owns the shared frame list, and a nonzero keyframe must become observable.
+var sharedFrameList = new FrameFixture(new List<int>());
+var detachedAnimation = new DetachedAnimationFixture();
+Check(!KeyframeCollectionMutation.TryUpsert(detachedAnimation, 24, 2.0),
+    "a detached animation must not silently create local keyframes");
+Check(KeyframeHostBinding.TryBind(new ItemWithFrames(sharedFrameList), detachedAnimation),
+    "bind the detached animation to the item's shared keyframe collection");
+Check(KeyframeCollectionMutation.TryUpsert(detachedAnimation, 24, 2.0),
+    "create the first nonzero keyframe after host binding");
+Check(((List<int>)sharedFrameList.Frames).SequenceEqual(new[] { 24 }),
+    "the inserted frame must be visible on the owning timeline item");
+Check(detachedAnimation.Values.SequenceEqual(new[] { 1.0, 2.0 }),
+    "the inserted value must align with the shared frame");
+Check(KeyframeCollectionMutation.TryUpsert(detachedAnimation, 24, 3.0),
+    "update an existing bound keyframe without inserting a duplicate");
+Check(((List<int>)sharedFrameList.Frames).SequenceEqual(new[] { 24 })
+    && detachedAnimation.Values.SequenceEqual(new[] { 1.0, 3.0 }),
+    "updating a bound frame must preserve alignment and frame uniqueness");
+
 var implicitStart = new AnimationFixture(new List<int>(), new List<double> { 1.0 });
 Check(KeyframeCollectionMutation.TryUpsert(implicitStart, 30, 2.0), "Insert first frame");
 Check(KeyframeCollectionMutation.TryUpsert(implicitStart, 10, 1.5), "Insert sorted frame");
@@ -234,4 +254,16 @@ sealed class CorruptingImmutableValues : System.Collections.ObjectModel.ReadOnly
         next[0] += 1.0;
         return new CorruptingImmutableValues(next);
     }
+}
+
+sealed class ItemWithFrames(FrameFixture frames)
+{
+    public FrameFixture KeyFrames { get; } = frames;
+}
+
+sealed class DetachedAnimationFixture
+{
+    public FrameFixture? KeyFrames { get; private set; }
+    public List<double> Values { get; } = new() { 1.0 };
+    public void SetKeyFrames(FrameFixture frames) => KeyFrames = frames;
 }
