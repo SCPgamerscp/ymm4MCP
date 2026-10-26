@@ -318,5 +318,83 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
 
 
 
+
+    def test_limits_non_av_streams_before_any_decode(self):
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}] +
+                       [{"codec_type": "subtitle"} for _ in range(128)]})
+        calls = []
+
+        def fake(command, timeout):
+            calls.append(command[0])
+            return subprocess.CompletedProcess(command, 0, metadata, "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertEqual(report["error_code"], "EXPORT_STREAM_LIMIT")
+        self.assertEqual(calls, ["ffprobe"])
+
+    def test_rejects_out_of_range_audio_formats(self):
+        for fields in ({"sample_rate": "768001", "channels": 2},
+                       {"sample_rate": "48000", "channels": 65}):
+            with self.subTest(fields=fields):
+                report = self.inspect_with_probe(json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video"},
+                                {"codec_type": "audio", **fields}]}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"},
+                        {"codec_type": "audio",
+                         "sample_rate": "768000", "channels": 64}]}))
+        self.assertTrue(valid["passed"], valid)
+
+    def test_sampling_has_shared_deadline_across_tracks(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "video"}]})
+        ffmpeg_calls = []
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            ffmpeg_calls.append(timeout)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake), \
+                patch.object(qa, "time") as clock:
+            # Create deadline; decode first track; second track is too late.
+            clock.monotonic.side_effect = [0, 0, 121]
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertEqual(report["error_code"], "EXPORT_DECODE_TIMEOUT")
+        self.assertEqual(len(ffmpeg_calls), 1)
+        self.assertLessEqual(ffmpeg_calls[0], 30)
+
+    def test_full_decode_shares_budget_between_video_and_audio(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        mappings = []
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            mappings.append(command[command.index("-map") + 1])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake), \
+                patch.object(qa, "time") as clock:
+            # Sampling: deadline + 2 tracks; full: deadline + 2 tracks.
+            clock.monotonic.side_effect = [0, 0, 0, 0, 0, 901]
+            report = qa.inspect(str(self.video), full_decode=True)
+        self.assertFalse(report["passed"], report)
+        self.assertFalse(report["fully_decoded"])
+        self.assertTrue(any(issue["code"] == "EXPORT_FULL_DECODE_TIMEOUT"
+                            and issue["stream_type"] == "audio"
+                            for issue in report["issues"]))
+        self.assertEqual(mappings, ["0:v:0", "0:a:0", "0:v"])
+
 if __name__ == "__main__":
     unittest.main()
