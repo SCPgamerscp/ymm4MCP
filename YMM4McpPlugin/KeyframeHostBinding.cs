@@ -16,7 +16,10 @@ namespace YMM4McpPlugin
             {
                 var existing = animation.GetType().GetProperty("KeyFrames", flags)?.GetValue(animation);
                 var shared = item.GetType().GetProperty("KeyFrames", flags)?.GetValue(item);
-                return existing != null && shared != null && !ReferenceEquals(existing, shared);
+                // An already-bound Animation with no matching item-level KeyFrames
+                // cannot be proven to belong to this item. In particular, a
+                // frame-zero write can still mutate the foreign Animation.
+                return existing != null && !ReferenceEquals(existing, shared);
             }
             catch
             {
