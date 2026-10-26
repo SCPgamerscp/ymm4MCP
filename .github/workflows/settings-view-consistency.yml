@@ -1,0 +1,26 @@
+name: Settings view consistency tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/McpViewModel.cs'
+      - 'YMM4McpPlugin/SettingsViewSnapshot.cs'
+      - 'tests/SettingsViewSnapshot.Tests/**'
+      - '.github/workflows/settings-view-consistency.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'YMM4McpPlugin/McpViewModel.cs'
+      - 'YMM4McpPlugin/SettingsViewSnapshot.cs'
+      - 'tests/SettingsViewSnapshot.Tests/**'
+      - '.github/workflows/settings-view-consistency.yml'
+
+jobs:
+  settings-view-consistency:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/SettingsViewSnapshot.Tests/SettingsViewSnapshot.Tests.csproj --configuration Release
