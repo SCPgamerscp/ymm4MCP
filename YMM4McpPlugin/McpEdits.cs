@@ -135,7 +135,9 @@ namespace YMM4McpPlugin
                 {
                     var info = ReadItemInfo(iv);
                     string id = GetItemIdentity(info.item).id;
-                    if (!string.IsNullOrEmpty(id)) ids.Add(id);
+                    // Preserve missing identities so checkpoint validation can fail closed.
+                    // Silently dropping one would allow rollback to delete that item.
+                    ids.Add(id);
                 }
                 return ids;
             });
@@ -192,6 +194,13 @@ namespace YMM4McpPlugin
             lock (_editsLock)
             {
                 var existing = _editBindings.FirstOrDefault(b => b.IdempotencyKey == key);
+                // Validate the first save as well as subsequent reconciliation.
+                // Otherwise a new idempotency key could persist nonexistent item IDs.
+                if (existing == null &&
+                    !EditCheckpointSafety.CompatibleBindingUpdate(
+                        Array.Empty<(string Id, string ItemId, string? Revision)>(),
+                        items.Select(i => (i.Id, i.ItemId, i.Revision)), liveItemIds))
+                    return Failure("BINDINGS_INVALID", "EditPlanバインディングが現在のタイムラインと一致しません");
                 if (existing != null &&
                     (!string.Equals(existing.PlanHash, hash, StringComparison.Ordinal) ||
                      existing.Items == null ||
