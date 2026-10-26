@@ -229,7 +229,7 @@ namespace YMM4McpPlugin
                 if (valuesHasStart && at == 0) continue;
                 int valueIndex = valuesHasStart ? i + 1 : i;
                 double? value = valueIndex >= 0 && valueIndex < values.Count ? values[valueIndex] : null;
-                result.Add(new { at, absolute_frame = (long)itemStartFrame + at, value });
+                result.Add(new { at, absolute_frame = KeyframeSelectorSafety.AbsoluteFrame(itemStartFrame, at), value });
             }
             return result;
         }
