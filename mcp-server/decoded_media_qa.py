@@ -484,10 +484,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         return failure("EXPORT_FILE_CHANGED", "検証中に動画ファイルが変更されました")
     passed = not any(issue["severity"] == "error" for issue in issues)
     fully_decoded = bool(full_decode and full_decode_ok and passed)
+    # A requested full decode is not proof it completed. Do not label a
+    # failed or interrupted verification as full_audio_video_decode.
+    scope = ("full_audio_video_decode" if fully_decoded
+             else "incomplete" if not passed
+             else "sampled_audio_video_decode")
     return {"success": True,
             "passed": passed,
             "issues": issues,
-            "verification_scope": ("full_audio_video_decode" if full_decode else "sampled_audio_video_decode"),
+            "verification_scope": scope,
             "fully_decoded": fully_decoded,
             "signal_scope": "sampled_only", "black_frames": black_frames,
             "frozen_frames": frozen_frames,
