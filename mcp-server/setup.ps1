@@ -32,8 +32,10 @@ if ($null -eq $pythonCommand) {
 }
 # Install into a persistent per-user directory.  Running from a downloaded ZIP
 # extraction directory would break Claude Desktop when that folder is removed.
-# Direct setup.ps1 usage without -Install keeps its previous in-place behavior.
-if ($Install) {
+# Configuring Claude Desktop must always use the persistent installation:
+# otherwise a later deletion of the downloaded ZIP folder breaks the MCP entry.
+# Read-only connection checks without -Install remain in-place.
+if ($Install -or $ConfigureClaudeDesktop) {
     if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA が見つかりません。' }
     $targetDir = Join-Path $env:LOCALAPPDATA 'YMM4MCP\mcp-server'
     if ([IO.Path]::GetFullPath($sourceDir).TrimEnd('\') -ine
