@@ -478,5 +478,78 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertIsNone(qa._audio_peak_db(
             "Peak level dB: 1e-"))
 
+
+    def test_streaming_capture_handles_large_output_without_deadlock(self):
+        # Both pipes must be drained concurrently; retained data stays bounded.
+        command = [sys.executable, "-c",
+                   "import sys;"
+                   "sys.stdout.buffer.write(b'A'*12000000);"
+                   "sys.stderr.buffer.write(b'B'*12000000+b'END')"]
+        result = qa.run(command, 15)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "A" * 1_000_001)
+        self.assertEqual(len(result.stderr), 1_000_000)
+        self.assertTrue(result.stderr.endswith("END"))
+
+    def test_streaming_capture_kills_timed_out_child(self):
+        command = [sys.executable, "-c", "import time;time.sleep(5)"]
+        with self.assertRaises(subprocess.TimeoutExpired):
+            qa.run(command, 0.1)
+
+    def test_open_black_and_silence_spans_reach_sample_eof(self):
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 2.5", "black_start", "black_end", 8),
+            [(2.5, 8)])
+        self.assertEqual(qa._signal_ranges(
+            "silence_start: -2", "silence_start", "silence_end", 8),
+            [(0, 8)])
+        # Without an observed window end, do not invent a closing timestamp.
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 2.5", "black_start", "black_end"), [])
+
+    def test_signal_ranges_never_extend_outside_decoded_window(self):
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 7 black_end: 100",
+            "black_start", "black_end", 8), [(7, 8)])
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 9 black_end: 12",
+            "black_start", "black_end", 8), [])
+        self.assertEqual(qa._signal_ranges(
+            "silence_start: -1 silence_end: 0.5",
+            "silence_start", "silence_end", 8), [(0, 0.5)])
+
+    def test_shorter_audio_track_warns_even_when_tail_decode_succeeds(self):
+        metadata = json.dumps({
+            "format": {"duration": "20"},
+            "streams": [{"codec_type": "video", "duration": "20.0"},
+                        {"codec_type": "audio", "start_time": "0.5",
+                         "duration": "12.0"}]})
+        result = self.inspect_with_probe(metadata)
+        self.assertTrue(result["passed"], result)
+        warnings = [i for i in result["issues"]
+                    if i["code"] == "EXPORT_STREAM_ENDS_EARLY"]
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["stream_type"], "audio")
+        self.assertEqual(warnings[0]["missing_tail_seconds"], 7.5)
+
+        within_tolerance = json.dumps({
+            "format": {"duration": "20"},
+            "streams": [{"codec_type": "video", "duration": "19.5"},
+                        {"codec_type": "audio", "duration": "N/A"}]})
+        report = self.inspect_with_probe(within_tolerance)
+        self.assertFalse(any(i["code"] == "EXPORT_STREAM_ENDS_EARLY"
+                             for i in report["issues"]))
+
+    def test_invalid_optional_stream_times_are_rejected(self):
+        for fields in ({"duration": "1_2"}, {"duration": "-1"},
+                       {"duration": "1e999"}, {"start_time": "abc"},
+                       {"start_time": True}):
+            with self.subTest(fields=fields):
+                metadata = json.dumps({
+                    "format": {"duration": "20"},
+                    "streams": [{"codec_type": "video", **fields}]})
+                result = self.inspect_with_probe(metadata)
+                self.assertEqual(result["error_code"], "EXPORT_PROBE_FAILED")
+
 if __name__ == "__main__":
     unittest.main()
