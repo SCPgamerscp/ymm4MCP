@@ -107,6 +107,14 @@ namespace YMM4McpPlugin
                 // silently move a keyframe to a different frame number.
                 if (IsIntegerType(target))
                 {
+                    // Convert.ToDecimal(double) can round a fractional value
+                    // such as 1.0000000000000002 to exactly 1. Check the
+                    // original floating-point value before decimal conversion.
+                    if (argument is double sourceDouble
+                        && sourceDouble != Math.Truncate(sourceDouble)
+                        || argument is float sourceFloat
+                        && sourceFloat != MathF.Truncate(sourceFloat))
+                        return false;
                     var numeric = Convert.ToDecimal(argument, CultureInfo.InvariantCulture);
                     if (numeric != decimal.Truncate(numeric)) return false;
                 }
