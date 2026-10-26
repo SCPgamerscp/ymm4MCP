@@ -6,11 +6,13 @@ $serverDir = $sourceDir
 
 # The Windows py launcher can exist without a registered Python 3 runtime.
 # Probe it first, then fall back to python.exe instead of failing installation.
+# The MCP dependency stack requires Python >= 3.10.  A machine may have an
+# older py -3 default even when python.exe points to a supported interpreter.
 $pythonCommand = $null
 $pythonArgs = @()
 if (Get-Command py -ErrorAction SilentlyContinue) {
     try {
-        & py -3 -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        & py -3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
         if ($LASTEXITCODE -eq 0) {
             $pythonCommand = 'py'
             $pythonArgs = @('-3')
@@ -21,14 +23,14 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
 }
 if ($null -eq $pythonCommand -and (Get-Command python -ErrorAction SilentlyContinue)) {
     try {
-        & python -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        & python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
         if ($LASTEXITCODE -eq 0) { $pythonCommand = 'python' }
     } catch {
         # Report a single actionable error below if both candidates fail.
     }
 }
 if ($null -eq $pythonCommand) {
-    throw '利用可能な Python 3 が見つかりません。Python 3 をインストールしてから再実行してください。'
+    throw '利用可能な Python 3.10 以上が見つかりません。Python 3.10 以上をインストールしてから再実行してください。'
 }
 # Install into a persistent per-user directory.  Running from a downloaded ZIP
 # extraction directory would break Claude Desktop when that folder is removed.
