@@ -22,3 +22,61 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet run --project tests/KeyframeCollectionRollback.Tests/KeyframeCollectionRollback.Tests.csproj --configuration Release
+
+  # This is a temporary CI-only composition, NOT a GitHub PR merge.
+  # Test the five independent #140 fixes together before a maintainer merges
+  # any of them. No push permission or credentials are available to this job.
+  keyframe-cross-pr-integration:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 219
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compose latest main and related keyframe PR heads locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Keyframe integration CI"
+          git config user.email "keyframe-integration@users.noreply.github.com"
+          git fetch --no-tags origin main
+          if ! git merge --no-ff --no-edit FETCH_HEAD; then
+            echo "::error::PR #219 does not integrate cleanly with latest main"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+          for number in 218 251 254 255; do
+            echo "::group::Compose PR #$number"
+            git fetch --no-tags origin "pull/$number/head"
+            if ! git merge --no-ff --no-edit FETCH_HEAD; then
+              echo "::error::PR #$number conflicts with the composed keyframe changes"
+              git diff --name-only --diff-filter=U
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+          echo "Composed keyframe PRs #218 #219 #251 #254 #255 against latest main (local only)"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run all combined keyframe regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t projects < <(find tests -type f -name 'Keyframe*.csproj' | sort)
+          if [ "${#projects[@]}" -lt 5 ]; then
+            echo "::error::Expected at least five keyframe regression projects, found ${#projects[@]}"
+            exit 1
+          fi
+          for project in "${projects[@]}"; do
+            echo "::group::Test $project"
+            dotnet run --project "$project" --configuration Release
+            echo "::endgroup::"
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify live-smoke test harness regressions
+        run: python -m unittest discover -s mcp-server -p 'test_check_keyframe_compat.py'
