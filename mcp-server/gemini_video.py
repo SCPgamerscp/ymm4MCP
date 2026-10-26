@@ -361,9 +361,6 @@ def analyze_frames_dir(
                     or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Frame payload exceeds the upload size limit",
                         "source": "frames_dir"}
-            if not img_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-                return {"success": False, "error": "Selected frame is not a PNG image",
-                        "source": "frames_dir"}
             total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
             analyzed_images += 1
