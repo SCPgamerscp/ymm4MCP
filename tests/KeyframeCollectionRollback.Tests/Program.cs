@@ -86,7 +86,8 @@ CheckUnchanged(wrongIndexThrow.Frames, wrongIndexThrow.Values,
 // Some IList implementations corrupt an existing value without growing the
 // collection, or insert more than one value. These states cannot be restored
 // by undoing one insertion: fail loudly instead of allowing another fallback.
-var overwrittenValues = new FaultyList { 1.0, 2.0 } { ReplaceOnInsert = true };
+var overwrittenValues = new FaultyList { 1.0, 2.0 };
+overwrittenValues.ReplaceOnInsert = true;
 var corruptValues = new TestAnimation(new FaultyList { 10 }, overwrittenValues);
 bool rejectedCorruptValues = false;
 try { KeyframeCollectionMutation.TryUpsert(corruptValues, 20, 5.0); }
@@ -94,7 +95,8 @@ catch (InvalidOperationException) { rejectedCorruptValues = true; }
 Check(rejectedCorruptValues,
     "same-count value corruption must not be reported as an ordinary fallback");
 
-var doubleValues = new FaultyList { 1.0, 2.0 } { InsertTwice = true };
+var doubleValues = new FaultyList { 1.0, 2.0 };
+doubleValues.InsertTwice = true;
 var doubleInsert = new TestAnimation(new FaultyList { 10 }, doubleValues);
 bool rejectedDoubleInsert = false;
 try { KeyframeCollectionMutation.TryUpsert(doubleInsert, 20, 5.0); }
@@ -102,7 +104,8 @@ catch (InvalidOperationException) { rejectedDoubleInsert = true; }
 Check(rejectedDoubleInsert,
     "two inserted values cannot be silently accepted or rolled back as one");
 
-var overwrittenFrames = new FaultyList { 10 } { ReplaceOnInsert = true };
+var overwrittenFrames = new FaultyList { 10 };
+overwrittenFrames.ReplaceOnInsert = true;
 var corruptFrames = new TestAnimation(overwrittenFrames, new FaultyList { 1.0, 2.0 });
 bool rejectedCorruptFrames = false;
 try { KeyframeCollectionMutation.TryUpsert(corruptFrames, 20, 5.0); }
@@ -115,8 +118,9 @@ Check(corruptFrames.Values.Count == 2 && Convert.ToDouble(corruptFrames.Values[0
 
 // A collection can throw *after* RemoveAt has successfully undone Insert.
 // A verified original snapshot is still a safe failure.
-var removeThrows = new FaultyList { 1.0, 2.0 }
-    { ThrowAfterInsert = true, ThrowAfterRemove = true };
+var removeThrows = new FaultyList { 1.0, 2.0 };
+removeThrows.ThrowAfterInsert = true;
+removeThrows.ThrowAfterRemove = true;
 var recoverableRemoveThrow = new TestAnimation(new FaultyList { 10 }, removeThrows);
 Check(!KeyframeCollectionMutation.TryUpsert(recoverableRemoveThrow, 20, 5.0),
     "verified rollback after RemoveAt throws must remain a safe failure");
