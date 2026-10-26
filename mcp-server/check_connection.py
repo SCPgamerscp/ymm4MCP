@@ -27,7 +27,15 @@ def check() -> dict:
     configured_port = urlsplit(base).port
     if configured_port is not None and port != configured_port:
         raise ValueError("YMM4の応答ポートが接続先ポートと一致しません")
-    return {"status": status["status"], "version": status.get("version"), "port": port}
+    version = status.get("version")
+    # Version is printed in the installer terminal. Never display control
+    # sequences, Unicode direction overrides, or arbitrarily large values
+    # returned by an unexpected service on the configured loopback port.
+    if version is not None and (
+            not isinstance(version, str) or not version or len(version) > 128
+            or not version.isprintable()):
+        raise ValueError("YMM4の応答バージョンが不正です")
+    return {"status": status["status"], "version": version, "port": port}
 
 
 def main() -> int:
