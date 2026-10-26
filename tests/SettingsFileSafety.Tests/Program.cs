@@ -55,7 +55,11 @@ try
         SettingsFileSafety.ReadValidated(path);
         throw new Exception("invalid UTF-8 accepted");
     }
-    catch (DecoderFallbackException) { }
+    catch (InvalidDataException ex)
+    {
+        Check(ex.InnerException is DecoderFallbackException,
+            "malformed UTF-8 must be normalized to InvalidDataException for McpSettings.Load");
+    }
 
     File.WriteAllText(path, "{\"Port\":8765}", new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
     Check(SettingsFileSafety.ReadValidated(path).Contains("\"Port\":8765"),
