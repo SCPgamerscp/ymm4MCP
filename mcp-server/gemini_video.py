@@ -239,8 +239,14 @@ def _frame_filename_key(name: Any) -> tuple:
     """Natural numeric ordering for exports such as 1.png, 2.png, 10.png."""
     if not isinstance(name, str):
         return ((0, ""),)
-    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
-                 for part in re.split(r"([0-9]+)", name))
+    # Avoid int()'s digit limit and non-decimal Unicode isdigit() cases.
+    def key(part: str) -> tuple:
+        if part.isascii() and part.isdigit():
+            normalized = part.lstrip("0") or "0"
+            return (1, len(normalized), normalized, len(part))
+        return (0, part.casefold(), "", 0)
+
+    return tuple(key(part) for part in re.split(r"([0-9]+)", name))
 
 
 def _valid_time_ms(value: Any) -> bool:
@@ -284,23 +290,44 @@ def analyze_frames_dir(
 
     # 解析対象の画像ファイルを決定(metaがあればそれを優先、なければフォルダ走査)
     if frames_meta:
-        entries = [m for m in frames_meta if m.get("file")]
+        # A partial selection must never be reported as a complete QA pass.
+        if any(not isinstance(m.get("file"), str) or not m["file"]
+               or not m["file"].lower().endswith(".png") for m in frames_meta):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta contains an invalid PNG filename"}
+        entries = list(frames_meta)
+        if len({e["file"] for e in entries}) != len(entries):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta contains duplicate PNG filenames"}
+        has_time = [_valid_time_ms(e.get("timeMs")) for e in entries]
+        has_frame = [_valid_frame_index(e.get("frame")) for e in entries]
+        if ((any(has_time) and not all(has_time))
+                or (any(has_frame) and not all(has_frame))):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta has inconsistent timestamp/frame metadata"}
+        if all(has_time):
+            entries.sort(key=lambda e: e["timeMs"])
+        elif all(has_frame):
+            entries.sort(key=lambda e: e["frame"])
+        else:
+            entries.sort(key=lambda e: _frame_filename_key(e["file"]))
+        # Timestamp order and frame order must agree when both are supplied.
         if len(entries) > 1:
-            # Never claim chronological analysis for shuffled or incomparable
-            # host metadata. Prefer actual capture times, then frame indices.
-            if all(_valid_time_ms(e.get("timeMs")) for e in entries):
-                entries.sort(key=lambda e: e["timeMs"])
-            elif all(_valid_frame_index(e.get("frame")) for e in entries):
-                entries.sort(key=lambda e: e["frame"])
-            elif any(_valid_time_ms(e.get("timeMs")) or _valid_frame_index(e.get("frame"))
-                     for e in entries):
+            if all(has_time) and any(entries[i]["timeMs"] <= entries[i - 1]["timeMs"]
+                                     for i in range(1, len(entries))):
                 return {"success": False, "source": "frames_dir",
-                        "error": "frames_meta has inconsistent timestamp/frame metadata"}
-            else:
-                entries.sort(key=lambda e: _frame_filename_key(e["file"]))
+                        "error": "frames_meta contains duplicate capture timestamps"}
+            if all(has_frame) and any(entries[i]["frame"] <= entries[i - 1]["frame"]
+                                      for i in range(1, len(entries))):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta frame order conflicts with capture order"}
     else:
-        files = sorted((f for f in os.listdir(frames_dir) if f.lower().endswith(".png")),
-                       key=_frame_filename_key)
+        try:
+            files = sorted((f for f in os.listdir(frames_dir) if f.lower().endswith(".png")),
+                           key=_frame_filename_key)
+        except OSError as exc:
+            return {"success": False, "source": "frames_dir",
+                    "error": f"Cannot enumerate PNG frames: {exc}"}
         entries = [{"file": f, "timeMs": None, "frame": None} for f in files]
 
     if not entries:
@@ -333,6 +360,9 @@ def analyze_frames_dir(
             if (len(img_bytes) > MAX_FRAME_IMAGE_BYTES
                     or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Frame payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            if not img_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                return {"success": False, "error": "Selected frame is not a PNG image",
                         "source": "frames_dir"}
             total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
