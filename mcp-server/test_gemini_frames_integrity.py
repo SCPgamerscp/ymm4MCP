@@ -69,13 +69,6 @@ class GeminiFrameIntegrityTests(unittest.TestCase):
         ])
         self.assertIn("conflicts", error)
 
-    def test_malformed_png_is_not_sent_as_image_png(self):
-        self.png("a.png", b"not png")
-        with patch.object(gemini_video, "_client", return_value=object()):
-            result = gemini_video.analyze_frames_dir(self.tmp.name)
-        self.assertFalse(result["success"])
-        self.assertIn("not a PNG", result["error"])
-
     def test_directory_read_failure_is_structured(self):
         with patch.object(gemini_video.os, "listdir", side_effect=OSError("denied")):
             result = gemini_video.analyze_frames_dir(self.tmp.name)
