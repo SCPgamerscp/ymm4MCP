@@ -76,52 +76,187 @@ def validate_project_path(args: dict, must_exist: bool = False) -> str:
     return path
 
 
+def _ebml_vint(data: bytes, offset: int) -> tuple[int, int] | None:
+    """Read a bounded EBML variable-length integer (size field)."""
+    if offset >= len(data) or data[offset] == 0:
+        return None
+    mask = 0x80
+    length = 1
+    while not data[offset] & mask:
+        mask >>= 1
+        length += 1
+        if length > 8:
+            return None
+    if offset + length > len(data):
+        return None
+    value = data[offset] & (mask - 1)
+    for byte in data[offset + 1:offset + length]:
+        value = (value << 8) | byte
+    return value, offset + length
+
+
+def _ebml_element_id(data: bytes, offset: int) -> tuple[bytes, int] | None:
+    """Read a bounded EBML element ID without consuming payload bytes."""
+    if offset >= len(data) or data[offset] == 0:
+        return None
+    mask, length = 0x80, 1
+    while not data[offset] & mask:
+        mask >>= 1
+        length += 1
+        if length > 4:
+            return None
+    if offset + length > len(data):
+        return None
+    return data[offset:offset + length], offset + length
+
+
+def _ebml_doctype(header: bytes) -> str | None:
+    """Walk EBML header children, never matching markers inside Void payloads."""
+    if header[:4] != b"\x1a\x45\xdf\xa3":
+        return None
+    root = _ebml_vint(header, 4)
+    if root is None:
+        return None
+    root_size, begin = root
+    if root_size == (1 << (7 * (begin - 4))) - 1:
+        return None  # Unknown-size headers cannot be bounded safely.
+    end = begin + root_size
+    if end > len(header):
+        return None
+    cursor = begin
+    while cursor < end:
+        element = _ebml_element_id(header, cursor)
+        if element is None:
+            return None
+        element_id, size_offset = element
+        length = _ebml_vint(header, size_offset)
+        if length is None:
+            return None
+        size, start = length
+        if size == (1 << (7 * (start - size_offset))) - 1:
+            return None
+        next_element = start + size
+        if next_element > end:
+            return None
+        if element_id == b"\x42\x82":
+            if not 1 <= size <= 32:
+                return None
+            try:
+                return header[start:next_element].decode("ascii")
+            except UnicodeDecodeError:
+                return None
+        cursor = next_element
+    return None
+
+
+def _mov_has_metadata_atom(path: Path, file_size: int) -> bool:
+    """Skip top-level QuickTime atoms by size, even when mdat precedes moov.
+
+    Reads at most 16 bytes per atom and never loads media payload into memory.
+    """
+    try:
+        with path.open("rb") as stream:
+            offset = 0
+            for _ in range(128):
+                if offset + 8 > file_size:
+                    return False
+                stream.seek(offset)
+                atom = stream.read(16)
+                if len(atom) < 8:
+                    return False
+                size = int.from_bytes(atom[:4], "big")
+                minimum = 8
+                if size == 1:
+                    if len(atom) < 16:
+                        return False
+                    size = int.from_bytes(atom[8:16], "big")
+                    minimum = 16
+                elif size == 0:
+                    size = file_size - offset
+                if size < minimum or offset + size > file_size:
+                    return False
+                if atom[4:8] == b"moov":
+                    return True
+                offset += size
+                if offset == file_size:
+                    return False
+    except OSError:
+        return False
+    return False
+
+
 def verify_media_file(path: str, expected_format: str | None = None) -> dict:
     if not isinstance(path, str) or not path.strip():
         return {"ok": False, "error_code": "EXPORT_FILE_MISSING", "error": "出力パスが空です"}
     target = Path(path)
-    missing = {"ok": False, "error_code": "EXPORT_FILE_MISSING", "error": "出力ファイルがありません", "output_path": path}
+    missing = {"ok": False, "error_code": "EXPORT_FILE_MISSING",
+               "error": "出力ファイルがありません", "output_path": path}
     try:
         if not target.is_file():
             return missing
         with target.open("rb") as stream:
             size = stream.seek(0, 2)
             stream.seek(0)
-            # Read only the ISO BMFF box header (including optional extended size).
-            header = stream.read(24)
+            # Bounded read: never load the potentially multi-gigabyte export.
+            header = stream.read(4096)
     except FileNotFoundError:
         return missing
     except OSError:
-        return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": "出力ファイルを読み取れません",
-                "output_path": path}
-    fmt = (expected_format or target.suffix.lstrip(".")).lower()
+        return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED",
+                "error": "出力ファイルを読み取れません", "output_path": path}
+    suffix = target.suffix.lstrip(".").lower()
+    fmt = expected_format if expected_format is not None else suffix
+    if not isinstance(fmt, str):
+        fmt = ""
+    fmt = fmt.lower().lstrip(".")
+
+    def fail(message: str) -> dict:
+        return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": message,
+                "bytes": size, "output_path": path, "format": fmt}
+
+    if fmt not in ALLOWED_FORMATS or (suffix and suffix != fmt):
+        return fail("出力ファイル形式と拡張子が一致しません")
     if size < 32:
         return {"ok": False, "error_code": "EXPORT_FILE_EMPTY", "error": "出力ファイルが小さすぎます",
                 "bytes": size, "output_path": path, "format": fmt}
-    if fmt == "mp4":
-        if header[4:8] != b"ftyp":
-            return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": "MP4のftypボックスがありません",
-                    "bytes": size, "output_path": path, "format": fmt}
-        # A matching "ftyp" marker alone does not establish a valid MP4:
-        # the box must fit in the file and contain major_brand + minor_version.
+    result = {"ok": True, "format": fmt, "bytes": size, "output_path": path,
+              "verified": True, "verification_scope": "container_header_only",
+              "streams_verified": False}
+
+    if fmt in {"mp4", "mov"}:
+        if fmt == "mov" and header[4:8] != b"ftyp":
+            if not _mov_has_metadata_atom(target, size):
+                return fail("QuickTimeのmoovメタデータが見つからないか、atomサイズが不正です")
+            return result
+        box_type = header[4:8]
+        if box_type != b"ftyp" and not (fmt == "mov" and box_type == b"moov"):
+            return fail("ISO BMFF/QuickTimeの先頭ボックスが不正です")
         box_size = int.from_bytes(header[:4], "big")
         if box_size == 1:
-            # ISO BMFF extended-size box: size(4) + type(4) + largesize(8).
             box_size = int.from_bytes(header[8:16], "big")
-            minimum_size, brand_offset = 24, 16
+            minimum_size, brand_offset = (24, 16) if box_type == b"ftyp" else (16, 0)
         else:
-            minimum_size, brand_offset = 16, 8
+            minimum_size, brand_offset = (16, 8) if box_type == b"ftyp" else (8, 0)
         if not minimum_size <= box_size <= size:
-            return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED",
-                    "error": "MP4のftypボックスサイズが不正です",
-                    "bytes": size, "output_path": path, "format": fmt}
-        brand = header[brand_offset:brand_offset + 4].decode("latin1", "replace")
-        return {"ok": True, "format": "mp4", "bytes": size, "output_path": path,
-                "has_video": True, "brand": brand, "verified": True}
-    if fmt == "wav":
-        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-            return {"ok": False, "error_code": "EXPORT_VERIFY_FAILED", "error": "WAVヘッダが不正です",
-                    "bytes": size, "output_path": path, "format": fmt}
-        return {"ok": True, "format": "wav", "bytes": size, "output_path": path,
-                "has_audio": True, "verified": True}
-    return {"ok": True, "format": fmt, "bytes": size, "output_path": path, "verified": True}
+            return fail("ISO BMFF/QuickTimeの先頭ボックスサイズが不正です")
+        if box_type == b"ftyp":
+            result["brand"] = header[brand_offset:brand_offset + 4].decode("latin1", "replace")
+        if fmt == "mp4":
+            result["has_video"] = True  # Legacy compatibility; stream presence is not verified.
+        return result
+    if fmt in {"wav", "avi"}:
+        expected_tag = b"WAVE" if fmt == "wav" else b"AVI "
+        if header[:4] != b"RIFF" or header[8:12] != expected_tag:
+            return fail("RIFFヘッダが不正です")
+        riff_size = int.from_bytes(header[4:8], "little")
+        if riff_size < 4 or riff_size + 8 > size:
+            return fail("RIFFチャンクサイズが不正です")
+        if fmt == "wav":
+            result["has_audio"] = True
+        return result
+    if fmt in {"mkv", "webm"}:
+        expected_type = "matroska" if fmt == "mkv" else "webm"
+        if _ebml_doctype(header) != expected_type:
+            return fail("EBMLヘッダのDocTypeが出力形式と一致しません")
+        return result
+    return fail("未対応の出力形式です")
