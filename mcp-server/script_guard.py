@@ -31,6 +31,16 @@ async def apply(args, get, add_script):
     # Recheck inside add_script after character/FPS/append preflight, immediately
     # before its first voice write. The first check alone can become stale there.
     result = await add_script(args, expected_snapshot=expected)
-    if isinstance(result, dict) and args.get("dry_run"):
+    # A malformed or contradictory result cannot certify a successful write.
+    if (not isinstance(result, dict) or
+            ("success" in result and result["success"] is not True
+             and result["success"] is not False) or
+            (isinstance(result, dict) and result.get("success") is True
+             and ("error" in result or "error_code" in result)) or
+            (isinstance(result, dict) and "success" not in result)):
+        return {"success": False, "error_code": "SCRIPT_RESULT_INVALID",
+                "error": "Script host returned a malformed or contradictory result"}
+    # A failed dry run must not be decorated with a trusted snapshot marker.
+    if result["success"] is True and args.get("dry_run"):
         return {**result, "snapshot_hash": actual}
     return result
