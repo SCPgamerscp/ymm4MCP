@@ -98,7 +98,16 @@ dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj -c Release -p:CreateYmme=true
 # → artifacts\YMM4McpPlugin-1.5.0.ymme
 ```
 
-PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。`v1.5.0` タグを `main` のコミットに付けると、バージョン一致を確認してGitHub Releaseへ添付します。YMM4本体のDLLは `.ymme` に含めません。
+PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。YMM4本体のDLLは `.ymme` に含めません。
+
+**メンテナー向け Release 公開手順（Issue #22）:**
+
+1. `main` の `YMM4McpPlugin/YMM4McpPlugin.csproj` にある `Version` を確認します。既に同じバージョンのタグまたはReleaseが存在する場合は、先にバージョンを更新してください。
+2. GitHubの **Actions → Package YMM4 plugin → Run workflow** からブランチ `main` を選んで実行します。手動公開は最新の `main` コミットに限定されます。
+3. Windowsのテスト、プラグインのビルド、`.ymme` とPython MCPサーバーZIPの内容検証がすべて成功した場合に限り、`v<Version>` タグとGitHub Releaseを作成します。既存のタグやReleaseは上書きしません。
+4. `Releases` で `YMM4McpPlugin-<Version>.ymme` と `YMM4McpServer-<Version>.zip` の**両方**が公開されたことを確認します。ワークフローも公開後に2ファイルの存在を検査します。
+
+従来どおり、`main` 上のコミットに `v<Version>` タグを付けてpushする方式でもReleaseを作成できます。タグ名とプロジェクトの `Version` が一致しない場合や、タグが `main` に含まれない場合は公開しません。**CI成果物だけでは一般ユーザー向けのRelease公開は完了しません。**
 
 ---
 
