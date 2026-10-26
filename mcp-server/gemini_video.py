@@ -150,7 +150,7 @@ def _extract_json(text: str) -> dict:
 def _wait_file_active(client, file_obj, timeout_sec: int = 180):
     """File API にアップロードした動画が ACTIVE になるまで待つ。"""
     name = file_obj.name
-    waited = 0
+    deadline = time.monotonic() + timeout_sec
     while True:
         f = client.files.get(name=name)
         state = getattr(f.state, "name", str(f.state))
@@ -158,10 +158,11 @@ def _wait_file_active(client, file_obj, timeout_sec: int = 180):
             return f
         if state == "FAILED":
             raise RuntimeError("Geminiでの動画処理に失敗しました(FAILED)")
-        if waited >= timeout_sec:
+        # Account for the time spent inside files.get, not just sleep calls.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError(f"動画処理がタイムアウトしました(state={state})")
-        time.sleep(3)
-        waited += 3
+        time.sleep(min(3, remaining))
 
 
 def analyze_video_file(
@@ -234,6 +235,23 @@ def _safe_frame_path(frames_dir: str, filename: Any) -> Optional[str]:
     return path if os.path.isfile(path) else None
 
 
+def _frame_filename_key(name: Any) -> tuple:
+    """Natural numeric ordering for exports such as 1.png, 2.png, 10.png."""
+    if not isinstance(name, str):
+        return ((0, ""),)
+    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
+                 for part in re.split(r"([0-9]+)", name))
+
+
+def _valid_time_ms(value: Any) -> bool:
+    return (type(value) in (int, float) and 0 <= value <= 1_000_000_000_000
+            and math.isfinite(value))
+
+
+def _valid_frame_index(value: Any) -> bool:
+    return type(value) is int and 0 <= value <= 2_147_483_647
+
+
 def analyze_frames_dir(
     frames_dir: str,
     frames_meta: Optional[list[dict]] = None,
@@ -267,8 +285,22 @@ def analyze_frames_dir(
     # 解析対象の画像ファイルを決定(metaがあればそれを優先、なければフォルダ走査)
     if frames_meta:
         entries = [m for m in frames_meta if m.get("file")]
+        if len(entries) > 1:
+            # Never claim chronological analysis for shuffled or incomparable
+            # host metadata. Prefer actual capture times, then frame indices.
+            if all(_valid_time_ms(e.get("timeMs")) for e in entries):
+                entries.sort(key=lambda e: e["timeMs"])
+            elif all(_valid_frame_index(e.get("frame")) for e in entries):
+                entries.sort(key=lambda e: e["frame"])
+            elif any(_valid_time_ms(e.get("timeMs")) or _valid_frame_index(e.get("frame"))
+                     for e in entries):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta has inconsistent timestamp/frame metadata"}
+            else:
+                entries.sort(key=lambda e: _frame_filename_key(e["file"]))
     else:
-        files = sorted(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
+        files = sorted((f for f in os.listdir(frames_dir) if f.lower().endswith(".png")),
+                       key=_frame_filename_key)
         entries = [{"file": f, "timeMs": None, "frame": None} for f in files]
 
     if not entries:
@@ -289,7 +321,10 @@ def analyze_frames_dir(
         for e in entries:
             path = _safe_frame_path(frames_dir, e["file"])
             if path is None:
-                continue
+                # A partial frame sequence can make Gemini miss an actual
+                # problem while still returning success; never silently skip.
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame is missing or outside export directory"}
             if os.path.getsize(path) > MAX_FRAME_IMAGE_BYTES:
                 return {"success": False, "error": "PNG frame exceeds the upload size limit",
                         "source": "frames_dir"}
@@ -316,8 +351,13 @@ def analyze_frames_dir(
             return {"success": False, "error": "解析可能なPNGフレームがありません",
                     "source": "frames_dir"}
 
-        # 音声があれば添付
-        if audio_path and os.path.isfile(audio_path):
+        # An explicitly requested audio track is required for audiovisual QA.
+        # Silently omitting a missing WAV would falsely report a complete review.
+        if audio_path is not None:
+            if (not isinstance(audio_path, str) or not audio_path or
+                    not audio_path.lower().endswith(".wav") or not os.path.isfile(audio_path)):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Requested audio file must be an existing WAV"}
             if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
                 return {"success": False, "error": "Audio exceeds the upload size limit",
                         "source": "frames_dir"}
@@ -326,6 +366,11 @@ def analyze_frames_dir(
             if (len(wav_bytes) > MAX_AUDIO_BYTES
                     or total_payload_bytes + len(wav_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Audio payload exceeds the upload size limit",
+                        "source": "frames_dir"}
+            # Do not label arbitrary audio bytes as audio/wav in Gemini requests.
+            if (len(wav_bytes) < 12 or wav_bytes[:4] != b"RIFF"
+                    or wav_bytes[8:12] != b"WAVE"):
+                return {"success": False, "error": "Requested audio is not a RIFF/WAVE file",
                         "source": "frames_dir"}
             total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
