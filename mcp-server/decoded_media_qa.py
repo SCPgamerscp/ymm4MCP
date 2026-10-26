@@ -10,6 +10,16 @@ from jobs import is_absolute_media_path
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 
 
+def _unique_object_pairs(pairs):
+    """Reject duplicate ffprobe JSON keys instead of trusting the last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate ffprobe metadata key")
+        result[key] = value
+    return result
+
+
 def _signal_ranges(log, start_name, end_name):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
@@ -19,6 +29,10 @@ def _signal_ranges(log, start_name, end_name):
     for line in log.splitlines():
         for name, timestamp in pattern.findall(line):
             value = float(timestamp)
+            if not math.isfinite(value):
+                # Do not serialize Infinity or create an invented signal span.
+                start = None
+                continue
             if name == start_name:
                 start = value
             elif start is not None:
@@ -59,7 +73,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if not isinstance(full_decode, bool):
         raise ValueError("full_decode must be boolean")
     target = Path(path)
-    if not target.is_file():
+    try:
+        exists = target.is_file()
+    except OSError:
+        return failure("EXPORT_VERIFY_FAILED", "動画ファイルを読み取れません")
+    if not exists:
         return failure("EXPORT_FILE_MISSING", "動画ファイルがありません（Python MCP側のローカルパスを指定）")
     try:
         if target.stat().st_size < 32:
@@ -80,11 +98,22 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if probe.returncode or len(probe.stdout) > 1_000_000:
         return failure("EXPORT_PROBE_FAILED", "ffprobeで動画を解析できません")
     try:
-        info = json.loads(probe.stdout)
+        info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs)
         streams = info["streams"]
         duration = float(info["format"]["duration"])
         if not isinstance(streams, list) or not math.isfinite(duration) or duration <= 0:
             raise ValueError("invalid metadata")
+        seen_indices = set()
+        for stream in streams:
+            if (not isinstance(stream, dict)
+                    or not isinstance(stream.get("codec_type"), str)
+                    or not stream["codec_type"]):
+                raise ValueError("invalid stream metadata")
+            if "index" in stream:
+                index = stream["index"]
+                if type(index) is not int or index < 0 or index in seen_indices:
+                    raise ValueError("invalid or duplicate stream index")
+                seen_indices.add(index)
     except (ValueError, TypeError, KeyError, OverflowError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
