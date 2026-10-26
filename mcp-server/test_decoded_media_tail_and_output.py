@@ -64,6 +64,66 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(runner.call_args.kwargs["errors"], "replace")
         self.assertTrue(runner.call_args.kwargs["text"])
 
+    def inspect_with_probe(self, metadata):
+        def fake(command, timeout):
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "", "")
+        with patch.object(qa, "run", side_effect=fake):
+            return qa.inspect(str(self.video))
+
+    def test_duplicate_ffprobe_json_keys_fail_closed(self):
+        for metadata in (
+            '{"format":{"duration":"12","duration":"20"},'
+            '"streams":[{"codec_type":"video"}]}',
+            '{"format":{"duration":"12"},"streams":[{"codec_type":"video"}],'
+            '"streams":[{"codec_type":"audio"}]}',
+            '{"format":{"duration":"12"},"streams":['
+            '{"codec_type":"video","codec_type":"audio"}]}',
+        ):
+            with self.subTest(metadata=metadata):
+                report = self.inspect_with_probe(metadata)
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
+    def test_malformed_ffprobe_stream_entries_fail_closed(self):
+        for streams in ([None], ["video"], [{"codec_type": 1}],
+                        [{"codec_type": ""}], [{"codec_type": "video"}, 12]):
+            with self.subTest(streams=streams):
+                report = self.inspect_with_probe(json.dumps(
+                    {"format": {"duration": "12"}, "streams": streams}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
+    def test_invalid_or_duplicate_ffprobe_stream_indices_fail_closed(self):
+        for indices in ((0, 0), (-1, 1), (True, 1), ("0", 1)):
+            with self.subTest(indices=indices):
+                streams = [{"codec_type": "video", "index": indices[0]},
+                           {"codec_type": "audio", "index": indices[1]}]
+                report = self.inspect_with_probe(json.dumps(
+                    {"format": {"duration": "12"}, "streams": streams}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "index": 0},
+                        {"codec_type": "audio", "index": 3}]}))
+        self.assertTrue(valid["passed"], valid)
+
+    def test_nonfinite_filter_timestamps_do_not_enter_qa_report(self):
+        huge = "9" * 400
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 1 black_end: " + huge,
+            "black_start", "black_end"), [])
+        self.assertEqual(qa._signal_ranges(
+            "silence_start: " + huge + " silence_end: 3",
+            "silence_start", "silence_end"), [])
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 1 black_end: 2", "black_start", "black_end"),
+            [(1.0, 2.0)])
+
+    def test_file_metadata_os_error_returns_structured_failure(self):
+        with patch.object(qa.Path, "is_file", side_effect=OSError("access denied")):
+            report = qa.inspect(str(self.video))
+        self.assertEqual(report["error_code"], "EXPORT_VERIFY_FAILED")
+        self.assertFalse(report["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
