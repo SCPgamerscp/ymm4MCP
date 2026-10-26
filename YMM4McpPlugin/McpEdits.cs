@@ -165,13 +165,15 @@ namespace YMM4McpPlugin
             if (!body.TryGetValue("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
                 throw new ArgumentException("items must be an array");
             var items = new List<EditBoundItem>();
+            var seenLogicalIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var el in itemsEl.EnumerateArray())
             {
+                if (items.Count >= EditCheckpointSafety.MaxBindings)
+                    throw new ArgumentException("too many binding items");
                 if (el.ValueKind != JsonValueKind.Object) throw new ArgumentException("binding items must be objects");
                 string id = el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String ? idEl.GetString() ?? "" : "";
                 string itemId = el.TryGetProperty("item_id", out var itemEl) && itemEl.ValueKind == JsonValueKind.String ? itemEl.GetString() ?? "" : "";
-                if (id.Length == 0 || itemId.Length == 0)
-                    throw new ArgumentException("binding items need id and item_id");
+                EditCheckpointSafety.ValidateBinding(id, itemId, seenLogicalIds);
                 string? revision = el.TryGetProperty("revision", out var revEl) && revEl.ValueKind == JsonValueKind.String
                     ? revEl.GetString() : null;
                 items.Add(new EditBoundItem { Id = id, ItemId = itemId, Revision = revision });
@@ -284,7 +286,7 @@ namespace YMM4McpPlugin
                     {
                         Directory.CreateDirectory(CheckpointBackupDir);
                         backupPath = Path.Combine(CheckpointBackupDir, id + ".ymmp");
-                        File.Copy(projectPath, backupPath);
+                        EditCheckpointSafety.CopyBackupAtomically(projectPath, backupPath);
                     }
                     catch (Exception ex)
                     {

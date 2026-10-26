@@ -1,0 +1,26 @@
+name: Checkpoint safety tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/EditCheckpointSafety.cs'
+      - 'YMM4McpPlugin/McpEdits.cs'
+      - 'tests/EditCheckpointSafety.Tests/**'
+      - '.github/workflows/checkpoint-safety.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'YMM4McpPlugin/EditCheckpointSafety.cs'
+      - 'YMM4McpPlugin/McpEdits.cs'
+      - 'tests/EditCheckpointSafety.Tests/**'
+      - '.github/workflows/checkpoint-safety.yml'
+
+jobs:
+  checkpoint-safety:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/EditCheckpointSafety.Tests/EditCheckpointSafety.Tests.csproj --configuration Release
