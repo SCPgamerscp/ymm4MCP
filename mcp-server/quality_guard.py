@@ -4,7 +4,12 @@ import editplan
 
 
 async def verify_snapshot(get, items):
-    expected = editplan.snapshot_hash(items)
+    # The caller's reference snapshot can be malformed too. Fail closed
+    # instead of raising before we have a chance to return a QA failure.
+    try:
+        expected = editplan.snapshot_hash(items)
+    except Exception as exc:
+        return {"success": False, "error_code": "SNAPSHOT_VERIFY_UNKNOWN", "error": str(exc)}
     try:
         current = await get("/items")
         if (not isinstance(current, dict) or
