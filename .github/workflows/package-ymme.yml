@@ -328,10 +328,11 @@ jobs:
             $createdRelease = $true
           }
           else {
-            # A manual release creates a tag, which starts this workflow again.
-            # The tag-triggered run must verify the existing release instead
-            # of failing or overwriting it. The release concurrency group
-            # serializes both runs, so the second sees the published assets.
+            # A manual release creates a tag. GitHub normally suppresses
+            # GITHUB_TOKEN-triggered runs, but externally triggered tag events
+            # and reruns can still encounter an existing Release. Verify it
+            # instead of failing or overwriting it; concurrency serializes
+            # simultaneous release jobs.
             gh release view $tag --json tagName *> $null
             if ($LASTEXITCODE -eq 0) {
               Write-Output "Release $tag already exists; verifying without modifying it"
