@@ -43,6 +43,16 @@ namespace YMM4McpPlugin
                         brand = Encoding.ASCII.GetString(brandBytes);
                         if (string.IsNullOrWhiteSpace(brand))
                             throw new InvalidDataException("ftyp major_brand is blank");
+                        // Compatible brands are also four-byte identifiers. Invalid
+                        // entries must not be silently skipped in verified exports.
+                        file.Position += 4; // minor_version
+                        while (file.Position < box.End)
+                        {
+                            var compatible = Read(file, 4);
+                            if (compatible.All(value => value == (byte)' ') ||
+                                compatible.Any(value => value < 0x20 || value > 0x7e))
+                                throw new InvalidDataException("Invalid ftyp compatible brand");
+                        }
                     }
                     else if (box.Type == "mdat") mdat |= box.PayloadLength > 0;
                     else if (box.Type == "moov")
@@ -69,10 +79,14 @@ namespace YMM4McpPlugin
             ref bool audio, ref int? width, ref int? height, ref double? fps,
             ref int? audioRate, ref int? audioChannels)
         {
+            bool mvhdSeen = false;
             while (file.Position < end)
             {
                 var box = ReadBox(file, end);
                 if (box.Type == "mvhd")
+                {
+                    if (mvhdSeen) throw new InvalidDataException("Duplicate mvhd box");
+                    mvhdSeen = true;
                 {
                     var header = Read(file, box.PayloadLength >= 32 && PeekVersion(file) == 1 ? 32 : 20, box.PayloadLength);
                     uint timescale = U32(header, header[0] == 1 ? 20 : 12);
@@ -93,11 +107,14 @@ namespace YMM4McpPlugin
             uint timescale = 0;
             ulong samples = 0, ticks = 0;
             long sampleTableStart = -1, sampleTableEnd = -1;
+            bool tkhdSeen = false, hdlrSeen = false, mdhdSeen = false, minfSeen = false;
             while (file.Position < end)
             {
                 var box = ReadBox(file, end);
                 if (box.Type == "tkhd")
                 {
+                    if (tkhdSeen) throw new InvalidDataException("Duplicate tkhd box");
+                    tkhdSeen = true;
                     int length = PeekVersion(file) == 1 ? 96 : 84;
                     var header = Read(file, length, box.PayloadLength);
                     trackWidth = checked((int)(U32(header, length - 8) >> 16));
@@ -110,16 +127,22 @@ namespace YMM4McpPlugin
                         var child = ReadBox(file, box.End);
                         if (child.Type == "hdlr")
                         {
+                            if (hdlrSeen) throw new InvalidDataException("Duplicate hdlr box");
+                            hdlrSeen = true;
                             var header = Read(file, 12, child.PayloadLength);
                             handler = Encoding.ASCII.GetString(header, 8, 4);
                         }
                         else if (child.Type == "mdhd")
                         {
+                            if (mdhdSeen) throw new InvalidDataException("Duplicate mdhd box");
+                            mdhdSeen = true;
                             var header = Read(file, PeekVersion(file) == 1 ? 32 : 20, child.PayloadLength);
                             timescale = U32(header, header[0] == 1 ? 20 : 12);
                         }
                         else if (child.Type == "minf")
                         {
+                            if (minfSeen) throw new InvalidDataException("Duplicate minf box");
+                            minfSeen = true;
                             sampleTableStart = file.Position;
                             sampleTableEnd = child.End;
                         }
