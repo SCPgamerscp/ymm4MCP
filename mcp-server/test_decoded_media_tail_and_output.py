@@ -551,5 +551,121 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                 result = self.inspect_with_probe(metadata)
                 self.assertEqual(result["error_code"], "EXPORT_PROBE_FAILED")
 
+
+    def test_reports_validated_video_resolution_and_fractional_fps(self):
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [
+                {"codec_type": "video", "width": 1920, "height": 1080,
+                 "avg_frame_rate": "30000/1001"},
+                {"codec_type": "video", "width": 1280, "height": 720,
+                 "avg_frame_rate": "25/1"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["resolution"], "1920x1080")
+        self.assertEqual(report["fps"], 29.97)
+        self.assertEqual(report["video_details"], [
+            {"stream_ordinal": 0, "width": 1920, "height": 1080, "fps": 29.97},
+            {"stream_ordinal": 1, "width": 1280, "height": 720, "fps": 25.0}])
+        self.assertEqual(report["audio_details"], [
+            {"stream_ordinal": 0, "sample_rate": 48000, "channels": 2}])
+
+    def test_rejects_malformed_or_impossible_video_frame_rates(self):
+        for rate in ("30", "29.97", "1/0", "1001/1", "1/1000000000",
+                     "1_0/1", "３0/1", True, 30, "-1/1"):
+            with self.subTest(rate=rate):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", "avg_frame_rate": rate}]})
+                self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                                 "EXPORT_PROBE_FAILED")
+
+    def test_unknown_video_fps_does_not_claim_measured_frame_rate(self):
+        for rate in ("0/0", "0/1", "N/A"):
+            with self.subTest(rate=rate):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", "avg_frame_rate": rate},
+                                {"codec_type": "audio"}]})
+                report = self.inspect_with_probe(metadata)
+                self.assertTrue(report["passed"], report)
+                self.assertIsNone(report["fps"])
+                self.assertIsNone(report["video_details"][0]["fps"])
+
+    def test_reports_missing_optional_media_properties_as_unknown(self):
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertIsNone(report["resolution"])
+        self.assertIsNone(report["fps"])
+        self.assertEqual(report["audio_details"][0]["sample_rate"], None)
+        self.assertEqual(report["audio_details"][0]["channels"], None)
+
+    def test_frozen_video_frames_are_reported_without_failing_export(self):
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        video_commands = []
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            if "0:v:0" in command:
+                video_commands.append(command)
+                return subprocess.CompletedProcess(
+                    command, 0, "", "freeze_start: 2 freeze_end: 4")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(len(video_commands), 1)
+        self.assertIn("freezedetect=n=-60dB:d=2",
+                      video_commands[0][video_commands[0].index("-vf") + 1])
+        self.assertEqual(report["frozen_frames"][0]["duration_seconds"], 2)
+        self.assertTrue(any(i["code"] == "EXPORT_SAMPLE_FROZEN_FRAMES"
+                            for i in report["issues"]))
+
+    def test_freeze_without_end_event_extends_to_sample_end(self):
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video"}]})
+
+        def fake(command, timeout):
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "",
+                "freeze_start: 3" if command[0] == "ffmpeg" else "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["frozen_frames"][0]["filter_end_seconds"], 8)
+
+    def test_warns_on_late_start_and_track_extending_past_container(self):
+        metadata = json.dumps({
+            "format": {"duration": "20"},
+            "streams": [{"codec_type": "video", "start_time": "2",
+                         "duration": "20"},
+                        {"codec_type": "audio", "start_time": "0",
+                         "duration": "20"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        codes = [issue["code"] for issue in report["issues"]]
+        self.assertIn("EXPORT_STREAM_STARTS_LATE", codes)
+        self.assertIn("EXPORT_STREAM_EXCEEDS_CONTAINER", codes)
+        self.assertEqual(next(issue["missing_head_seconds"]
+                              for issue in report["issues"]
+                              if issue["code"] == "EXPORT_STREAM_STARTS_LATE"), 2.0)
+
+    def test_rejects_stream_start_beyond_container_end(self):
+        metadata = json.dumps({
+            "format": {"duration": "20"},
+            "streams": [{"codec_type": "video", "start_time": "23"}]})
+        self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                         "EXPORT_PROBE_FAILED")
+
 if __name__ == "__main__":
     unittest.main()
