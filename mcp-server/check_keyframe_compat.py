@@ -38,7 +38,10 @@ def keyframes(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, prop: str) -> tuple[list[dict], str]:
     path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop={quote(prop, safe='')}"
     result = api(client, base, headers, "GET", path)
-    matches = [a for a in result.get("animations", [])
+    animations = result.get("animations")
+    if not isinstance(animations, list):
+        raise ProbeError(f"{prop}: malformed animation response")
+    matches = [a for a in animations
                if isinstance(a, dict) and a.get("prop") == prop]
     if len(matches) != 1 or not isinstance(matches[0].get("keyframes"), list):
         raise ProbeError(f"{prop}: Animation or keyframes unavailable")
@@ -65,14 +68,17 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
         if has_frame(frames, at):
             raise ProbeError(f"{prop}: frame {at} already exists; refusing overwrite")
 
-    touched: list[str] = []
-    failure: Exception | None = None
-    cleanup_errors: list[str] = []
-    try:
-        for prop, value in values.items():
+    # KeyFrames can be shared by all animations on a YMM4 timeline item.
+    # Test one property at a time: remove Zoom's frame before inserting X's,
+    # otherwise the first edit can create a shared frame for the second.
+    for prop, value in values.items():
+        touched = False
+        failure: Exception | None = None
+        cleanup_error: Exception | None = None
+        try:
             _, revision = keyframes(client, base, headers, item_id, prop)
             # Record BEFORE the POST: a failed request might have mutated YMM4.
-            touched.append(prop)
+            touched = True
             api(client, base, headers, "POST", "/items/keyframe",
                 {"item_id": item_id, "expected_revision": revision,
                  "prop": prop, "action": "set", "at": at, "value": value})
@@ -86,29 +92,27 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                     or not math.isclose(actual, value, rel_tol=1e-5, abs_tol=1e-5)):
                 raise ProbeError(f"{prop}: wrong value after insertion: {actual!r}")
             print(f"PASS {prop}: inserted frame={at} value={actual}")
-    except Exception as exc:
-        failure = exc
-    finally:
-        for prop in reversed(touched):
-            try:
-                frames, revision = keyframes(client, base, headers, item_id, prop)
-                if not has_frame(frames, at):
-                    continue
-                api(client, base, headers, "POST", "/items/keyframe",
-                    {"item_id": item_id, "expected_revision": revision,
-                     "prop": prop, "action": "remove", "at": at})
-                after, _ = keyframes(client, base, headers, item_id, prop)
-                if has_frame(after, at):
-                    raise ProbeError(f"{prop}: cleanup did not remove frame {at}")
-                print(f"PASS {prop}: cleanup removed frame={at}")
-            except Exception as exc:
-                cleanup_errors.append(f"{prop}: {exc}")
-
-    if cleanup_errors:
-        raise ProbeError("CLEANUP FAILED: " + "; ".join(cleanup_errors)
-                         + "; restore your disposable project from backup") from failure
-    if failure is not None:
-        raise ProbeError(str(failure)) from failure
+        except Exception as exc:
+            failure = exc
+        finally:
+            if touched:
+                try:
+                    frames, revision = keyframes(client, base, headers, item_id, prop)
+                    if has_frame(frames, at):
+                        api(client, base, headers, "POST", "/items/keyframe",
+                            {"item_id": item_id, "expected_revision": revision,
+                             "prop": prop, "action": "remove", "at": at})
+                        after, _ = keyframes(client, base, headers, item_id, prop)
+                        if has_frame(after, at):
+                            raise ProbeError(f"{prop}: cleanup did not remove frame {at}")
+                        print(f"PASS {prop}: cleanup removed frame={at}")
+                except Exception as exc:
+                    cleanup_error = exc
+        if cleanup_error is not None:
+            raise ProbeError(f"CLEANUP FAILED: {prop}: {cleanup_error}; "
+                             "restore your disposable project from backup") from failure
+        if failure is not None:
+            raise ProbeError(str(failure)) from failure
 
 
 def main(argv: list[str] | None = None) -> int:
