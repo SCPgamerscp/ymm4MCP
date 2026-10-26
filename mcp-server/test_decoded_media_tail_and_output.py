@@ -494,17 +494,15 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             "Peak level dB: 1e-"))
 
 
-    def test_streaming_capture_handles_large_output_without_deadlock(self):
-        # Both pipes must be drained concurrently; retained data stays bounded.
+    def test_streaming_capture_rejects_large_output_without_deadlock(self):
+        # Both pipes must be drained concurrently, and excessive diagnostics
+        # must terminate the child rather than silently certify truncated QA.
         command = [sys.executable, "-c",
                    "import sys;"
                    "sys.stdout.buffer.write(b'A'*12000000);"
                    "sys.stderr.buffer.write(b'B'*12000000+b'END')"]
-        result = qa.run(command, 15)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "A" * 1_000_001)
-        self.assertEqual(len(result.stderr), 1_000_000)
-        self.assertTrue(result.stderr.endswith("END"))
+        with self.assertRaisesRegex(OSError, "exceeded the capture limit"):
+            qa.run(command, 15)
 
     def test_streaming_capture_kills_timed_out_child(self):
         command = [sys.executable, "-c", "import time;time.sleep(5)"]
