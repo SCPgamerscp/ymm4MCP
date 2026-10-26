@@ -709,5 +709,42 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertFalse(sampled["fully_decoded"])
         self.assertEqual(sampled["verification_scope"], "sampled_audio_video_decode")
 
+
+    def test_multitrack_video_and_audio_format_mismatches_are_warnings(self):
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [
+                {"codec_type": "video", "width": 1920, "height": 1080,
+                 "avg_frame_rate": "30/1"},
+                {"codec_type": "video", "width": 1280, "height": 720,
+                 "avg_frame_rate": "24/1"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2},
+                {"codec_type": "audio", "sample_rate": "44100", "channels": 1}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        warnings = {i["code"]: i for i in report["issues"]}
+        self.assertEqual(warnings["EXPORT_VIDEO_TRACK_RESOLUTION_MISMATCH"]
+                         ["resolutions"], ["1280x720", "1920x1080"])
+        self.assertEqual(warnings["EXPORT_VIDEO_TRACK_FPS_MISMATCH"]
+                         ["frame_rates"], [24.0, 30.0])
+        self.assertEqual(warnings["EXPORT_AUDIO_TRACK_SAMPLE_RATE_MISMATCH"]
+                         ["sample_rates"], [44100, 48000])
+        self.assertEqual(warnings["EXPORT_AUDIO_TRACK_CHANNEL_MISMATCH"]
+                         ["channel_counts"], [1, 2])
+
+    def test_matching_and_unknown_track_formats_do_not_create_mismatch_warnings(self):
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [
+                {"codec_type": "video", "width": 1920, "height": 1080,
+                 "avg_frame_rate": "30/1"},
+                {"codec_type": "video", "width": 1920, "height": 1080,
+                 "avg_frame_rate": "N/A"},
+                {"codec_type": "audio", "sample_rate": "48000", "channels": 2},
+                {"codec_type": "audio", "channels": 2}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any("MISMATCH" in i["code"] for i in report["issues"]))
+
 if __name__ == "__main__":
     unittest.main()
