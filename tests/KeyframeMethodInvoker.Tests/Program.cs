@@ -102,6 +102,20 @@ Check(!KeyframeHostBinding.TryBind(new MockItem(shared), valueTaskBinding)
     && valueTaskBinding.Calls == 0 && valueTaskBinding.KeyFrames == null,
     "ValueTask-returning binding methods must not be invoked");
 
+// The endpoint must not mutate a detached Animation when binding fails.
+Check(!KeyframeHostBinding.CanSetAt(new MockItem(shared), new AsyncBindingAnimation(), 24),
+    "nonzero set must reject asynchronous binding before mutation");
+Check(!KeyframeHostBinding.CanSetAt(new MockItem(shared), new WrongBindingAnimation(), 24),
+    "nonzero set must reject unsupported binding methods");
+Check(!KeyframeHostBinding.CanSetAt(new MockItem(null), detached, 24),
+    "a prebound animation is not owned by an item without shared KeyFrames");
+Check(!KeyframeHostBinding.TryBind(new MockItem(null), detached),
+    "a non-null foreign binding must not pass when the item has no shared frames");
+Check(KeyframeHostBinding.CanSetAt(new MockItem(shared), detached, 24),
+    "a verified shared binding must allow nonzero keyframe updates");
+Check(KeyframeHostBinding.CanSetAt(new MockItem(null), new MockAnimation(), 0),
+    "frame-zero value edits must preserve the legacy fallback");
+
 // A host can insert the frame without adding a matching AnimationValue.
 // Such a partial insertion must not overwrite the original start value.
 Check(!KeyframeInsertionSafety.IsComplete(Array.Empty<int>(), 1, new[] { 24 }, 1, 24),
