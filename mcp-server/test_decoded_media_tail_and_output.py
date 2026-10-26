@@ -173,5 +173,83 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertTrue(valid["passed"], valid)
 
 
+    def test_rejects_boolean_and_ambiguous_duration_values(self):
+        for duration in (True, False, [], {}, " 12", "12 ", "", None):
+            with self.subTest(duration=duration):
+                report = self.inspect_with_probe(json.dumps({
+                    "format": {"duration": duration},
+                    "streams": [{"codec_type": "video"}]}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12.5"},
+            "streams": [{"codec_type": "video"}]}))
+        self.assertEqual(valid["duration_seconds"], 12.5)
+
+    def test_rejects_nonstandard_json_constants_even_in_unused_metadata(self):
+        for token in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(token=token):
+                report = self.inspect_with_probe(
+                    '{"format":{"duration":"12","extra":' + token
+                    + '},"streams":[{"codec_type":"video"}]}')
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
+    def test_samples_every_video_and_audio_track_and_detects_secondary_failure(self):
+        calls = []
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [
+                {"codec_type": "video", "index": 0},
+                {"codec_type": "video", "index": 2},
+                {"codec_type": "audio", "index": 4},
+                {"codec_type": "audio", "index": 7}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            mapping = command[command.index("-map") + 1]
+            calls.append(mapping)
+            return subprocess.CompletedProcess(
+                command, 1 if mapping == "0:a:1" else 0, "",
+                "broken secondary audio" if mapping == "0:a:1" else "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertFalse(report["passed"], report)
+        self.assertEqual(set(calls), {"0:v:0", "0:v:1", "0:a:0", "0:a:1"})
+        self.assertTrue(any(issue["code"] == "EXPORT_DECODE_FAILED"
+                            and issue["stream_type"] == "audio"
+                            and issue["stream_ordinal"] == 1
+                            for issue in report["issues"]))
+
+    def test_rejects_unbounded_number_of_decode_tracks(self):
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}] +
+                       [{"codec_type": "audio"} for _ in range(16)]})
+        report = self.inspect_with_probe(metadata)
+        self.assertEqual(report["error_code"], "EXPORT_STREAM_LIMIT")
+        self.assertFalse(report["passed"])
+
+    def test_rejects_media_replaced_during_decode(self):
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}]})
+        changed = False
+
+        def fake(command, timeout):
+            nonlocal changed
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            if not changed:
+                self.video.write_bytes(b"replacement video bytes" * 5)
+                changed = True
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertEqual(report["error_code"], "EXPORT_FILE_CHANGED")
+        self.assertFalse(report["passed"])
+
+
 if __name__ == "__main__":
     unittest.main()
