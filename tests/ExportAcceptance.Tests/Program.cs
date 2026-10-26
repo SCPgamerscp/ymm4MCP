@@ -56,4 +56,25 @@ foreach (var nonFinite in new[] { double.NaN, double.PositiveInfinity, double.Ne
     Check(!invalidFps.Passed && invalidFps.Issues.Any(i => i.Code == "FPS_MISMATCH"),
         "non-finite FPS must fail the requested frame-rate check");
 }
+// Audio-format expectations imply that an audio stream must exist, even if
+// requireAudio was not explicitly set.
+var phantomAudio = complete with { HasAudio = false };
+var missingAudioStream = ExportAcceptance.Evaluate("out.mp4", phantomAudio,
+    expectedAudioSampleRate: 48000, expectedAudioChannels: 2);
+Check(!missingAudioStream.Passed && missingAudioStream.Issues.Any(i => i.Code == "AUDIO_STREAM_MISSING"),
+    "audio metadata without an audio stream must not pass");
+
+foreach (var bad in new[] { double.NaN, double.PositiveInfinity, -1.0, 0.0 })
+{
+    Check(!ExportAcceptance.Evaluate("out.mp4", complete with { DurationSeconds = bad }).Passed,
+        "invalid actual duration must fail even without an expected duration");
+    Check(!ExportAcceptance.Evaluate("out.mp4", complete with { AverageFps = bad }).Passed,
+        "invalid actual FPS must fail even without an expected FPS");
+}
+Check(!ExportAcceptance.Evaluate("out.mp4", complete with { Width = -1 }).Passed,
+    "negative actual resolution must fail");
+Check(!ExportAcceptance.Evaluate("out.mp4", complete with { AudioChannels = 99 }).Passed,
+    "impossible audio channels must fail");
+Check(ExportAcceptance.Evaluate("out.mp4", complete with { AverageFps = null }).Passed,
+    "unknown optional FPS metadata must remain allowed");
 Console.WriteLine("Export acceptance tests passed");
