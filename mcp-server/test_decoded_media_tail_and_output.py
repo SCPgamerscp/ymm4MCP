@@ -421,7 +421,7 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                 self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
         valid = self.inspect_with_probe(json.dumps({
             "format": {"duration": "1.25e1"},
-            "streams": [{"codec_type": "video"}]}))
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]}))
         self.assertTrue(valid["passed"], valid)
         self.assertEqual(valid["duration_seconds"], 12.5)
 
