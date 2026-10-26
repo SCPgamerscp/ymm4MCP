@@ -316,6 +316,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Cannot read plugin version' }
           $tag = "v$version"
           $notes = 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'
+          $createdRelease = $false
           if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
             # A manual release is explicit and cannot silently overwrite a tag or release.
             gh release view $tag --json tagName *> $null
@@ -323,6 +324,8 @@ jobs:
             gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>$null
             if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists; use the tag-triggered release instead" }
             gh release create $tag $packagePath $serverPackage[0].FullName --target $env:GITHUB_SHA --title $tag --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+            $createdRelease = $true
           }
           else {
             # A manual release creates a tag, which starts this workflow again.
@@ -336,10 +339,8 @@ jobs:
             else {
               gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes $notes
               if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+              $createdRelease = $true
             }
-          }
-          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $LASTEXITCODE -ne 0) {
-            throw "Could not publish GitHub Release $tag"
           }
           $publishedAssets = @(gh release view $tag --json assets --jq '.assets[].name')
           if ($LASTEXITCODE -ne 0) { throw "Cannot verify GitHub Release $tag assets" }
@@ -347,8 +348,11 @@ jobs:
           if (@(Compare-Object $expectedAssets $publishedAssets).Count -ne 0) {
             throw "Release $tag assets do not match expected packages: $($publishedAssets -join ', ')"
           }
-          # Asset names alone cannot detect a partial or corrupted upload.
-          # Verify the bytes that users will download match this run's packages.
+          # A tag-triggered run after a manual release rebuilds ZIP archives
+          # with potentially different timestamps. Never compare those rebuilt
+          # ZIP bytes against an already-published release: verify existence,
+          # nonempty downloads and archive readability instead. Only compare
+          # SHA-256 to the local artifacts in the run that actually published.
           $verifyDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-verify'
           [IO.Directory]::CreateDirectory($verifyDir) | Out-Null
           gh release download $tag --dir $verifyDir --clobber
@@ -358,9 +362,21 @@ jobs:
             if (-not (Test-Path -LiteralPath $downloaded -PathType Leaf)) {
               throw "Published asset missing after download: $($localAsset.Name)"
             }
-            $localHash = (Get-FileHash -LiteralPath $localAsset.FullName -Algorithm SHA256).Hash
-            $publishedHash = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash
-            if ($localHash -cne $publishedHash) {
-              throw "Published asset differs from tested package: $($localAsset.Name)"
+            if ((Get-Item -LiteralPath $downloaded).Length -eq 0) {
+              throw "Published asset is empty: $($localAsset.Name)"
+            }
+            $archive = [IO.Compression.ZipFile]::OpenRead($downloaded)
+            try {
+              if ($archive.Entries.Count -eq 0) {
+                throw "Published archive has no entries: $($localAsset.Name)"
+              }
+            }
+            finally { $archive.Dispose() }
+            if ($createdRelease) {
+              $localHash = (Get-FileHash -LiteralPath $localAsset.FullName -Algorithm SHA256).Hash
+              $publishedHash = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash
+              if ($localHash -cne $publishedHash) {
+                throw "Published asset differs from tested package: $($localAsset.Name)"
+              }
             }
           }
