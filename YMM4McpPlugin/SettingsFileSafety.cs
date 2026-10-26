@@ -11,6 +11,7 @@ namespace YMM4McpPlugin
     internal static class SettingsFileSafety
     {
         internal const int MaxSettingsBytes = 64 * 1024;
+        private static readonly object SaveLock = new();
 
         internal static string ReadValidated(string path)
         {
@@ -82,7 +83,10 @@ namespace YMM4McpPlugin
                     writer.Flush();
                     file.Flush(flushToDisk: true);
                 }
-                File.Move(staging, path, overwrite: true);
+                // Windows may deny overlapping replacements of the same
+                // destination even when each writer has a unique staging file.
+                lock (SaveLock)
+                    File.Move(staging, path, overwrite: true);
             }
             finally
             {
