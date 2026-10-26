@@ -281,7 +281,9 @@ namespace YMM4McpPlugin
             }
 
             // Stage both new immutable lists before touching the animation.
-            // Restore both references if either property setter rejects the update.
+            // A host setter may mutate its backing field and then throw, or
+            // silently ignore the new value. Never report an ordinary failure
+            // while either half of the update remains installed.
             try
             {
                 valueProperty.SetValue(animation, nextValues);
@@ -290,9 +292,18 @@ namespace YMM4McpPlugin
                     && ReferenceEquals(frameProperty.GetValue(owner), nextFrames))
                     return true;
             }
-            catch { /* Best-effort restoration below. */ }
+            catch { /* Attempt to restore both original references below. */ }
+
             try { frameProperty.SetValue(owner, frames); } catch { }
             try { valueProperty.SetValue(animation, values); } catch { }
+            bool framesRestored = false, valuesRestored = false;
+            try { framesRestored = ReferenceEquals(frameProperty.GetValue(owner), frames); }
+            catch { /* A throwing getter prevents safe verification. */ }
+            try { valuesRestored = ReferenceEquals(valueProperty.GetValue(animation), values); }
+            catch { /* A throwing getter prevents safe verification. */ }
+            if (!framesRestored || !valuesRestored)
+                throw new InvalidOperationException(
+                    "Immutable keyframe update failed and original collections could not be restored.");
             return false;
         }
 
