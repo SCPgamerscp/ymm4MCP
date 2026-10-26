@@ -55,8 +55,10 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         length = integer(raw.get("length"), "item.length", 1)
         end = integer(frame + length, "item.end_frame", 1, MAX_FRAME)
         identity = raw.get("item_id")
-        if not _valid_identifier(identity) or len(identity) > 256:
-            raise ValueError("item_id must be a nonempty safe string of at most 256 characters")
+        if not _valid_identifier(identity):
+            raise ValueError("item_id is required")
+        if len(identity) > 256:
+            raise ValueError("item_id exceeds 256 characters")
         if "type" in raw and (not isinstance(raw["type"], str)
                               or not raw["type"].strip() or len(raw["type"]) > 128):
             raise ValueError("item.type must be a nonempty string of at most 128 characters")
