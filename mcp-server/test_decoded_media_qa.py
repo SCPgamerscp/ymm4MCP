@@ -38,9 +38,9 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertFalse(result["fully_decoded"])
         self.assertEqual(result["video_streams"], 1)
         self.assertEqual(result["audio_streams"], 1)
-        self.assertEqual(len(result["samples"]), 2)
-        self.assertEqual(len(commands), 5)
-        self.assertEqual([c[0][0] for c in commands], ["ffprobe", "ffmpeg", "ffmpeg", "ffmpeg", "ffmpeg"])
+        self.assertEqual(len(result["samples"]), 3)
+        self.assertEqual(len(commands), 7)
+        self.assertEqual([c[0][0] for c in commands], ["ffprobe"] + ["ffmpeg"] * 6)
         self.assertTrue(all(str(self.video) in cmd for cmd, _ in commands))
         self.assertTrue(all(isinstance(cmd, list) for cmd, _ in commands))
         self.assertTrue(all(timeout <= 30 for _, timeout in commands))
@@ -59,7 +59,7 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertTrue(result["fully_decoded"])
         self.assertEqual(result["verification_scope"], "full_audio_video_decode")
         self.assertEqual(result["signal_scope"], "sampled_only")
-        self.assertEqual(len(commands), 7)  # probe, four samples, two full streams
+        self.assertEqual(len(commands), 9)  # probe, six samples, two full streams
         full_commands = [cmd for cmd, _ in commands if cmd[0] == "ffmpeg"
                          and "-v" in cmd and cmd[cmd.index("-v") + 1] == "error"]
         self.assertEqual(len(full_commands), 2)
@@ -149,10 +149,10 @@ class DecodedMediaQATests(unittest.TestCase):
             report = qa.inspect(str(self.video))
         self.assertTrue(report["passed"])
         self.assertEqual(report["signal_scope"], "sampled_only")
-        self.assertEqual(len(report["black_frames"]), 2)
-        self.assertEqual(len(report["long_silences"]), 2)
+        self.assertEqual(len(report["black_frames"]), 3)
+        self.assertEqual(len(report["long_silences"]), 3)
         self.assertEqual(report["long_silences"][0]["duration_seconds"], 3.5)
-        self.assertEqual(report["black_frames"][1]["sample_start_seconds"], 22.5)
+        self.assertEqual(report["black_frames"][2]["sample_start_seconds"], 22.5)
         self.assertEqual({item["severity"] for item in report["issues"]}, {"warning"})
         self.assertEqual({item["code"] for item in report["issues"]},
                          {"EXPORT_SAMPLE_BLACK_FRAMES", "EXPORT_SAMPLE_LONG_SILENCE"})
@@ -176,10 +176,10 @@ class DecodedMediaQATests(unittest.TestCase):
             report = qa.inspect(str(self.video))
         self.assertTrue(report["success"])
         self.assertTrue(report["passed"])  # near-clipping is not proof of distortion
-        self.assertEqual(len(report["audio_peaks"]), 2)
+        self.assertEqual(len(report["audio_peaks"]), 3)
         self.assertEqual(report["audio_peaks"][0]["peak_dbfs"], 0.0)
         self.assertEqual([i["code"] for i in report["issues"]],
-                         ["EXPORT_SAMPLE_AUDIO_PEAK_NEAR_CLIPPING"] * 2)
+                         ["EXPORT_SAMPLE_AUDIO_PEAK_NEAR_CLIPPING"] * 3)
 
     def test_normal_audio_peak_has_no_clipping_warning(self):
         def fake(command, timeout):
@@ -191,7 +191,7 @@ class DecodedMediaQATests(unittest.TestCase):
         with patch.object(qa, "run", side_effect=fake):
             report = qa.inspect(str(self.video))
         self.assertTrue(report["passed"])
-        self.assertEqual(len(report["audio_peaks"]), 2)
+        self.assertEqual(len(report["audio_peaks"]), 3)
         self.assertEqual(report["issues"], [])
 
     def test_decode_failure_does_not_claim_success(self):
