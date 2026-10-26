@@ -1,9 +1,8 @@
-param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection,
-      [ValidateRange(1024, 65535)][Nullable[int]]$Port)
+﻿param([switch]$ConfigureClaudeDesktop, [switch]$CheckConnection,
+      [ValidateRange(1024, 65535)][Nullable[int]]$Port, [switch]$Install)
 $ErrorActionPreference = 'Stop'
-$serverDir = $PSScriptRoot
-$venvDir = Join-Path $serverDir '.venv'
-$venvPython = Join-Path $venvDir 'Scripts\python.exe'
+$sourceDir = $PSScriptRoot
+$serverDir = $sourceDir
 
 # The Windows py launcher can exist without a registered Python 3 runtime.
 # Probe it first, then fall back to python.exe instead of failing installation.
@@ -31,6 +30,24 @@ if ($null -eq $pythonCommand -and (Get-Command python -ErrorAction SilentlyConti
 if ($null -eq $pythonCommand) {
     throw '利用可能な Python 3 が見つかりません。Python 3 をインストールしてから再実行してください。'
 }
+# Install into a persistent per-user directory.  Running from a downloaded ZIP
+# extraction directory would break Claude Desktop when that folder is removed.
+# Direct setup.ps1 usage without -Install keeps its previous in-place behavior.
+if ($Install) {
+    if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA が見つかりません。' }
+    $targetDir = Join-Path $env:LOCALAPPDATA 'YMM4MCP\mcp-server'
+    if ([IO.Path]::GetFullPath($sourceDir).TrimEnd('\') -ine
+        [IO.Path]::GetFullPath($targetDir).TrimEnd('\')) {
+        [IO.Directory]::CreateDirectory($targetDir) | Out-Null
+        # robocopy preserves the directory layout and skips ephemeral Python
+        # environments/caches.  Exit codes 0..7 mean success on Windows.
+        & robocopy.exe $sourceDir $targetDir /E /XJ /XD '.venv' '__pycache__' '.git' /XF '*.pyc' /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+        if ($LASTEXITCODE -ge 8) { throw 'MCP サーバーの永続インストールに失敗しました。' }
+    }
+    $serverDir = $targetDir
+}
+$venvDir = Join-Path $serverDir '.venv'
+$venvPython = Join-Path $venvDir 'Scripts\python.exe'
 & $pythonCommand @pythonArgs -m venv $venvDir
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
     throw 'Python の仮想環境を作成できませんでした。'
@@ -58,55 +75,127 @@ if ($CheckConnection) {
 
 if ($ConfigureClaudeDesktop) {
     if (-not $env:APPDATA) { throw 'APPDATA が見つかりません。Claude Desktop の設定場所を確認してください。' }
-    $configPath = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
-    $configDir = Split-Path -Parent $configPath
-    [IO.Directory]::CreateDirectory($configDir) | Out-Null
-    if (Test-Path -LiteralPath $configPath) {
-        $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($null -eq $config -or $config -isnot [pscustomobject]) {
-            throw 'Claude Desktop の設定は JSON オブジェクトである必要があります。'
+    $configPaths = @((Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'))
+    # Configure both classic and initialized Microsoft Store installations.
+    if ($env:LOCALAPPDATA) {
+        $packagesDir = Join-Path $env:LOCALAPPDATA 'Packages'
+        if (Test-Path -LiteralPath $packagesDir) {
+            foreach ($package in @(Get-ChildItem -LiteralPath $packagesDir -Directory -Filter 'Claude_*')) {
+                $storeConfigDir = Join-Path $package.FullName 'LocalCache\Roaming\Claude'
+                if (Test-Path -LiteralPath $storeConfigDir) {
+                    $configPaths += (Join-Path $storeConfigDir 'claude_desktop_config.json')
+                }
+            }
         }
-        $backupPath = $null
-    } else {
-        $config = [pscustomobject]@{}
-        $backupPath = $null
     }
-    if ($null -eq $config.mcpServers) {
-        $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force
-    } elseif ($config.mcpServers -isnot [pscustomobject]) {
-        throw 'mcpServers は JSON オブジェクトである必要があります。'
-    }
-    $current = $config.mcpServers.ymm4
-    $sameEntry = $null -ne $current -and
-                 $current.command -ceq $entry.command -and
-                 ($current.args -is [array]) -and
-                 @($current.args).Count -eq 1 -and
-                 @($current.args)[0] -ceq $entry.args[0] -and
-                 (($null -eq $current.env -and $null -eq $entry.env) -or
-                  ($null -ne $current.env -and $null -ne $entry.env -and
-                   $current.env.YMM4_API_BASE -ceq $entry.env.YMM4_API_BASE))
-    if ($sameEntry) {
-        Write-Output "Claude Desktop の設定は更新済みです: $configPath"
-    } else {
-        if (Test-Path -LiteralPath $configPath) {
-            $backupPath = "$configPath.bak.$([guid]::NewGuid().ToString('N'))"
-            Copy-Item -LiteralPath $configPath -Destination $backupPath
-        }
-        $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
-        $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"
-        try {
+
+    # Stage ALL new configs before touching any original. A write failure on a
+    # Store install must not silently leave the classic install half-updated.
+    $updates = New-Object System.Collections.ArrayList
+    $committed = New-Object System.Collections.ArrayList
+    try {
+        foreach ($configPath in $configPaths) {
+            $exists = Test-Path -LiteralPath $configPath
+            if ($exists) {
+                $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($null -eq $config -or $config -isnot [pscustomobject] -or
+                    ($null -ne $config.mcpServers -and $config.mcpServers -isnot [pscustomobject])) {
+                    throw "Claude Desktop の設定は JSON オブジェクトである必要があります: $configPath"
+                }
+            } else {
+                $config = [pscustomobject]@{}
+            }
+            if ($null -eq $config.mcpServers) {
+                $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force
+            }
+            $current = $config.mcpServers.ymm4
+            $sameEntry = $null -ne $current -and
+                         $current.command -ceq $entry.command -and
+                         ($current.args -is [array]) -and
+                         @($current.args).Count -eq 1 -and
+                         @($current.args)[0] -ceq $entry.args[0] -and
+                         (($null -eq $current.env -and $null -eq $entry.env) -or
+                          ($null -ne $current.env -and $null -ne $entry.env -and
+                           $current.env.YMM4_API_BASE -ceq $entry.env.YMM4_API_BASE))
+            if ($sameEntry) {
+                Write-Output "Claude Desktop の設定は更新済みです: $configPath"
+                continue
+            }
+
+            $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
+            $configDir = Split-Path -Parent $configPath
+            [IO.Directory]::CreateDirectory($configDir) | Out-Null
+            $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"
+            $backupPath = if ($exists) { "$configPath.bak.$([guid]::NewGuid().ToString('N'))" } else { $null }
+            $update = [pscustomobject]@{
+                Path = $configPath
+                Temp = $tempPath
+                Backup = $backupPath
+                Existed = $exists
+            }
+            [void]$updates.Add($update)
             $json = $config | ConvertTo-Json -Depth 100
             [IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
-            if (Test-Path -LiteralPath $configPath) {
-                [IO.File]::Replace($tempPath, $configPath, $null)
-            } else {
-                [IO.File]::Move($tempPath, $configPath)
-            }
-        } finally {
-            if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath }
         }
-        Write-Output "Claude Desktop の設定を更新しました: $configPath"
-        if ($backupPath) { Write-Output "元の設定のバックアップ: $backupPath" }
+
+        try {
+            foreach ($update in $updates) {
+                if ($update.Existed) {
+                    # Keep a byte-for-byte backup of each original configuration.
+                    [IO.File]::Replace($update.Temp, $update.Path, $update.Backup)
+                } else {
+                    [IO.File]::Move($update.Temp, $update.Path)
+                }
+                [void]$committed.Add($update)
+
+                # CI-only fault injection verifies rollback across both configs.
+                if ($env:CI -eq 'true' -and
+                    $env:YMM4MCP_TEST_FAIL_AFTER_FIRST_CONFIG_WRITE -eq '1' -and
+                    $committed.Count -eq 1) {
+                    throw 'Simulated failure after first Claude config write'
+                }
+            }
+        } catch {
+            $originalError = $_
+            $rollbackErrors = New-Object System.Collections.ArrayList
+            for ($i = $committed.Count - 1; $i -ge 0; $i--) {
+                $update = $committed[$i]
+                try {
+                    if ($update.Existed) {
+                        $restoreTemp = "$($update.Path).restore.$([guid]::NewGuid().ToString('N'))"
+                        try {
+                            [IO.File]::Copy($update.Backup, $restoreTemp)
+                            $restoreBackup = "$($update.Path).rollback.$([guid]::NewGuid().ToString('N'))"
+                            [IO.File]::Replace($restoreTemp, $update.Path, $restoreBackup)
+                            Remove-Item -LiteralPath $restoreBackup -ErrorAction SilentlyContinue
+                        } finally {
+                            if (Test-Path -LiteralPath $restoreTemp) {
+                                Remove-Item -LiteralPath $restoreTemp -ErrorAction SilentlyContinue
+                            }
+                        }
+                    } else {
+                        Remove-Item -LiteralPath $update.Path -Force -ErrorAction Stop
+                    }
+                } catch {
+                    [void]$rollbackErrors.Add("$($update.Path): $($_.Exception.Message); backup=$($update.Backup)")
+                }
+            }
+            if ($rollbackErrors.Count -gt 0) {
+                throw "Claude 設定の更新に失敗し、一部の復元にも失敗しました。バックアップを確認してください: $($rollbackErrors -join '; '); original=$originalError"
+            }
+            throw $originalError
+        }
+
+        foreach ($update in $updates) {
+            Write-Output "Claude Desktop の設定を更新しました: $($update.Path)"
+            if ($update.Backup) { Write-Output "元の設定のバックアップ: $($update.Backup)" }
+        }
+    } finally {
+        foreach ($update in $updates) {
+            if (Test-Path -LiteralPath $update.Temp) {
+                Remove-Item -LiteralPath $update.Temp -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 if (-not $ConfigureClaudeDesktop) {

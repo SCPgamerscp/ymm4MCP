@@ -103,11 +103,104 @@ jobs:
           $serverZip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $serverPackage).Path)
           try {
             $paths = @($serverZip.Entries | ForEach-Object { $_.FullName })
-            foreach ($required in @('mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/requirements.txt', 'mcp-server/skills/ymm4-jikkyou/SKILL.md')) {
+            foreach ($required in @('mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/install.cmd', 'mcp-server/check_connection.cmd', 'mcp-server/check_connection.py', 'mcp-server/requirements.txt', 'mcp-server/skills/ymm4-jikkyou/SKILL.md')) {
               if ($paths -notcontains $required) { throw "Missing Python server file: $required" }
             }
           }
           finally { $serverZip.Dispose() }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Smoke-test one-click MCP server setup
+        shell: pwsh
+        run: |
+          # Isolate the installer from the runner's actual Claude settings.
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'ymm4mcp-installer-smoke'
+          $configDir = Join-Path $env:APPDATA 'Claude'
+          [IO.Directory]::CreateDirectory($configDir) | Out-Null
+          $configPath = Join-Path $configDir 'claude_desktop_config.json'
+          # Simulate the Microsoft Store app-container configuration as well.
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'ymm4mcp-store-smoke'
+          $storeConfigDir = Join-Path $env:LOCALAPPDATA 'Packages/Claude_test/LocalCache/Roaming/Claude'
+          [IO.Directory]::CreateDirectory($storeConfigDir) | Out-Null
+          $storeConfigPath = Join-Path $storeConfigDir 'claude_desktop_config.json'
+          '{"theme":"store","mcpServers":{"other":{"command":"store.exe"}}}' |
+            Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
+          '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"}}}' |
+            Set-Content -LiteralPath $configPath -Encoding UTF8
+          # Simulate an extracted Release ZIP that the user later deletes.
+          $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
+          Copy-Item -LiteralPath 'mcp-server' -Destination $extracted -Recurse -Force
+          & (Join-Path $extracted 'install.cmd')
+          if ($LASTEXITCODE -ne 0) { throw 'install.cmd failed' }
+          $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
+            throw 'Existing Claude Desktop settings were not preserved'
+          }
+          $storeConfig = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($storeConfig.theme -ne 'store' -or
+              $storeConfig.mcpServers.other.command -ne 'store.exe' -or
+              -not $storeConfig.mcpServers.ymm4.command) {
+            throw 'Microsoft Store Claude Desktop settings were not configured safely'
+          }
+          if (-not $config.mcpServers.ymm4.command -or
+              -not (Test-Path -LiteralPath $config.mcpServers.ymm4.command)) {
+            throw 'MCP server executable was not installed or configured'
+          }
+          if (@($config.mcpServers.ymm4.args).Count -ne 1 -or
+              -not (Test-Path -LiteralPath $config.mcpServers.ymm4.args[0])) {
+            throw 'MCP server script path was not configured'
+          }
+          # The configuration must not depend on the temporary extraction path.
+          $installedDir = Join-Path $env:LOCALAPPDATA 'YMM4MCP\mcp-server'
+          $installedPython = Join-Path $installedDir '.venv\Scripts\python.exe'
+          $installedScript = Join-Path $installedDir 'server.py'
+          if ($config.mcpServers.ymm4.command -cne $installedPython -or
+              @($config.mcpServers.ymm4.args)[0] -cne $installedScript -or
+              $storeConfig.mcpServers.ymm4.command -cne $installedPython) {
+            throw 'Claude Desktop must use persistent installed paths'
+          }
+          Remove-Item -LiteralPath $extracted -Recurse -Force
+          if (-not (Test-Path -LiteralPath $installedPython) -or
+              -not (Test-Path -LiteralPath $installedScript)) {
+            throw 'Deleting the ZIP extraction must not remove the installed server'
+          }
+          # Regression: if the second Claude installation fails after the first
+          # config was written, restore both original configs byte-for-byte.
+          '{"theme":"rollback-classic","mcpServers":{"other":{"command":"classic.exe"}}}' |
+            Set-Content -LiteralPath $configPath -Encoding UTF8
+          '{"theme":"rollback-store","mcpServers":{"other":{"command":"store.exe"}}}' |
+            Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
+          $originalClassic = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath))
+          $originalStore = [Convert]::ToBase64String([IO.File]::ReadAllBytes($storeConfigPath))
+          $env:YMM4MCP_TEST_FAIL_AFTER_FIRST_CONFIG_WRITE = '1'
+          try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installedDir 'setup.ps1') -ConfigureClaudeDesktop
+            if ($LASTEXITCODE -eq 0) { throw 'Expected injected setup failure' }
+          } finally {
+            Remove-Item Env:YMM4MCP_TEST_FAIL_AFTER_FIRST_CONFIG_WRITE -ErrorAction SilentlyContinue
+          }
+          if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath)) -cne $originalClassic -or
+              [Convert]::ToBase64String([IO.File]::ReadAllBytes($storeConfigPath)) -cne $originalStore) {
+            throw 'Failed Claude setup must roll back both config files byte-for-byte'
+          }
+          if (@(Get-ChildItem -LiteralPath $configDir -Filter 'claude_desktop_config.json.tmp.*').Count -ne 0 -or
+              @(Get-ChildItem -LiteralPath $storeConfigDir -Filter 'claude_desktop_config.json.tmp.*').Count -ne 0) {
+            throw 'Failed setup left staged config files behind'
+          }
+          # Re-running from another extraction must preserve the same stable path.
+          & cmd.exe /c "mcp-server\install.cmd"
+          if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
+          $again = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($again.theme -ne 'rollback-classic' -or $again.mcpServers.other.command -ne 'classic.exe' -or
+              @($again.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
+            throw 'Installer rerun damaged Claude Desktop settings'
+          }
+          $againStore = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($againStore.theme -ne 'rollback-store' -or $againStore.mcpServers.other.command -ne 'store.exe' -or
+              @($againStore.mcpServers.PSObject.Properties | Where-Object Name -eq 'ymm4').Count -ne 1) {
+            throw 'Installer rerun damaged Microsoft Store Claude settings'
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: ymm4mcp-ymme
