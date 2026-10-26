@@ -18,10 +18,17 @@ namespace YMM4McpPlugin
 
         private object GetItemKeyframes(HttpListenerRequest req)
         {
-            int tf = -1, tl = -1;
-            int.TryParse(req.QueryString["frame"], out tf);
-            int.TryParse(req.QueryString["layer"], out tl);
-            string itemId = req.QueryString["item_id"] ?? "";
+            (string itemId, int tf, int tl) selector;
+            try
+            {
+                selector = KeyframeSelectorSafety.Parse(
+                    req.QueryString["item_id"], req.QueryString["frame"], req.QueryString["layer"]);
+            }
+            catch (ArgumentException ex)
+            {
+                return Failure("ITEM_SELECTOR_INVALID", ex.Message);
+            }
+            var (itemId, tf, tl) = selector;
             string prop = req.QueryString["prop"] ?? "";
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -134,7 +141,7 @@ namespace YMM4McpPlugin
 
         private (object? item, int frame, int layer, object? error) LocateTimelineItem(string itemId, int frame, int layer)
         {
-            if (itemId.Length == 0 && frame < 0 && layer < 0)
+            if (itemId.Length == 0 && (frame < 0 || layer < 0))
                 return (null, 0, 0, Failure("ITEM_SELECTOR_REQUIRED", "item_id または frame+layer を指定してください"));
             var vm = GetMainViewModel();
             if (vm == null) return (null, 0, 0, Failure("NO_MAIN_VIEW_MODEL", "VM失敗"));
@@ -154,8 +161,11 @@ namespace YMM4McpPlugin
                 foreach (var iv in rawItems)
                 {
                     var info = ReadItemInfo(iv);
-                    if ((frame < 0 || info.frame == frame) && (layer < 0 || info.layer == layer))
+                    if (info.frame == frame && info.layer == layer)
                     {
+                        if (KeyframeSelectorSafety.IsAmbiguousMatch(target, info.item))
+                            return (null, 0, 0, Failure("ITEM_COORDINATES_AMBIGUOUS",
+                                "同じframe/layerに複数のアイテムがあります。item_idで指定してください"));
                         target = info.item;
                         foundFrame = info.frame;
                         foundLayer = info.layer;
@@ -219,7 +229,7 @@ namespace YMM4McpPlugin
                 if (valuesHasStart && at == 0) continue;
                 int valueIndex = valuesHasStart ? i + 1 : i;
                 double? value = valueIndex >= 0 && valueIndex < values.Count ? values[valueIndex] : null;
-                result.Add(new { at, absolute_frame = itemStartFrame + at, value });
+                result.Add(new { at, absolute_frame = (long)itemStartFrame + at, value });
             }
             return result;
         }
