@@ -1,6 +1,7 @@
 """Regression tests for decode QA tail coverage and invalid subprocess output."""
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -58,11 +59,25 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.check_windows(30.5, 8, [0.0, 22.5])
 
     def test_subprocess_output_uses_replacement_for_invalid_encoding(self):
-        with patch.object(qa.subprocess, "run",
-                          return_value=subprocess.CompletedProcess([], 0, "", "")) as runner:
-            qa.run(["ffprobe", "-version"], 3)
-        self.assertEqual(runner.call_args.kwargs["errors"], "replace")
-        self.assertTrue(runner.call_args.kwargs["text"])
+        # Test the real bounded capture path, not only its subprocess kwargs.
+        command = [sys.executable, "-c",
+                   "import sys;sys.stdout.buffer.write(b'\\xff');"
+                   "sys.stderr.buffer.write(b'\\xfe')"]
+        result = qa.run(command, 5)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\ufffd")
+        self.assertEqual(result.stderr, "\ufffd")
+
+    def test_subprocess_output_is_bounded_even_when_child_writes_megabytes(self):
+        command = [sys.executable, "-c",
+                   "import sys;sys.stdout.buffer.write(b'A'*1000100);"
+                   "sys.stderr.buffer.write(b'B'*1000010+b'END')"]
+        result = qa.run(command, 5)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(result.stdout), 1_000_001)
+        self.assertEqual(result.stdout, "A" * 1_000_001)
+        self.assertEqual(len(result.stderr), 1_000_000)
+        self.assertTrue(result.stderr.endswith("END"))
 
     def inspect_with_probe(self, metadata):
         def fake(command, timeout):
@@ -395,6 +410,37 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                             and issue["stream_type"] == "audio"
                             for issue in report["issues"]))
         self.assertEqual(mappings, ["0:v:0", "0:a:0", "0:v"])
+
+
+    def test_rejects_ambiguous_ffprobe_duration_spellings(self):
+        for duration in ("1_2", "+12", "１２", "12\\n", "0x1p0", "-1", "1e"):
+            with self.subTest(duration=duration):
+                report = self.inspect_with_probe(json.dumps({
+                    "format": {"duration": duration},
+                    "streams": [{"codec_type": "video"}]}))
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "1.25e1"},
+            "streams": [{"codec_type": "video"}]}))
+        self.assertTrue(valid["passed"], valid)
+        self.assertEqual(valid["duration_seconds"], 12.5)
+
+    def test_rejects_uncheckably_long_video_without_decoding(self):
+        for duration in ("604801", "1e308"):
+            with self.subTest(duration=duration):
+                calls = []
+                metadata = json.dumps({
+                    "format": {"duration": duration},
+                    "streams": [{"codec_type": "video"}]})
+
+                def fake(command, timeout):
+                    calls.append(command[0])
+                    return subprocess.CompletedProcess(command, 0, metadata, "")
+
+                with patch.object(qa, "run", side_effect=fake):
+                    report = qa.inspect(str(self.video), require_audio=False)
+                self.assertEqual(report["error_code"], "EXPORT_DURATION_LIMIT")
+                self.assertEqual(calls, ["ffprobe"])
 
 if __name__ == "__main__":
     unittest.main()
