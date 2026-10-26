@@ -147,7 +147,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         # none of which is an unambiguous ffprobe decimal duration.
         if (type(raw_duration) not in (int, float, str)
                 or (isinstance(raw_duration, str) and not re.fullmatch(
-                    r"(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+                    r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
                     raw_duration))):
             raise ValueError("invalid duration syntax")
         duration = float(raw_duration)
