@@ -61,8 +61,15 @@ Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(shared), new Throwi
     "throwing animation KeyFrames getter must fail closed");
 Check(ReferenceEquals(detached.KeyFrames, shared) && detached.Binds == 1,
     "cross-item binding check must not mutate the original animation");
-Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(null), detached),
-    "hosts without item-level KeyFrames should retain their legacy fallback");
+// A bound Animation must never be edited through a different item, even if
+// that item's KeyFrames property is missing or currently null. The endpoint
+// checks this before all actions, including frame-zero edits and clear/remove.
+Check(KeyframeHostBinding.HasConflictingBinding(new MockItem(null), detached),
+    "a foreign binding must be rejected when the item has null shared frames");
+Check(KeyframeHostBinding.HasConflictingBinding(new NoKeyFramesItem(), detached),
+    "a foreign binding must be rejected when the item has no KeyFrames property");
+Check(!KeyframeHostBinding.HasConflictingBinding(new MockItem(null), new MockAnimation()),
+    "an unbound legacy Animation may still use its frame-zero fallback");
 Check(!KeyframeHostBinding.TryBind(new MockItem(null), new MockAnimation()),
     "missing item KeyFrames must not be fabricated");
 Check(!KeyframeHostBinding.TryBind(new MockItem(shared), new WrongBindingAnimation()),
@@ -244,6 +251,8 @@ internal sealed class MockItem(MockKeyFrames? frames)
 {
     public MockKeyFrames? KeyFrames { get; } = frames;
 }
+
+internal sealed class NoKeyFramesItem { }
 
 internal sealed class MockAnimation
 {
