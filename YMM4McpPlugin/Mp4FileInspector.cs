@@ -88,7 +88,6 @@ namespace YMM4McpPlugin
                 {
                     if (mvhdSeen) throw new InvalidDataException("Duplicate mvhd box");
                     mvhdSeen = true;
-                {
                     var header = Read(file, box.PayloadLength >= 32 && PeekVersion(file) == 1 ? 32 : 20, box.PayloadLength);
                     uint timescale = U32(header, header[0] == 1 ? 20 : 12);
                     ulong ticks = header[0] == 1 ? U64(header, 24) : U32(header, 16);
