@@ -47,6 +47,15 @@ def create_http_app(mcp_server, close_client):
     class AuthenticatedApplication:
         async def __call__(self, scope, receive, send):
             if scope["type"] == "http":
+                # A proxy and the MCP server can disagree on which repeated
+                # Host value is authoritative. Reject ambiguous requests before
+                # the downstream DNS-rebinding check.
+                host_values = [value for name, value in scope["headers"]
+                               if name.lower() == b"host"]
+                if len(host_values) != 1 or not host_values[0]:
+                    await JSONResponse({"error": "Exactly one Host header is required"},
+                                       status_code=400)(scope, receive, send)
+                    return
                 # Never collapse repeated Authorization headers: different proxies
                 # may select different values, making the authentication ambiguous.
                 auth_values = [value for name, value in scope["headers"]
