@@ -115,7 +115,7 @@ def _extract_json(text: str) -> dict:
     # A malformed or unexpectedly verbose model response must not allocate
     # unbounded JSON objects while automated video QA is running.
     if len(text) > 16 * 1024 * 1024:
-        return {"summary": "", "events": [], "_parse_error": "Gemini response exceeds 16 MiB"}
+        return {"summary": "", "events": [], "_parse_error": "Gemini response exceeds 16777216 characters"}
     if not text:
         return {"summary": "", "events": [], "_parse_error": "空の応答"}
     # ```json ... ``` を剥がす
