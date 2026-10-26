@@ -239,8 +239,30 @@ namespace YMM4McpPlugin
                 if (!File.Exists(EditsFilePath)) return;
                 var records = JsonSerializer.Deserialize<List<EditBindingRecord>>(File.ReadAllText(EditsFilePath), EditJson);
                 if (records == null) return;
+                // The file may have been manually edited, truncated or left by an
+                // older version. Reject ambiguous keys and invalid item bindings
+                // before they can influence a later idempotent EditPlan replay.
+                var duplicateKeys = records.Where(r => r != null
+                        && !string.IsNullOrEmpty(r.IdempotencyKey))
+                    .GroupBy(r => r.IdempotencyKey, StringComparer.Ordinal)
+                    .Where(g => g.Count() > 1)
+                    .Select(g => g.Key)
+                    .ToHashSet(StringComparer.Ordinal);
+                var valid = new List<EditBindingRecord>();
+                foreach (var record in records)
+                {
+                    if (record == null || duplicateKeys.Contains(record.IdempotencyKey)
+                        || record.Items == null
+                        || !EditCheckpointSafety.ValidStoredBindingRecord(
+                            record.IdempotencyKey, record.PlanHash,
+                            record.Items.Select(i => ((string?)i?.Id, (string?)i?.ItemId))))
+                        continue;
+                    valid.Add(record);
+                }
+                if (valid.Count != records.Count)
+                    Log($"無効または重複したEditPlanバインディングを{records.Count - valid.Count}件スキップしました");
                 lock (_editsLock)
-                    _editBindings = records.TakeLast(30).ToList();
+                    _editBindings = valid.TakeLast(30).ToList();
             }
             catch (Exception ex) { Log("EditPlanバインディング復元に失敗: " + ex.Message); }
         }
