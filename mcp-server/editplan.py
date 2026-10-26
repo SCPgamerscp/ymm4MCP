@@ -405,7 +405,7 @@ def binding_conflict(plan, current_items, record):
 
 
 def verify_applied_items(details, current_items):
-    """Compare every claimed item with one fresh timeline snapshot."""
+    """Compare claimed additions with a fresh, type-safe timeline snapshot."""
     if not isinstance(current_items, list):
         return [{"code": "ITEMS_UNAVAILABLE"}]
     current_by_id = {}
@@ -413,18 +413,42 @@ def verify_applied_items(details, current_items):
         if isinstance(item, dict) and isinstance(item.get("item_id"), str):
             current_by_id.setdefault(item["item_id"], []).append(item)
     failures = []
+    claimed_ids = set()
     for detail in details:
         item_id = detail.get("item_id")
+        if not isinstance(item_id, str) or not item_id.strip():
+            failures.append({"id": detail["id"], "item_id": item_id, "reason": "ITEM_NOT_UNIQUE"})
+            continue
+        # Two additions must never be accepted as the same native item even
+        # when the host snapshot contains that item exactly once.
+        if item_id in claimed_ids:
+            failures.append({"id": detail["id"], "item_id": item_id, "reason": "ITEM_REUSED"})
+            continue
+        claimed_ids.add(item_id)
         matches = current_by_id.get(item_id, [])
-        if not isinstance(item_id, str) or len(matches) != 1:
+        if len(matches) != 1:
             failures.append({"id": detail["id"], "item_id": item_id, "reason": "ITEM_NOT_UNIQUE"})
             continue
         current = matches[0]
         expected = detail.get("result", detail)
         fields = ("revision", "frame", "layer", "length") if detail["op"] == "add" else ("revision",)
+        if not isinstance(expected, dict):
+            failures.append({"id": detail["id"], "item_id": item_id,
+                             "reason": "STATE_MISMATCH", "fields": list(fields)})
+            continue
+
+        def valid(field, value):
+            if field == "revision":
+                return isinstance(value, str) and bool(value)
+            # bool == 1 and 1.0 == 1 in Python, but neither is a valid
+            # frame/layer/length readback from the YMM4 timeline API.
+            minimum = 1 if field == "length" else 0
+            return type(value) is int and minimum <= value <= 2_147_483_647
+
         mismatches = [field for field in fields
-                      if expected.get(field) is None or current.get(field) != expected[field]
-                      or (field == "revision" and not expected[field])]
+                      if not valid(field, expected.get(field))
+                      or not valid(field, current.get(field))
+                      or current[field] != expected[field]]
         if mismatches:
             failures.append({"id": detail["id"], "item_id": item_id,
                              "reason": "STATE_MISMATCH", "fields": mismatches})
