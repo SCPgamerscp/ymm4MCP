@@ -58,14 +58,17 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
     def test_long_video_still_checks_last_window_not_the_middle(self):
         self.check_windows(30.5, 8, [0.0, 22.5])
 
-    def test_subprocess_output_uses_replacement_for_invalid_encoding(self):
-        # Test the real bounded capture path, not only its subprocess kwargs.
-        command = [sys.executable, "-c",
-                   "import sys;sys.stdout.buffer.write(b'\\xff');"
-                   "sys.stderr.buffer.write(b'\\xfe')"]
-        result = qa.run(command, 5)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "\ufffd")
+    def test_subprocess_stdout_requires_utf8_but_stderr_is_diagnostic(self):
+        # Metadata must never be silently altered by replacement decoding.
+        invalid_stdout = [sys.executable, "-c",
+                          "import sys;sys.stdout.buffer.write(b'\\xff')"]
+        with self.assertRaises(UnicodeDecodeError):
+            qa.run(invalid_stdout, 5)
+        invalid_stderr = [sys.executable, "-c",
+                          "import sys;sys.stdout.buffer.write(b'OK');"
+                          "sys.stderr.buffer.write(b'\\xfe')"]
+        result = qa.run(invalid_stderr, 5)
+        self.assertEqual(result.stdout, "OK")
         self.assertEqual(result.stderr, "\ufffd")
 
     def test_subprocess_output_is_bounded_even_when_child_writes_megabytes(self):
@@ -441,6 +444,39 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                     report = qa.inspect(str(self.video), require_audio=False)
                 self.assertEqual(report["error_code"], "EXPORT_DURATION_LIMIT")
                 self.assertEqual(calls, ["ffprobe"])
+
+    def test_invalid_utf8_ffprobe_is_structured_failure(self):
+        with patch.object(qa, "run",
+                          side_effect=UnicodeDecodeError(
+                              "utf-8", b"\\xff", 0, 1, "invalid start byte")):
+            report = qa.inspect(str(self.video))
+        self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        self.assertFalse(report["passed"])
+
+    def test_probe_limit_counts_utf8_bytes_not_unicode_characters(self):
+        # 400k characters occupy 1.2MB of UTF-8, exceeding the 1MB limit.
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}],
+            "extra": "あ" * 400_000}, ensure_ascii=False)
+        self.assertLess(len(metadata), 1_000_000)
+        self.assertGreater(len(metadata.encode("utf-8")), 1_000_000)
+        report = self.inspect_with_probe(metadata)
+        self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
+    def test_filter_event_exponents_are_not_truncated(self):
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 1e-2 black_end: 2e-2",
+            "black_start", "black_end"), [(0.01, 0.02)])
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 1e- black_end: 2",
+            "black_start", "black_end"), [])
+
+    def test_audio_peak_exponents_are_not_truncated(self):
+        self.assertEqual(qa._audio_peak_db(
+            "Peak level dB: -1e-2"), -0.01)
+        self.assertIsNone(qa._audio_peak_db(
+            "Peak level dB: 1e-"))
 
 if __name__ == "__main__":
     unittest.main()
