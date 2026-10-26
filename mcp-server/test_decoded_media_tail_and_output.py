@@ -673,5 +673,41 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
                          "EXPORT_PROBE_FAILED")
 
+
+    def test_failed_full_decode_does_not_claim_full_verification_scope(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            is_full = "-ss" not in command
+            return subprocess.CompletedProcess(
+                command, 1 if is_full else 0, "", "decode failed" if is_full else "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), full_decode=True)
+        self.assertFalse(report["passed"], report)
+        self.assertFalse(report["fully_decoded"])
+        self.assertEqual(report["verification_scope"], "incomplete")
+
+    def test_successful_full_decode_and_sampling_have_distinct_scopes(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+
+        def fake(command, timeout):
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            full = qa.inspect(str(self.video), full_decode=True)
+            sampled = qa.inspect(str(self.video), full_decode=False)
+        self.assertTrue(full["fully_decoded"])
+        self.assertEqual(full["verification_scope"], "full_audio_video_decode")
+        self.assertFalse(sampled["fully_decoded"])
+        self.assertEqual(sampled["verification_scope"], "sampled_audio_video_decode")
+
 if __name__ == "__main__":
     unittest.main()
