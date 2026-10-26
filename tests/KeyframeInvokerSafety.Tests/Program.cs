@@ -25,6 +25,13 @@ var integer = new IntegerFrame();
 Check(!KeyframeMethodInvoker.TryInvokeNamed(integer, new[] { "AddKeyFrame" }, 1.5, 1.0),
     "fractional frame was rounded and applied");
 Check(integer.Calls == 0, "fractional frame caused a mutation");
+// Decimal conversion rounds this tiny fractional double to an integer.
+// The original double must be checked before conversion.
+Check(!KeyframeMethodInvoker.TryInvokeNamed(integer, new[] { "AddKeyFrame" },
+    1.0000000000000002d, 1.0), "sub-ULP-adjacent fractional double frame was rounded");
+Check(!KeyframeMethodInvoker.TryInvokeNamed(integer, new[] { "AddKeyFrame" },
+    1.0000001f, 1.0), "fractional float frame was rounded");
+Check(integer.Calls == 0, "near-integer fractional frames caused mutations");
 Check(KeyframeMethodInvoker.TryInvokeNamed(integer, new[] { "AddKeyFrame" }, 2.0, 1.0),
     "integral double frame should remain compatible");
 Check(integer.LastFrame == 2, "integral frame changed during conversion");
