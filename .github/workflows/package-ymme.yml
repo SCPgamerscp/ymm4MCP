@@ -132,28 +132,41 @@ jobs:
           # Simulate an extracted Release ZIP that the user later deletes.
           $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
           Copy-Item -LiteralPath 'mcp-server' -Destination $extracted -Recurse -Force
-          # Regression: py -3 may resolve to Python 3.9 while python.exe
-          # points to a supported 3.12 installation. Simulate the old
-          # launcher's version probe succeeding only for the obsolete
-          # major-version-only check, and failing for the required >=3.10
-          # check. A correct installer must fall back to python.exe.
+          # Regression: py -3 can be configured to select obsolete Python
+          # 3.9 while a supported Python 3.12 is still registered. The
+          # installer must try explicit launcher versions, not just python.exe.
           $fakeLauncherDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-outdated-py'
           [IO.Directory]::CreateDirectory($fakeLauncherDir) | Out-Null
           $launcherLines = @(
             '@echo off',
             'setlocal EnableDelayedExpansion',
-            'set "code=%~3"',
-            'if not "!code:version_info[0]=!"=="!code!" exit /b 0',
-            'if not "!code:(3, 10)=!"=="!code!" exit /b 1',
+            'if "%YMM4MCP_PY_FORCE_FAIL%"=="1" exit /b 91',
+            'if /I "%~1"=="-3" exit /b 1',
+            'if /I "%~1"=="-3.12" (',
+            '  if /I "%~2"=="-c" exit /b 0',
+            '  if /I "%~2"=="-m" if /I "%~3"=="venv" (',
+            '    echo selected>"%YMM4MCP_PY_SELECT_MARKER%"',
+            '    python.exe -m venv "%~4"',
+            '    exit /b !errorlevel!',
+            '  )',
+            ')',
             'exit /b 91'
           )
           Set-Content -LiteralPath (Join-Path $fakeLauncherDir 'py.cmd') -Value $launcherLines -Encoding Ascii
+          $marker = Join-Path $env:RUNNER_TEMP 'ymm4mcp-explicit-py-selected.txt'
           $originalPath = $env:PATH
           try {
             $env:PATH = "$fakeLauncherDir;$originalPath"
+            $env:YMM4MCP_PY_SELECT_MARKER = $marker
             & (Join-Path $extracted 'install.cmd')
           }
-          finally { $env:PATH = $originalPath }
+          finally {
+            $env:PATH = $originalPath
+            Remove-Item Env:YMM4MCP_PY_SELECT_MARKER -ErrorAction SilentlyContinue
+          }
+          if (-not (Test-Path -LiteralPath $marker)) {
+            throw 'Installer did not discover the supported registered Python 3.12'
+          }
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd failed' }
           $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
@@ -185,7 +198,17 @@ jobs:
           # Regression: a user who follows the documented manual PowerShell
           # command after install.cmd must NOT overwrite the stable Claude
           # settings with the disposable ZIP extraction directory.
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extracted 'setup.ps1') -ConfigureClaudeDesktop
+          # Separate regression: when every py launcher registration fails,
+          # python.exe must remain a supported fallback for manual setup.
+          try {
+            $env:PATH = "$fakeLauncherDir;$originalPath"
+            $env:YMM4MCP_PY_FORCE_FAIL = '1'
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extracted 'setup.ps1') -ConfigureClaudeDesktop
+          }
+          finally {
+            $env:PATH = $originalPath
+            Remove-Item Env:YMM4MCP_PY_FORCE_FAIL -ErrorAction SilentlyContinue
+          }
           if ($LASTEXITCODE -ne 0) { throw 'Manual PowerShell setup failed' }
           $manualClassic = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           $manualStore = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
