@@ -36,7 +36,7 @@ class ObservableFieldTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(field=field):
                 invalid = [{**GOOD[0], field: value}]
                 result = await verify_snapshot(
-                    AsyncMock(return_value={"items": invalid}), invalid)
+                    AsyncMock(return_value={"items": invalid}), GOOD)
                 self.assertEqual(result["error_code"], "SNAPSHOT_VERIFY_UNKNOWN")
 
     async def test_invalid_reference_revision_or_type_never_reads_host(self):
