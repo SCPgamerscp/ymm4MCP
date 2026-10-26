@@ -75,6 +75,20 @@ class GeminiFrameIntegrityTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("Cannot enumerate", result["error"])
 
+    def test_oversized_metadata_is_rejected_before_sorting(self):
+        self.png("a.png")
+        result = self.analyze_without_upload(
+            [{"file": "a.png"}] * 100_001)
+        self.assertFalse(result["success"])
+        self.assertIn("100000", result["error"])
+
+    def test_oversized_or_nontext_gemini_response_fails_safely(self):
+        for response in (["not text"], "x" * (16 * 1024 * 1024 + 1)):
+            with self.subTest(kind=type(response).__name__):
+                parsed = gemini_video._extract_json(response)
+                self.assertIn("_parse_error", parsed)
+                self.assertEqual(parsed["events"], [])
+
     def test_natural_order_supports_very_long_numeric_filename(self):
         long_name = "9" * 5000 + ".png"
         self.assertEqual(sorted(["10.png", long_name, "2.png"],
