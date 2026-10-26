@@ -77,10 +77,9 @@ class GeminiFrameIntegrityTests(unittest.TestCase):
 
     def test_oversized_metadata_is_rejected_before_sorting(self):
         self.png("a.png")
-        result = self.analyze_without_upload(
+        error = self.reject_without_upload(
             [{"file": "a.png"}] * 100_001)
-        self.assertFalse(result["success"])
-        self.assertIn("100000", result["error"])
+        self.assertIn("100000", error)
 
     def test_oversized_or_nontext_gemini_response_fails_safely(self):
         for response in (["not text"], "x" * (16 * 1024 * 1024 + 1)):
