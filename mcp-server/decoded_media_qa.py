@@ -44,7 +44,8 @@ def failure(code, message):
 
 def run(command, timeout):
     return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
+                          stderr=subprocess.PIPE, text=True, errors="replace",
+                          timeout=timeout, check=False)
 
 
 def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
@@ -101,7 +102,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if require_audio and not audios:
         issues.append({"code": "EXPORT_AUDIO_STREAM_MISSING", "severity": "error"})
     starts = [0.0]
-    if duration > 2 * sample_seconds:
+    # For videos between one and two sample windows long, also inspect the
+    # tail. Previously only the first window was decoded, leaving the end
+    # unchecked (including truncated or missing audio near the end).
+    # Longer videos intentionally sample the first and last windows only.
+    if duration > sample_seconds:
         starts.append(max(0.0, duration - sample_seconds))
     samples = []
     black_frames = []
