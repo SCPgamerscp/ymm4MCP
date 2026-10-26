@@ -63,10 +63,14 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, at: int, values: dict[str, float]) -> None:
     # Validate every property before the first write, so a missing X/Zoom
     # cannot leave the other property modified.
+    baseline: dict[str, list[dict]] = {}
     for prop in values:
         frames, _ = keyframes(client, base, headers, item_id, prop)
         if has_frame(frames, at):
             raise ProbeError(f"{prop}: frame {at} already exists; refusing overwrite")
+        # Capture all original keys, not just the proposed insertion position.
+        # Shared YMM4 KeyFrames can affect other Animation properties as well.
+        baseline[prop] = frames
 
     # KeyFrames can be shared by all animations on a YMM4 timeline item.
     # Test one property at a time: remove Zoom's frame before inserting X's,
@@ -102,10 +106,16 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                         api(client, base, headers, "POST", "/items/keyframe",
                             {"item_id": item_id, "expected_revision": revision,
                              "prop": prop, "action": "remove", "at": at})
-                        after, _ = keyframes(client, base, headers, item_id, prop)
-                        if has_frame(after, at):
-                            raise ProbeError(f"{prop}: cleanup did not remove frame {at}")
-                        print(f"PASS {prop}: cleanup removed frame={at}")
+                    # Removing a shared frame may silently alter unrelated
+                    # Animation values or pre-existing frames. A missing test
+                    # frame alone is NOT proof that cleanup restored the project.
+                    for checked_prop, original_frames in baseline.items():
+                        restored, _ = keyframes(client, base, headers, item_id, checked_prop)
+                        if restored != original_frames:
+                            raise ProbeError(
+                                f"{checked_prop}: original keyframes changed after "
+                                f"{prop} cleanup; restore the test project from backup")
+                    print(f"PASS {prop}: all original Zoom/X keyframes restored")
                 except Exception as exc:
                     cleanup_error = exc
         if cleanup_error is not None:
