@@ -325,12 +325,42 @@ jobs:
             gh release create $tag $packagePath $serverPackage[0].FullName --target $env:GITHUB_SHA --title $tag --notes $notes
           }
           else {
-            gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes $notes
+            # A manual release creates a tag, which starts this workflow again.
+            # The tag-triggered run must verify the existing release instead
+            # of failing or overwriting it. The release concurrency group
+            # serializes both runs, so the second sees the published assets.
+            gh release view $tag --json tagName *> $null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Output "Release $tag already exists; verifying without modifying it"
+            }
+            else {
+              gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes $notes
+              if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+            }
           }
-          if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $LASTEXITCODE -ne 0) {
+            throw "Could not publish GitHub Release $tag"
+          }
           $publishedAssets = @(gh release view $tag --json assets --jq '.assets[].name')
           if ($LASTEXITCODE -ne 0) { throw "Cannot verify GitHub Release $tag assets" }
           $expectedAssets = @($package[0].Name, $serverPackage[0].Name)
           if (@(Compare-Object $expectedAssets $publishedAssets).Count -ne 0) {
             throw "Release $tag assets do not match expected packages: $($publishedAssets -join ', ')"
+          }
+          # Asset names alone cannot detect a partial or corrupted upload.
+          # Verify the bytes that users will download match this run's packages.
+          $verifyDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-verify'
+          [IO.Directory]::CreateDirectory($verifyDir) | Out-Null
+          gh release download $tag --dir $verifyDir --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not download published assets for $tag" }
+          foreach ($localAsset in @($package[0], $serverPackage[0])) {
+            $downloaded = Join-Path $verifyDir $localAsset.Name
+            if (-not (Test-Path -LiteralPath $downloaded -PathType Leaf)) {
+              throw "Published asset missing after download: $($localAsset.Name)"
+            }
+            $localHash = (Get-FileHash -LiteralPath $localAsset.FullName -Algorithm SHA256).Hash
+            $publishedHash = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash
+            if ($localHash -cne $publishedHash) {
+              throw "Published asset differs from tested package: $($localAsset.Name)"
+            }
           }
