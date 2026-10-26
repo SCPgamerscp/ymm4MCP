@@ -91,6 +91,17 @@ Check(ReferenceEquals(noOpOverload.KeyFrames, shared) && noOpOverload.TypedCalls
     "no-op typed overload must not be treated as success");
 
 
+// Never invoke async binding methods from a synchronous mutation path, even if
+// their implementation happens to set the property before returning the Task.
+var asyncBinding = new AsyncBindingAnimation();
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), asyncBinding)
+    && asyncBinding.Calls == 0 && asyncBinding.KeyFrames == null,
+    "Task-returning binding methods must not be invoked");
+var valueTaskBinding = new ValueTaskBindingAnimation();
+Check(!KeyframeHostBinding.TryBind(new MockItem(shared), valueTaskBinding)
+    && valueTaskBinding.Calls == 0 && valueTaskBinding.KeyFrames == null,
+    "ValueTask-returning binding methods must not be invoked");
+
 // A host can insert the frame without adding a matching AnimationValue.
 // Such a partial insertion must not overwrite the original start value.
 Check(!KeyframeInsertionSafety.IsComplete(Array.Empty<int>(), 1, new[] { 24 }, 1, 24),
@@ -155,6 +166,16 @@ Check(KeyframeValueMutation.TrySet(floatValue, -0.1) && floatValue.Value == -0.1
     "negative fractional float keyframes must also be accepted");
 Check(!KeyframeValueMutation.TrySet(floatValue, 1e100) && floatValue.Value == -0.1f,
     "a finite double must not overflow a float keyframe to infinity");
+// Publicly readable values must not be mutated through private/init-only setters.
+var privateSetter = new PrivateSetterValue();
+Check(!KeyframeValueMutation.TrySet(privateSetter, 4) && privateSetter.Value == 1,
+    "private keyframe setters must not be invoked via reflection");
+var initOnly = new InitOnlyValue();
+Check(!KeyframeValueMutation.TrySet(initOnly, 4) && initOnly.Value == 1,
+    "init-only keyframe setters must not be mutated after construction");
+var privateGetter = new PrivateGetterValue();
+Check(!KeyframeValueMutation.TrySet(privateGetter, 4) && privateGetter.Read() == 1,
+    "private getters must not be bypassed for readback verification");
 bool unsafeRollbackRejected = false;
 try { KeyframeValueMutation.TrySet(new UnrestorableValue(), 5); }
 catch (InvalidOperationException) { unsafeRollbackRejected = true; }
@@ -319,5 +340,41 @@ internal sealed class UnrestorableValue
             if (value == 1) throw new InvalidOperationException("rollback refused");
             current = Math.Clamp(value, 0, 3);
         }
+    }
+}
+
+internal sealed class PrivateSetterValue
+{
+    public double Value { get; private set; } = 1;
+}
+internal sealed class InitOnlyValue
+{
+    public double Value { get; init; } = 1;
+}
+internal sealed class PrivateGetterValue
+{
+    public double Value { private get; set; } = 1;
+    public double Read() => Value;
+}
+internal sealed class AsyncBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int Calls { get; private set; }
+    public System.Threading.Tasks.Task SetKeyFrames(MockKeyFrames frames)
+    {
+        Calls++;
+        KeyFrames = frames;
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+}
+internal sealed class ValueTaskBindingAnimation
+{
+    public MockKeyFrames? KeyFrames { get; private set; }
+    public int Calls { get; private set; }
+    public System.Threading.Tasks.ValueTask SetKeyFrames(MockKeyFrames frames)
+    {
+        Calls++;
+        KeyFrames = frames;
+        return System.Threading.Tasks.ValueTask.CompletedTask;
     }
 }
