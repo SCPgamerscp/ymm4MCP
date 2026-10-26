@@ -98,6 +98,27 @@ Check(!KeyframeCollectionMutation.TryUpsert(integerValues, 20, 2.5),
     "fractional integer-backed insertion was rounded");
 CheckUnchanged(integerValues.Frames, integerValues.Values, "fractional insertion");
 
+// A reflected Value setter may mutate and then throw. The failed replacement
+// must restore the old keyframe value before reporting failure.
+var throwsOnce = new ThrowingKeyframeValue(2.0) { ThrowOnceAfterWrite = true };
+var recoverable = new TestAnimation(
+    new FaultyList { 10 }, new FaultyList { new ThrowingKeyframeValue(1.0), throwsOnce });
+Check(!KeyframeCollectionMutation.TryUpsert(recoverable, 10, 9.0),
+    "setter throwing after mutation was reported successful");
+Check(throwsOnce.Value == 2.0,
+    "setter throwing after mutation did not restore the original keyframe value");
+
+// If the original value cannot be verified after attempted restoration,
+// abort the edit rather than continuing into a second fallback.
+var alwaysThrows = new ThrowingKeyframeValue(2.0) { ThrowEveryWrite = true };
+var unrecoverable = new TestAnimation(
+    new FaultyList { 10 }, new FaultyList { new ThrowingKeyframeValue(1.0), alwaysThrows });
+bool refusedUnsafeFallback = false;
+try { KeyframeCollectionMutation.TryUpsert(unrecoverable, 10, 9.0); }
+catch (InvalidOperationException) { refusedUnsafeFallback = true; }
+Check(refusedUnsafeFallback,
+    "unverifiable reflected Value restoration must stop the fallback chain");
+
 Console.WriteLine("Keyframe collection rollback tests passed");
 
 internal sealed class TestAnimation
@@ -136,4 +157,27 @@ internal sealed class FlakyImmutableAnimation
         set => frames = value;
     }
     public IList Values { get => values; set => values = value; }
+}
+
+internal sealed class ThrowingKeyframeValue
+{
+    private double value;
+    public ThrowingKeyframeValue(double initial) { value = initial; }
+    public bool ThrowOnceAfterWrite { get; set; }
+    public bool ThrowEveryWrite { get; set; }
+    public double Value
+    {
+        get => value;
+        set
+        {
+            this.value = value;
+            if (ThrowOnceAfterWrite)
+            {
+                ThrowOnceAfterWrite = false;
+                throw new InvalidOperationException("setter threw after mutation");
+            }
+            if (ThrowEveryWrite)
+                throw new InvalidOperationException("setter always throws after mutation");
+        }
+    }
 }
