@@ -185,19 +185,20 @@ namespace YMM4McpPlugin
                 UpdatedAt = DateTime.UtcNow.ToString("o"),
                 Items = items
             };
+            // Resolve current native IDs before taking the edits lock. Reconciliation
+            // can append newly committed scene bindings or replace a deleted item.
+            // A missing/ambiguous timeline must never authorize such a remap.
+            var liveItemIds = SnapshotItemIds();
             lock (_editsLock)
             {
                 var existing = _editBindings.FirstOrDefault(b => b.IdempotencyKey == key);
-                // A retry with the same plan hash must not silently remap logical
-                // IDs to different native items or revisions.
                 if (existing != null &&
                     (!string.Equals(existing.PlanHash, hash, StringComparison.Ordinal) ||
-                     existing.Items == null || existing.Items.Count != items.Count ||
-                     existing.Items.Where((old, i) =>
-                         !string.Equals(old.Id, items[i].Id, StringComparison.Ordinal) ||
-                         !string.Equals(old.ItemId, items[i].ItemId, StringComparison.Ordinal) ||
-                         !string.Equals(old.Revision, items[i].Revision, StringComparison.Ordinal)).Any()))
-                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to different EditPlan items");
+                     existing.Items == null ||
+                     !EditCheckpointSafety.CompatibleBindingUpdate(
+                         existing.Items.Select(i => (i.Id, i.ItemId, i.Revision)),
+                         items.Select(i => (i.Id, i.ItemId, i.Revision)), liveItemIds)))
+                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to conflicting EditPlan items");
                 var updated = _editBindings.Where(b => b.IdempotencyKey != key).Select(b => b.Clone()).ToList();
                 updated.Add(record);
                 if (updated.Count > 40)
