@@ -1,6 +1,7 @@
 """Request validation and output-file checks for export/jobs. No YMM4 required."""
 from __future__ import annotations
 
+import ntpath
 import re
 from pathlib import Path
 
@@ -12,12 +13,39 @@ _DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _JOB_ID = re.compile(r"^job_[A-Za-z0-9]{8,64}$")
 
 
+def _valid_windows_file_path(candidate: str) -> bool:
+    """Reject Windows device namespaces, incomplete UNC paths and unsafe segments."""
+    drive, tail = ntpath.splitdrive(candidate)
+    if not ntpath.isabs(candidate) or not tail:
+        return False
+    if len(drive) == 2 and drive[1] == ":":
+        if not drive[0].isascii() or not drive[0].isalpha():
+            return False
+    else:
+        # UNC must have a real server and share; device/extended namespaces
+        # (\\.\ and \\?\) must never reach file-writing host endpoints.
+        parts = re.split(r"[\\/]", drive[2:])
+        if not drive.startswith(("\\\\", "//")) or len(parts) != 2 or (
+                parts[0] in {"", ".", "?"} or not parts[1]):
+            return False
+    if tail[0] not in "\\/":
+        return False
+    segments = re.split(r"[\\/]", tail[1:])
+    if not segments or any(not part or part in {".", ".."} for part in segments):
+        return False
+    for part in segments:
+        if (part.endswith((" ", ".")) or any(char in '<>:"|?*' for char in part) or
+                re.fullmatch(r"(?i)(?:con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])(?:\..*)?", part)):
+            return False
+    return True
+
+
 def is_absolute_media_path(path: str) -> bool:
     if not isinstance(path, str) or not path.strip() or any(ord(c) < 32 or ord(c) == 127 for c in path):
         return False
     candidate = path.strip()
-    if candidate.startswith("\\\\") or _DRIVE.match(candidate):
-        return True
+    if candidate.startswith(("\\\\", "//")) or _DRIVE.match(candidate):
+        return _valid_windows_file_path(candidate)
     return Path(candidate).is_absolute()
 
 
