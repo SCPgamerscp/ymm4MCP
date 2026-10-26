@@ -115,6 +115,12 @@ def _check_probe_depth(value, max_depth=64):
             pending.extend((child, depth + 1) for child in node)
 
 
+def _file_identity(st):
+    """Include change time so restoring mtime cannot mask an in-place edit."""
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
+            getattr(st, "st_ctime_ns", None))
+
+
 def failure(code, message):
     return {"success": False, "passed": False, "issues": [], "error_code": code, "error": message}
 
@@ -216,7 +222,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time",
+                     "format=duration,start_time:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -242,6 +248,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     raw_duration))):
             raise ValueError("invalid duration syntax")
         duration = float(raw_duration)
+        # Transport streams can start at a nonzero presentation timestamp.
+        # Compare track positions to the container origin, not wall-clock zero.
+        container_start = _optional_stream_time(
+            info["format"].get("start_time"), signed=True)
+        if container_start is None:
+            container_start = 0.0
         # The FFmpeg command uses microsecond precision; smaller durations
         # would round -t to zero and could falsely pass an empty sample.
         if not isinstance(streams, list) or not math.isfinite(duration) or duration < 0.000001:
@@ -281,7 +293,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     _optional_stream_time(stream["duration"])
                 if "start_time" in stream:
                     stream_start = _optional_stream_time(stream["start_time"], signed=True)
-                    if stream_start is not None and stream_start > duration + 1:
+                    if stream_start is not None and stream_start - container_start > duration + 1:
                         raise ValueError("stream starts beyond container end")
             if stream["codec_type"] == "audio":
                 if "sample_rate" in stream:
@@ -346,7 +358,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     for kind, tracks in (("video", videos), ("audio", audios)):
         for ordinal, stream in enumerate(tracks):
             track_duration = _optional_stream_time(stream.get("duration"))
-            track_start = _optional_stream_time(stream.get("start_time", "0"), signed=True)
+            track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+            if track_start is None:
+                track_start = container_start
+            track_start -= container_start
             if track_start is not None and track_start > 1.0:
                 issues.append({"code": "EXPORT_STREAM_STARTS_LATE",
                                "severity": "warning", "stream_type": kind,
@@ -444,6 +459,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
                          "filter_end_seconds": round(signal_end, 3),
+                          "video_start_seconds": round(start + signal_start, 6),
+                          "video_end_seconds": round(start + signal_end, 6),
                          "duration_seconds": round(signal_end - signal_start, 3)}
                 if kind == "video":
                     black_frames.append(event)
@@ -459,6 +476,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                              "stream_ordinal": ordinal,
                              "filter_start_seconds": round(freeze_start, 3),
                              "filter_end_seconds": round(freeze_end, 3),
+                              "video_start_seconds": round(start + freeze_start, 6),
+                              "video_end_seconds": round(start + freeze_end, 6),
                              "duration_seconds": round(freeze_end - freeze_start, 3)}
                     frozen_frames.append(event)
                     issues.append({"code": "EXPORT_SAMPLE_FROZEN_FRAMES",
@@ -513,8 +532,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         final_stat = target.stat()
     except OSError:
         return failure("EXPORT_VERIFY_FAILED", "検証後に動画ファイルを読み取れません")
-    identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
-    if identity(initial_stat) != identity(final_stat):
+    if _file_identity(initial_stat) != _file_identity(final_stat):
         return failure("EXPORT_FILE_CHANGED", "検証中に動画ファイルが変更されました")
     passed = not any(issue["severity"] == "error" for issue in issues)
     fully_decoded = bool(full_decode and full_decode_ok and passed)
