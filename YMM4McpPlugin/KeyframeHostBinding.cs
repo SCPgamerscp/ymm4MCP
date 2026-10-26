@@ -51,7 +51,13 @@ namespace YMM4McpPlugin
             var methods = animation.GetType().GetMethods(flags)
                 .Where(m => m.Name == "SetKeyFrames"
                     && m.GetParameters().Length == 1
-                    && m.GetParameters()[0].ParameterType.IsInstanceOfType(shared))
+                    && m.GetParameters()[0].ParameterType.IsInstanceOfType(shared)
+                    // This synchronous binding path cannot await Task/ValueTask.
+                    // Invoking such a method could report success before binding completes.
+                    && !typeof(System.Threading.Tasks.Task).IsAssignableFrom(m.ReturnType)
+                    && m.ReturnType != typeof(System.Threading.Tasks.ValueTask)
+                    && !(m.ReturnType.IsGenericType && m.ReturnType.GetGenericTypeDefinition()
+                        == typeof(System.Threading.Tasks.ValueTask<>)))
                 .OrderBy(m => m.GetParameters()[0].ParameterType == shared.GetType() ? 0 : 1);
             foreach (var method in methods)
             {
