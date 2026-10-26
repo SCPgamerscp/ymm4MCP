@@ -132,7 +132,27 @@ jobs:
           # Simulate an extracted Release ZIP that the user later deletes.
           $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
           Copy-Item -LiteralPath 'mcp-server' -Destination $extracted -Recurse -Force
-          & (Join-Path $extracted 'install.cmd')
+          # Regression: py -3 may resolve to Python 3.9 while python.exe
+          # points to a supported 3.12 installation. Simulate the old
+          # launcher's version probe succeeding only for the obsolete
+          # major-version-only check, and failing for the required >=3.10
+          # check. A correct installer must fall back to python.exe.
+          $fakeLauncherDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-outdated-py'
+          [IO.Directory]::CreateDirectory($fakeLauncherDir) | Out-Null
+          @'
+@echo off
+setlocal EnableDelayedExpansion
+set "code=%~3"
+if not "!code:version_info[0]=!"=="!code!" exit /b 0
+if not "!code:(3, 10)=!"=="!code!" exit /b 1
+exit /b 91
+'@ | Set-Content -LiteralPath (Join-Path $fakeLauncherDir 'py.cmd') -Encoding Ascii
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = "$fakeLauncherDir;$originalPath"
+            & (Join-Path $extracted 'install.cmd')
+          }
+          finally { $env:PATH = $originalPath }
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd failed' }
           $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
