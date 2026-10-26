@@ -114,6 +114,27 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 if type(index) is not int or index < 0 or index in seen_indices:
                     raise ValueError("invalid or duplicate stream index")
                 seen_indices.add(index)
+            # ffprobe may expose video dimensions even when the codec cannot
+            # actually be decoded. Incomplete or impossible dimensions must
+            # not be reported as a verified video stream.
+            if stream["codec_type"] == "video" and (
+                    "width" in stream or "height" in stream):
+                width, height = stream.get("width"), stream.get("height")
+                if (type(width) is not int or type(height) is not int
+                        or not 1 <= width <= 16_384 or not 1 <= height <= 16_384):
+                    raise ValueError("invalid video dimensions")
+            # The presence of an audio stream is not evidence of a usable
+            # audio format when ffprobe reports zero or malformed parameters.
+            if stream["codec_type"] == "audio":
+                if "sample_rate" in stream:
+                    rate = stream["sample_rate"]
+                    if (not isinstance(rate, str) or not rate.isascii()
+                            or not rate.isdecimal() or int(rate) <= 0):
+                        raise ValueError("invalid audio sample rate")
+                if "channels" in stream:
+                    channels = stream["channels"]
+                    if type(channels) is not int or channels <= 0:
+                        raise ValueError("invalid audio channel count")
     except (ValueError, TypeError, KeyError, OverflowError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
