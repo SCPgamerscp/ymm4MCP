@@ -86,7 +86,8 @@ namespace YMM4McpPlugin
                     && frames.Count + offset == values.Count
                     && Convert.ToInt32(frames[insertAt], CultureInfo.InvariantCulture) == frame
                     && Number(values[valueIndex], out var actual)
-                    && actual == Convert.ToDouble(ReadValue(entry), CultureInfo.InvariantCulture))
+                    && Number(entry, out var expectedInserted)
+                    && actual == expectedInserted)
                     return true;
             }
             catch { /* Restore the two collections below. */ }
@@ -227,7 +228,8 @@ namespace YMM4McpPlugin
             // A repeated request for the same value is already satisfied.
             // ImmutableList<T>.SetItem may return the original instance for no-op updates.
             if (!insert && Number(values[valueIndex], out var existing)
-                && existing == Convert.ToDouble(entry, CultureInfo.InvariantCulture))
+                && Number(entry, out var expectedExisting)
+                && existing == expectedExisting)
                 return true;
             object? nextFrames = frames;
             object? nextValues;
@@ -246,7 +248,8 @@ namespace YMM4McpPlugin
                 || !frameProperty.PropertyType.IsInstanceOfType(nextFrames)
                 || !valueProperty.PropertyType.IsInstanceOfType(nextValues)
                 || !Number(newValues[valueIndex], out var actual)
-                || actual != Convert.ToDouble(entry, CultureInfo.InvariantCulture))
+                || !Number(entry, out var expectedImmutable)
+                || actual != expectedImmutable)
                 return false;
 
             // A reflected immutable Insert method is not guaranteed to insert the
@@ -335,7 +338,8 @@ namespace YMM4McpPlugin
                 {
                     values[index] = converted;
                     if (Number(values[index], out var actual)
-                        && actual == Convert.ToDouble(converted, CultureInfo.InvariantCulture))
+                        && Number(converted, out var expectedNumeric)
+                        && actual == expectedNumeric)
                         return true;
                 }
                 catch { /* The IList may have changed before throwing. */ }
@@ -361,7 +365,8 @@ namespace YMM4McpPlugin
             {
                 property.SetValue(old, convertedValue);
                 if (Number(old, out var actual)
-                    && actual == Convert.ToDouble(convertedValue, CultureInfo.InvariantCulture))
+                    && Number(convertedValue, out var expectedProperty)
+                    && actual == expectedProperty)
                     return true;
             }
             catch { /* A reflected setter can mutate before throwing. */ }
@@ -437,6 +442,9 @@ namespace YMM4McpPlugin
             catch { return false; }
         }
 
+        // Verify requested and stored numeric values through the same conversion
+        // path. Convert.ToDouble(0.1f) preserves the binary float approximation,
+        // while Number(0.1f) parses its round-trip display text as 0.1.
         private static bool Number(object? entry, out double value)
         {
             value = 0;
