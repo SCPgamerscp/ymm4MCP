@@ -23,7 +23,7 @@ class RequestBodyLimit:
         lengths = [value for name, value in scope.get("headers", [])
                    if name.lower() == b"content-length"]
         if len(lengths) > 1 or (lengths and
-                (not lengths[0].isascii() or not lengths[0].isdigit())):
+                (len(lengths[0]) > 20 or not lengths[0].isascii() or not lengths[0].isdigit())):
             return await JSONResponse({"error": "Invalid Content-Length"}, status_code=400)(
                 scope, receive, send)
         declared = int(lengths[0]) if lengths else None
