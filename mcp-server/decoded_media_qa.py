@@ -78,6 +78,25 @@ def _optional_stream_time(value, *, signed=False):
     return seconds
 
 
+def _frame_rate(value):
+    """Parse ffprobe's exact rational FPS; unknown 0/x is not measured FPS."""
+    if value is None or value == "N/A":
+        return None
+    if type(value) is not str or not re.fullmatch(r"[0-9]{1,9}/[0-9]{1,9}", value):
+        raise ValueError("invalid frame rate")
+    numerator, denominator = map(int, value.split("/"))
+    if denominator == 0:
+        if numerator == 0:
+            return None
+        raise ValueError("invalid frame rate denominator")
+    if numerator == 0:
+        return None
+    fps = numerator / denominator
+    if not 0.1 <= fps <= 1000:
+        raise ValueError("frame rate outside supported range")
+    return round(fps, 3)
+
+
 def _reject_nonfinite_json(value):
     """Strict JSON does not permit NaN or Infinity tokens."""
     raise ValueError("non-standard JSON number: " + value)
@@ -180,7 +199,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration:stream=index,codec_type,width,height,sample_rate,channels,duration,start_time",
+                     "format=duration:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -236,13 +255,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 if (type(width) is not int or type(height) is not int
                         or not 1 <= width <= 16_384 or not 1 <= height <= 16_384):
                     raise ValueError("invalid video dimensions")
+            if stream["codec_type"] == "video" and "avg_frame_rate" in stream:
+                _frame_rate(stream["avg_frame_rate"])
             # The presence of an audio stream is not evidence of a usable
             # audio format when ffprobe reports zero or malformed parameters.
             if stream["codec_type"] in ("video", "audio"):
                 if "duration" in stream:
                     _optional_stream_time(stream["duration"])
                 if "start_time" in stream:
-                    _optional_stream_time(stream["start_time"], signed=True)
+                    stream_start = _optional_stream_time(stream["start_time"], signed=True)
+                    if stream_start is not None and stream_start > duration + 1:
+                        raise ValueError("stream starts beyond container end")
             if stream["codec_type"] == "audio":
                 if "sample_rate" in stream:
                     rate = stream["sample_rate"]
@@ -273,6 +296,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     # per-stream subprocesses, including streams not required by the caller.
     if len(videos) + len(audios) > 16:
         return failure("EXPORT_STREAM_LIMIT", "映像・音声ストリームが多すぎます（最大16）")
+    video_details = [
+        {"stream_ordinal": i, "width": stream.get("width"),
+         "height": stream.get("height"),
+         "fps": _frame_rate(stream.get("avg_frame_rate"))}
+        for i, stream in enumerate(videos)]
+    audio_details = [
+        {"stream_ordinal": i,
+         "sample_rate": int(stream["sample_rate"]) if "sample_rate" in stream else None,
+         "channels": stream.get("channels")}
+        for i, stream in enumerate(audios)]
     issues = []
     # A successful tail decode only proves that some samples exist in the
     # final window. Track metadata can reveal an earlier end within it.
@@ -280,7 +313,18 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         for ordinal, stream in enumerate(tracks):
             track_duration = _optional_stream_time(stream.get("duration"))
             track_start = _optional_stream_time(stream.get("start_time", "0"), signed=True)
+            if track_start is not None and track_start > 1.0:
+                issues.append({"code": "EXPORT_STREAM_STARTS_LATE",
+                               "severity": "warning", "stream_type": kind,
+                               "stream_ordinal": ordinal,
+                               "missing_head_seconds": round(track_start, 3)})
             if track_duration is not None and track_start is not None:
+                if track_start + track_duration > duration + 1.0:
+                    issues.append({"code": "EXPORT_STREAM_EXCEEDS_CONTAINER",
+                                   "severity": "warning", "stream_type": kind,
+                                   "stream_ordinal": ordinal,
+                                   "excess_seconds": round(
+                                       track_start + track_duration - duration, 3)})
                 missing = duration - (track_start + track_duration)
                 if missing > 1.0:
                     issues.append({"code": "EXPORT_STREAM_ENDS_EARLY",
@@ -300,6 +344,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         starts.append(max(0.0, duration - sample_seconds))
     samples = []
     black_frames = []
+    frozen_frames = []
     long_silences = []
     audio_peaks = []
     # Per-command timeouts alone allow up to 32 slow subprocesses. Bound
@@ -316,7 +361,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 + [("audio", i, track) for i, track in enumerate(audios)]):
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
-            signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98"
+            signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
+                              "freezedetect=n=-60dB:d=2"
                              if kind == "video" else "silencedetect=noise=-50dB:d=2,astats=metadata=0:reset=0")
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "info", "-xerror", "-ss", format(start, ".6f"),
@@ -371,6 +417,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     long_silences.append(event)
                     code = "EXPORT_SAMPLE_LONG_SILENCE"
                 issues.append({"code": code, "severity": "warning", **event})
+            if kind == "video":
+                for freeze_start, freeze_end in _signal_ranges(
+                        decoded.stderr or "", "freeze_start", "freeze_end", length):
+                    event = {"sample_start_seconds": round(start, 6),
+                             "stream_ordinal": ordinal,
+                             "filter_start_seconds": round(freeze_start, 3),
+                             "filter_end_seconds": round(freeze_end, 3),
+                             "duration_seconds": round(freeze_end - freeze_start, 3)}
+                    frozen_frames.append(event)
+                    issues.append({"code": "EXPORT_SAMPLE_FROZEN_FRAMES",
+                                   "severity": "warning", **event})
     full_decode_ok = False
     if full_decode and videos:
         full_decode_ok = True
@@ -432,6 +489,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             "verification_scope": ("full_audio_video_decode" if full_decode else "sampled_audio_video_decode"),
             "fully_decoded": fully_decoded,
             "signal_scope": "sampled_only", "black_frames": black_frames,
+            "frozen_frames": frozen_frames,
+            "video_details": video_details, "audio_details": audio_details,
+            "resolution": (f'{video_details[0]["width"]}x{video_details[0]["height"]}'
+                           if video_details and video_details[0]["width"] is not None
+                           else None),
+            "fps": video_details[0]["fps"] if video_details else None,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
             "audio_streams": len(audios), "samples": samples, "path": str(target)}
