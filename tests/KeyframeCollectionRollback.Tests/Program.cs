@@ -83,6 +83,46 @@ Check(!KeyframeCollectionMutation.TryUpsert(wrongIndexThrow, 20, 5.0),
 CheckUnchanged(wrongIndexThrow.Frames, wrongIndexThrow.Values,
     "wrong-index value insert threw after mutation");
 
+// Some IList implementations corrupt an existing value without growing the
+// collection, or insert more than one value. These states cannot be restored
+// by undoing one insertion: fail loudly instead of allowing another fallback.
+var overwrittenValues = new FaultyList { 1.0, 2.0 } { ReplaceOnInsert = true };
+var corruptValues = new TestAnimation(new FaultyList { 10 }, overwrittenValues);
+bool rejectedCorruptValues = false;
+try { KeyframeCollectionMutation.TryUpsert(corruptValues, 20, 5.0); }
+catch (InvalidOperationException) { rejectedCorruptValues = true; }
+Check(rejectedCorruptValues,
+    "same-count value corruption must not be reported as an ordinary fallback");
+
+var doubleValues = new FaultyList { 1.0, 2.0 } { InsertTwice = true };
+var doubleInsert = new TestAnimation(new FaultyList { 10 }, doubleValues);
+bool rejectedDoubleInsert = false;
+try { KeyframeCollectionMutation.TryUpsert(doubleInsert, 20, 5.0); }
+catch (InvalidOperationException) { rejectedDoubleInsert = true; }
+Check(rejectedDoubleInsert,
+    "two inserted values cannot be silently accepted or rolled back as one");
+
+var overwrittenFrames = new FaultyList { 10 } { ReplaceOnInsert = true };
+var corruptFrames = new TestAnimation(overwrittenFrames, new FaultyList { 1.0, 2.0 });
+bool rejectedCorruptFrames = false;
+try { KeyframeCollectionMutation.TryUpsert(corruptFrames, 20, 5.0); }
+catch (InvalidOperationException) { rejectedCorruptFrames = true; }
+Check(rejectedCorruptFrames,
+    "same-count frame corruption must not be reported as a safe fallback");
+Check(corruptFrames.Values.Count == 2 && Convert.ToDouble(corruptFrames.Values[0]) == 1.0
+    && Convert.ToDouble(corruptFrames.Values[1]) == 2.0,
+    "unrecoverable frame insertion must still restore the values collection");
+
+// A collection can throw *after* RemoveAt has successfully undone Insert.
+// A verified original snapshot is still a safe failure.
+var removeThrows = new FaultyList { 1.0, 2.0 }
+    { ThrowAfterInsert = true, ThrowAfterRemove = true };
+var recoverableRemoveThrow = new TestAnimation(new FaultyList { 10 }, removeThrows);
+Check(!KeyframeCollectionMutation.TryUpsert(recoverableRemoveThrow, 20, 5.0),
+    "verified rollback after RemoveAt throws must remain a safe failure");
+CheckUnchanged(recoverableRemoveThrow.Frames, recoverableRemoveThrow.Values,
+    "remove throws after restoring original values");
+
 // Immutable-style list properties can throw on re-read after initial discovery.
 var flaky = new FlakyImmutableAnimation();
 Check(!KeyframeCollectionMutation.TryUpsert(flaky, 20, 5.0),
@@ -133,11 +173,24 @@ internal sealed class FaultyList : ArrayList
     public bool ThrowAfterInsert { get; set; }
     public bool IgnoreInsert { get; set; }
     public bool InsertAtFront { get; set; }
+    public bool ReplaceOnInsert { get; set; }
+    public bool InsertTwice { get; set; }
+    public bool ThrowAfterRemove { get; set; }
     public override void Insert(int index, object? value)
     {
         if (IgnoreInsert) return;
-        base.Insert(InsertAtFront ? 0 : index, value);
+        if (ReplaceOnInsert) this[index == Count ? Count - 1 : index] = value;
+        else
+        {
+            base.Insert(InsertAtFront ? 0 : index, value);
+            if (InsertTwice) base.Insert(InsertAtFront ? 0 : index, value);
+        }
         if (ThrowAfterInsert) throw new InvalidOperationException("insert failed after mutation");
+    }
+    public override void RemoveAt(int index)
+    {
+        base.RemoveAt(index);
+        if (ThrowAfterRemove) throw new InvalidOperationException("remove failed after mutation");
     }
 }
 
