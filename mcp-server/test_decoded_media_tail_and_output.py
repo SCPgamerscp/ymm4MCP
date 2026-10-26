@@ -251,5 +251,72 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertFalse(report["passed"])
 
 
+    def test_negative_filter_start_timestamps_are_clamped(self):
+        self.assertEqual(qa._signal_ranges(
+            "silence_start: -1.5 silence_end: 2.0",
+            "silence_start", "silence_end"), [(0.0, 2.0)])
+        self.assertEqual(qa._signal_ranges(
+            "black_start: -3 black_end: -1",
+            "black_start", "black_end"), [])
+        self.assertEqual(qa._signal_ranges(
+            "black_start: 1.5 black_end: 2.5",
+            "black_start", "black_end"), [(1.5, 2.5)])
+
+    def test_deeply_nested_ffprobe_metadata_fails_closed(self):
+        metadata = ('{"format":{"duration":"12"},'
+                    '"streams":[{"codec_type":"video"}],"extra":'
+                    + "[" * 1500 + "0" + "]" * 1500 + "}")
+        report = self.inspect_with_probe(metadata)
+        self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        self.assertFalse(report["passed"])
+
+    def test_submillisecond_samples_keep_nonzero_ffmpeg_time(self):
+        calls = []
+        metadata = json.dumps({"format": {"duration": "0.0004"},
+                               "streams": [{"codec_type": "video"}]})
+
+        def fake(command, timeout):
+            calls.append(command)
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["samples"][0]["duration_seconds"], 0.0004)
+        ffmpeg = next(command for command in calls if command[0] == "ffmpeg")
+        self.assertEqual(ffmpeg[ffmpeg.index("-t") + 1], "0.000400")
+
+        too_short = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "0.0000004"},
+            "streams": [{"codec_type": "video"}]}))
+        self.assertEqual(too_short["error_code"], "EXPORT_PROBE_FAILED")
+
+    def test_unknown_stream_types_do_not_silently_pass(self):
+        malformed = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"},
+                        {"codec_type": "vide0"}]}))
+        self.assertEqual(malformed["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"},
+                        {"codec_type": "subtitle"}]}))
+        self.assertTrue(valid["passed"], valid)
+
+    def test_out_of_range_stream_indices_fail_closed(self):
+        invalid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "index": 2147483648},
+                        {"codec_type": "audio", "index": 1}]}))
+        self.assertEqual(invalid["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "index": 2147483647},
+                        {"codec_type": "audio", "index": 1}]}))
+        self.assertTrue(valid["passed"], valid)
+
+
+
 if __name__ == "__main__":
     unittest.main()
