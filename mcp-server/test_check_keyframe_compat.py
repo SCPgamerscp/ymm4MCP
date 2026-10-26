@@ -22,11 +22,19 @@ class FakeYmm4:
         self.fail_remove = None
         self.corrupt_original_on_remove = None
         self.corrupt_other_on_remove = None
+        self.item_length = 100
+        self.item_type = "ImageItem"
+        self.item_count = 1
 
     def __call__(self, request):
         assert request.headers.get("X-Ymm4-Token") == "fake-test-token"
         assert request.url.host == "127.0.0.1"
         if request.method == "GET":
+            if request.url.path == "/api/items":
+                return httpx.Response(200, json={"items": [
+                    {"item_id": "native:test/with spaces",
+                     "length": self.item_length, "type": self.item_type}
+                    for _ in range(self.item_count)]})
             prop = request.url.params.get("prop")
             if prop not in self.frames:
                 return httpx.Response(200, json={"success": True, "animations": [],
@@ -90,6 +98,36 @@ class LiveProbeProtocolTests(unittest.TestCase):
         fake = FakeYmm4()
         del fake.frames["X"]
         with self.assertRaisesRegex(ProbeError, "unavailable"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+
+    def test_out_of_bounds_frame_rejected_before_write(self):
+        fake = FakeYmm4()
+        fake.item_length = 24
+        with self.assertRaisesRegex(ProbeError, "outside the target item length"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+
+    def test_non_image_item_rejected_before_write(self):
+        fake = FakeYmm4()
+        fake.item_type = "AudioItem"
+        with self.assertRaisesRegex(ProbeError, "not an image"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+
+    def test_missing_or_ambiguous_target_rejected_before_write(self):
+        for count in (0, 2):
+            with self.subTest(count=count):
+                fake = FakeYmm4()
+                fake.item_count = count
+                with self.assertRaisesRegex(ProbeError, "exactly once"):
+                    probe(fake)
+                self.assertEqual(fake.posts, [])
+
+    def test_malformed_item_length_rejected_before_write(self):
+        fake = FakeYmm4()
+        fake.item_length = "100"
+        with self.assertRaisesRegex(ProbeError, "outside the target item length"):
             probe(fake)
         self.assertEqual(fake.posts, [])
 
