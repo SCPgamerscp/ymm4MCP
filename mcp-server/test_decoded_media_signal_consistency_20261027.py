@@ -99,5 +99,41 @@ class SignalConsistencyTests(unittest.TestCase):
         self.assertEqual(report["audio_peaks"][0]["peak_dbfs"], -3.0)
 
 
+    def test_cross_filter_bare_log_does_not_spoof_black_events(self):
+        log = ("silence_start: 0 black_start: 1\\n"
+               "silence_end: 2 black_end: 3\\n")
+        self.assertEqual(qa._signal_ranges(log, "black_start", "black_end", 4), [])
+        self.assertEqual(qa._signal_ranges(log, "silence_start", "silence_end", 4),
+                         [(0.0, 2.0)])
+
+    def test_audio_peak_db_summary_uses_loudest_sample(self):
+        metadata = {"format": {"duration": "30"}, "streams": [
+            {"codec_type": "video"}, {"codec_type": "audio", "channels": 2}]}
+        calls = []
+        def fake_run(command, timeout):
+            calls.append(command)
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, json.dumps(metadata), "")
+            if "0:a:0" in command:
+                start = float(command[command.index("-ss") + 1])
+                peak = -8 if start == 0 else -3 if start == 11 else -12
+                return subprocess.CompletedProcess(
+                    command, 0, "",
+                    f"[Parsed_astats_0 @ 0x123] Peak level dB: {peak}\\n")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        with patch.object(qa, "run", side_effect=fake_run):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["audio_peak_db"], -3.0)
+        self.assertEqual(len(report["audio_peaks"]), 3)
+
+    def test_audio_peak_db_unknown_without_finite_measurement(self):
+        metadata = {"format": {"duration": "1.5"}, "streams": [
+            {"codec_type": "video"}, {"codec_type": "audio"}]}
+        report, _ = self.inspect(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertIsNone(report["audio_peak_db"])
+
+
 if __name__ == "__main__":
     unittest.main()
