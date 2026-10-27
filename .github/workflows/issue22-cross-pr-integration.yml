@@ -42,10 +42,21 @@ jobs:
             git merge --no-ff --no-edit "refs/remotes/pr/${number}"
           done
           git status --short
-      - name: Test all composed Python MCP modules
+      - name: Test composed Issue 22 Python setup and transport modules
+        shell: pwsh
         run: |
           python -m pip install -r mcp-server/requirements.txt
-          python -m unittest discover -s mcp-server -p "test_*.py" -q
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+          # The full Python suite runs on Ubuntu in the existing packaging CI.
+          # A few unrelated tests hard-code POSIX /tmp paths and cannot pass on
+          # Windows. Here, test the combined Issue 22 modules on the same
+          # Windows runner as the YMM4 plugin and installer.
+          Push-Location mcp-server
+          try {
+            python -m unittest -q test_release_workflow test_connection_descriptor_integrity test_check_connection_version_integrity test_http_host_ipv6_aliases test_http_body_limit
+            if ($LASTEXITCODE -ne 0) { throw 'Composed Issue 22 Python tests failed' }
+          }
+          finally { Pop-Location }
       - name: Test composed setup and HTTP safety helpers
         shell: pwsh
         run: |
