@@ -38,10 +38,11 @@ def _trusted_filter_payload(line, filter_name, bare_names):
 
 def _signal_ranges(log, start_name, end_name, window_duration=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
-    # Capture complete tokens, including malformed ones. Ignoring a broken
-    # *_end token would otherwise extend a prior start to sample EOF.
+    # Capture complete tokens, including malformed punctuation. Treating
+    # "1,broken" as "1" would invent a valid event and conceal bad logs.
+    # Ignoring a broken *_end token would extend a prior start to sample EOF.
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\s*([^\s,;]+)")
+                         + r"):\s*([^\s]+)")
     number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     start = None
     ranges = []
@@ -104,8 +105,12 @@ def _invalid_audio_peak_metrics(log):
         r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, "astats", ("Peak level dB",)).strip()
-        if not payload.startswith("Peak level dB:"):
+        if not payload.startswith("Peak level dB"):
             continue
+        # A changed or damaged astats label is not proof that the audio
+        # had no peak. Reject it rather than silently skipping QA.
+        if not payload.startswith("Peak level dB:"):
+            return True
         raw = payload.split(":", 1)[1].strip()
         if raw.lower() == "-inf":
             continue  # Valid FFmpeg representation of complete silence.
@@ -115,11 +120,11 @@ def _invalid_audio_peak_metrics(log):
 
 
 def _invalid_signal_timestamps(log, start_name, end_name):
-    """Detect invalid filter event timestamps instead of ignoring bad events."""
+    """Detect invalid filter timestamps, including malformed suffixes."""
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
                    "freeze_start": "freezedetect"}[start_name]
     pattern = re.compile(r"\b(?:" + re.escape(start_name) + r"|"
-                         + re.escape(end_name) + r"):\s*([^\s,;]*)")
+                         + re.escape(end_name) + r"):\s*([^\s]*)")
     number = re.compile(
         r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     for line in log.splitlines():
