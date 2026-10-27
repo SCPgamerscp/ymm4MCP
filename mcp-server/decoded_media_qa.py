@@ -143,6 +143,26 @@ def _audio_channel_peaks(log):
 
 
 
+def _audio_channel_headers(log):
+    """Observe astats channel headers even when their peak metrics are absent.
+
+    An invalid or unexpected channel cannot disappear merely because FFmpeg
+    omitted the corresponding Peak level dB measurement.
+    """
+    observed = set()
+    invalid = False
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "astats", ("Channel",)).strip()
+        if not payload.startswith("Channel:"):
+            continue
+        match = re.fullmatch(r"Channel:\s*([1-9][0-9]{0,2})", payload)
+        if match and int(match.group(1)) <= 64:
+            observed.add(int(match.group(1)))
+        else:
+            invalid = True
+    return observed, invalid
+
+
 def _audio_overall_silent(log):
     """Detect an all-silent astats Overall peak even without channel sections.
 
@@ -827,17 +847,21 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 complete_channels = (channel_peaks and declared_channels is not None
                                      and set(channel_peaks) ==
                                      set(range(1, declared_channels + 1)))
-                if channel_peaks and declared_channels is not None:
+                observed_headers, invalid_headers = _audio_channel_headers(
+                    decoded.stderr or "")
+                if declared_channels is not None and (
+                        channel_peaks or observed_headers or invalid_headers):
                     expected = set(range(1, declared_channels + 1))
-                    observed = set(channel_peaks)
-                    if observed != expected:
+                    observed = set(channel_peaks) | observed_headers
+                    if observed != expected or invalid_headers:
                         issues.append({
                             "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH",
                             "severity": "warning", "stream_ordinal": ordinal,
                             "sample_start_seconds": round(start, 6),
                             "declared_channels": declared_channels,
-                            "observed_channels": sorted(observed)})
-                    elif declared_channels == 2:
+                            "observed_channels": sorted(observed),
+                            "invalid_channel_headers": invalid_headers})
+                    elif declared_channels == 2 and set(channel_peaks) == expected:
                         left, right = channel_peaks[1], channel_peaks[2]
                         if ((math.isfinite(left) and math.isfinite(right)
                              and max(left, right) > -60
