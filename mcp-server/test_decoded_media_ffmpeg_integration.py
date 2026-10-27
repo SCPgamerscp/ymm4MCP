@@ -53,8 +53,8 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                           {issue["code"] for issue in result["issues"]})
 
 
-    def test_short_audio_stream_fails_tail_sample_even_when_video_is_longer(self):
-        """FFmpeg without -abort_on empty_output incorrectly returns exit 0."""
+    def test_short_audio_stream_is_advisory_unless_strict_tail_required(self):
+        """Real FFmpeg metadata detects the gap; strict policy determines pass/fail."""
         with tempfile.TemporaryDirectory() as directory:
             video = Path(directory) / "short_audio.mp4"
             subprocess.run(
