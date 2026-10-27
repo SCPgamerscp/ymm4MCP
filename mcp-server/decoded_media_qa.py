@@ -337,7 +337,10 @@ def run(command, timeout):
         stderr_tail.decode("utf-8", errors="replace"))
 
 def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
-            expected_duration_seconds=None, duration_tolerance_seconds=1.0):
+            expected_duration_seconds=None, duration_tolerance_seconds=1.0,
+            expected_width=None, expected_height=None, expected_fps=None,
+            fps_tolerance=0.1, expected_audio_sample_rate=None,
+            expected_audio_channels=None):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -356,6 +359,20 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             not math.isfinite(duration_tolerance_seconds) or
             not 0 <= duration_tolerance_seconds <= 60):
         raise ValueError("duration_tolerance_seconds must be finite and in [0, 60]")
+    for name, value, lower, upper in (
+            ("expected_width", expected_width, 1, 16384),
+            ("expected_height", expected_height, 1, 16384),
+            ("expected_audio_sample_rate", expected_audio_sample_rate, 8000, 384000),
+            ("expected_audio_channels", expected_audio_channels, 1, 8)):
+        if value is not None and (type(value) is not int or not lower <= value <= upper):
+            raise ValueError(f"{name} must be an integer in [{lower}, {upper}]")
+    if (expected_fps is not None and
+            (type(expected_fps) not in (int, float) or
+             not math.isfinite(expected_fps) or not 0 < expected_fps <= 240)):
+        raise ValueError("expected_fps must be finite and in (0, 240]")
+    if (type(fps_tolerance) not in (int, float) or
+            not math.isfinite(fps_tolerance) or not 0 <= fps_tolerance <= 10):
+        raise ValueError("fps_tolerance must be finite and in [0, 10]")
     target = Path(path)
     try:
         exists = target.is_file()
@@ -586,6 +603,44 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
     issues = []
+    # Expectations apply to every track. Missing metadata cannot prove a match.
+    for ordinal, details in enumerate(video_details):
+        for field, expected in (("width", expected_width), ("height", expected_height)):
+            if expected is None:
+                continue
+            actual = details[field]
+            if actual is None or actual != expected:
+                issues.append({
+                    "code": ("EXPORT_VIDEO_FORMAT_UNKNOWN" if actual is None
+                             else "EXPORT_VIDEO_FORMAT_MISMATCH"),
+                    "severity": "error", "stream_type": "video",
+                    "stream_ordinal": ordinal, "field": field,
+                    "expected": expected, "actual": actual})
+        if expected_fps is not None:
+            ratio = details["fps_ratio"]
+            actual = float(Fraction(ratio)) if ratio is not None else None
+            if actual is None or abs(actual - expected_fps) > fps_tolerance:
+                issues.append({
+                    "code": ("EXPORT_VIDEO_FORMAT_UNKNOWN" if actual is None
+                             else "EXPORT_VIDEO_FORMAT_MISMATCH"),
+                    "severity": "error", "stream_type": "video",
+                    "stream_ordinal": ordinal, "field": "fps",
+                    "expected": expected_fps, "actual": actual,
+                    "tolerance": fps_tolerance})
+    for ordinal, details in enumerate(audio_details):
+        for field, expected in (
+                ("sample_rate", expected_audio_sample_rate),
+                ("channels", expected_audio_channels)):
+            if expected is None:
+                continue
+            actual = details[field]
+            if actual is None or actual != expected:
+                issues.append({
+                    "code": ("EXPORT_AUDIO_FORMAT_UNKNOWN" if actual is None
+                             else "EXPORT_AUDIO_FORMAT_MISMATCH"),
+                    "severity": "error", "stream_type": "audio",
+                    "stream_ordinal": ordinal, "field": field,
+                    "expected": expected, "actual": actual})
     # An exported file can decode correctly while being truncated or longer
     # than the edit plan. This is an error only when the caller supplied an
     # explicit expected duration, with a bounded tolerance.
@@ -666,7 +721,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "missing_tail_seconds": round(missing, 3)})
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
-    if require_audio and not audios:
+    if (require_audio or expected_audio_sample_rate is not None
+            or expected_audio_channels is not None) and not audios:
         issues.append({"code": "EXPORT_AUDIO_STREAM_MISSING", "severity": "error"})
     starts = [0.0]
     # Cover the middle of longer exports, not only the beginning and tail.
@@ -702,7 +758,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         window = max(0.0, min(center - sample_seconds / 2,
                               max(0.0, duration - sample_seconds)))
         starts.append(window)
-    starts.sort()
+    # Identical targeted windows must not consume duplicate FFmpeg work.
+    starts = sorted(set(starts))
     samples = []
     black_frames = []
     frozen_frames = []
