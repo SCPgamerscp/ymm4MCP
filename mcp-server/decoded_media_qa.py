@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+from fractions import Fraction
 from pathlib import Path
 
 from jobs import is_absolute_media_path
@@ -371,19 +372,34 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     # inconsistencies as QA warnings rather than rejecting the export.
     dimensions = {f'{v["width"]}x{v["height"]}' for v in video_details
                   if v["width"] is not None}
-    frame_rates = {v["fps"] for v in video_details if v["fps"] is not None}
+    # Keep exact rational frame rates for comparisons. The public fps field
+    # is rounded for display, and distinct rates can round to the same value.
+    exact_frame_rates = set()
+    for stream in videos:
+        raw_rate = stream.get("avg_frame_rate")
+        if raw_rate not in (None, "N/A") and _frame_rate(raw_rate) is not None:
+            numerator, denominator = map(int, raw_rate.split("/"))
+            exact_frame_rates.add(Fraction(numerator, denominator))
     sample_rates = {a["sample_rate"] for a in audio_details
                     if a["sample_rate"] is not None}
     channel_counts = {a["channels"] for a in audio_details
                       if a["channels"] is not None}
     for values, code, field in (
             (dimensions, "EXPORT_VIDEO_TRACK_RESOLUTION_MISMATCH", "resolutions"),
-            (frame_rates, "EXPORT_VIDEO_TRACK_FPS_MISMATCH", "frame_rates"),
+            (exact_frame_rates, "EXPORT_VIDEO_TRACK_FPS_MISMATCH", "frame_rates"),
             (sample_rates, "EXPORT_AUDIO_TRACK_SAMPLE_RATE_MISMATCH", "sample_rates"),
             (channel_counts, "EXPORT_AUDIO_TRACK_CHANNEL_MISMATCH", "channel_counts")):
         if len(values) > 1:
-            issues.append({"code": code, "severity": "warning",
-                           field: sorted(values)})
+            if field == "frame_rates":
+                # Preserve both human-readable approximations and the exact
+                # ratios, so e.g. 30000/1001 and 2997/100 remain distinguishable.
+                issues.append({"code": code, "severity": "warning",
+                               "frame_rates": sorted({round(float(v), 3) for v in values}),
+                               "frame_rate_ratios": sorted(
+                                   f"{v.numerator}/{v.denominator}" for v in values)})
+            else:
+                issues.append({"code": code, "severity": "warning",
+                               field: sorted(values)})
     # A successful tail decode only proves that some samples exist in the
     # final window. Track metadata can reveal an earlier end within it.
     for kind, tracks in (("video", videos), ("audio", audios)):
@@ -620,7 +636,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     fully_decoded = bool(full_decode and full_decode_ok and passed)
     # A requested full decode is not proof it completed. Do not label a
     # failed or interrupted verification as full_audio_video_decode.
-    scope = ("full_audio_video_decode" if fully_decoded
+    scope = ("full_audio_video_decode" if fully_decoded and audios
+             else "full_video_decode" if fully_decoded
              else "incomplete" if not passed
              else "sampled_audio_video_decode")
     return {"success": True,
