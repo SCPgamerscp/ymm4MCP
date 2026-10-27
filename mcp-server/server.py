@@ -248,6 +248,10 @@ TOOLS = [
                 "max_silence_seconds": {"type": "number", "minimum": 0, "maximum": 900, "description": "decoded_export_qa: 観測された無音区間の最大許容秒数"},
                 "max_freeze_seconds": {"type": "number", "minimum": 0, "maximum": 900, "description": "decoded_export_qa: 観測された静止区間の最大許容秒数"},
                 "require_audio_peak_metrics": {"type": "boolean", "description": "decoded_export_qa: 各音声サンプルに有効なastatsピーク測定を要求する"},
+                "expected_video_frames": {"type": "integer", "minimum": 1, "maximum": 1000000000, "description": "decoded_export_qa: 各映像トラックの期待フレーム数"},
+                "min_audio_peak_dbfs": {"type": "number", "minimum": -120, "maximum": 12, "description": "decoded_export_qa: 音声サンプルのピーク下限(dBFS)"},
+                "max_audio_peak_dbfs": {"type": "number", "minimum": -120, "maximum": 12, "description": "decoded_export_qa: 音声サンプルのピーク上限(dBFS)"},
+                "max_stereo_imbalance_db": {"type": "number", "minimum": 0, "maximum": 120, "description": "decoded_export_qa: ステレオ左右ピーク差の上限(dB)"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
@@ -1072,7 +1076,9 @@ async def dispatch(args: dict) -> Any:
                             "expected_audio_streams", "require_tracks_to_end",
                             "expected_video_codec", "expected_audio_codec",
                             "max_black_seconds", "max_silence_seconds",
-                            "max_freeze_seconds", "require_audio_peak_metrics")
+                            "max_freeze_seconds", "require_audio_peak_metrics",
+                            "expected_video_frames", "min_audio_peak_dbfs",
+                            "max_audio_peak_dbfs", "max_stereo_imbalance_db")
                            if key in args})
                 case "export_qa":
                     path = args.get("path")
@@ -1364,6 +1370,8 @@ async def dispatch(args: dict) -> Any:
                                        "expected_video_codec", "expected_audio_codec",
                                        "max_black_seconds", "max_silence_seconds",
                                        "max_freeze_seconds", "require_audio_peak_metrics",
+                                       "expected_video_frames", "min_audio_peak_dbfs",
+                                       "max_audio_peak_dbfs", "max_stereo_imbalance_db",
                                        "expected_audio_streams"}:
                     raise ValueError("decoded_export_check requires path and supported options")
                 criteria["decoded_export"] = config
