@@ -49,9 +49,22 @@ if ($Install -or $ConfigureClaudeDesktop) {
     if ([IO.Path]::GetFullPath($sourceDir).TrimEnd('\') -ine
         [IO.Path]::GetFullPath($targetDir).TrimEnd('\')) {
         [IO.Directory]::CreateDirectory($targetDir) | Out-Null
+        # Keep local MCP configuration across upgrades.  A Release ZIP may
+        # contain a default config.json, but must not erase an existing user's
+        # model selection or local secrets.  Never import connection.json from
+        # the extracted ZIP: the plugin owns the live connection descriptor.
+        # New installs still receive the packaged default config.json.
+        $copyArgs = @('/E', '/XJ', '/XD', '.venv', '__pycache__', '.git',
+                      '/XF', '*.pyc', 'connection.json')
+        foreach ($localName in @('config.json', 'settings.local.json', '.env')) {
+            if (Test-Path -LiteralPath (Join-Path $targetDir $localName) -PathType Leaf) {
+                $copyArgs += $localName
+            }
+        }
+        $copyArgs += @('/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
         # robocopy preserves the directory layout and skips ephemeral Python
-        # environments/caches.  Exit codes 0..7 mean success on Windows.
-        & robocopy.exe $sourceDir $targetDir /E /XJ /XD '.venv' '__pycache__' '.git' /XF '*.pyc' /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+        # environments/caches. Exit codes 0..7 mean success on Windows.
+        & robocopy.exe $sourceDir $targetDir @copyArgs
         if ($LASTEXITCODE -ge 8) { throw 'MCP サーバーの永続インストールに失敗しました。' }
     }
     $serverDir = $targetDir
