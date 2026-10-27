@@ -63,8 +63,8 @@ class BareAstatsDiagnosticsTests(unittest.TestCase):
                       [issue["code"] for issue in report["issues"]])
 
     def test_malformed_channel_header_ends_overall_section(self):
-        log = ("Overall\\nPeak level dB: -inf\\n"
-               "Channel 2\\nPeak level dB: -inf\\n")
+        log = ("Overall\nPeak level dB: -inf\n"
+               "Channel 2\nPeak level dB: -inf\n")
         self.assertFalse(qa._audio_overall_silent(log))
         report = self.inspect_audio(log)
         self.assertFalse(report["passed"], report)
