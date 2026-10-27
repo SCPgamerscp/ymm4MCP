@@ -65,5 +65,20 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         )
 
 
+    def test_real_export_qa_uses_exact_composed_source(self):
+        # A second merge on Ubuntu could pick up newer PR heads than the
+        # Windows build. Transfer the built composition as a source artifact.
+        self.assertIn("git archive --format=tar --output=issue22-composed.tar HEAD",
+                      self.source)
+        self.assertIn("name: issue22-composed-source", self.source)
+        self.assertIn("  composed-real-export-qa:", self.source)
+        self.assertIn("needs: setup-cross-pr-integration", self.source)
+        self.assertIn("tar -xf issue22-composed.tar -C composed", self.source)
+        self.assertIn("python -m unittest discover -s mcp-server -p 'test_*.py' -q",
+                      self.source)
+        self.assertIn("python -m unittest -v test_decoded_media_real_ffmpeg",
+                      self.source)
+
+
 if __name__ == "__main__":
     unittest.main()
