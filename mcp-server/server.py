@@ -239,7 +239,8 @@ TOOLS = [
                 "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa/decoded_export_qa: 平均FPSの許容誤差。既定0.1"},
                 "require_audio": {"type": "boolean", "description": "get_info/export_qa/decoded_export_qa: 音声トラックを必須とする"},
                 "sample_seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "decoded_export_qa: 冒頭・末尾のデコード秒数。既定8秒"},
-                "full_decode": {"type": "boolean", "description": "decoded_export_qa: 最大15分の動画を全尺デコード。既定false（冒頭・末尾のみ）"},
+                "full_decode": {"type": "boolean", "description": "decoded_export_qa: 全尺デコード（最大15分の検証予算）。既定false"},
+                "full_signal_scan": {"type": "boolean", "description": "decoded_export_qa: full_decode=true時、全尺で黒画面・フリーズ・無音を検出。既定false（サンプル区間のみ）"},
                 "require_tracks_to_end": {"type": "boolean", "description": "decoded_export_qa: 全映像・音声トラックが動画末尾まで続くことを必須とする。既定false（短いBGM等は警告のみ）"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
@@ -1055,6 +1056,7 @@ async def dispatch(args: dict) -> Any:
                         require_audio=args.get("require_audio", True),
                         sample_seconds=args.get("sample_seconds", 8),
                         full_decode=args.get("full_decode", False),
+                        full_signal_scan=args.get("full_signal_scan", False),
                         **{key: args[key] for key in (
                             "expected_duration_seconds", "duration_tolerance_seconds",
                             "expected_width", "expected_height", "expected_fps",
@@ -1344,6 +1346,7 @@ async def dispatch(args: dict) -> Any:
                 config = args["decoded_export_check"]
                 if not isinstance(config, dict) or "path" not in config or \
                         set(config) - {"path", "require_audio", "sample_seconds", "full_decode",
+                                       "full_signal_scan",
                                        "require_tracks_to_end", "expected_duration_seconds", "duration_tolerance_seconds",
                                        "expected_width", "expected_height", "expected_fps",
                                        "fps_tolerance", "expected_audio_sample_rate",
