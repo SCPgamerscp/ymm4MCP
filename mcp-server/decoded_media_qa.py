@@ -340,7 +340,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             expected_duration_seconds=None, duration_tolerance_seconds=1.0,
             expected_width=None, expected_height=None, expected_fps=None,
             fps_tolerance=0.1, expected_audio_sample_rate=None,
-            expected_audio_channels=None):
+            expected_audio_channels=None, expected_video_streams=None,
+            expected_audio_streams=None):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -366,6 +367,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             ("expected_audio_channels", expected_audio_channels, 1, 8)):
         if value is not None and (type(value) is not int or not lower <= value <= upper):
             raise ValueError(f"{name} must be an integer in [{lower}, {upper}]")
+    for name, value, lower in (
+            ("expected_video_streams", expected_video_streams, 1),
+            ("expected_audio_streams", expected_audio_streams, 0)):
+        if value is not None and (type(value) is not int or not lower <= value <= 16):
+            raise ValueError(f"{name} must be an integer in [{lower}, 16]")
+    if expected_audio_streams == 0 and require_audio:
+        raise ValueError("expected_audio_streams=0 requires require_audio=False")
     if (expected_fps is not None and
             (type(expected_fps) not in (int, float) or
              not math.isfinite(expected_fps) or not 0 < expected_fps <= 240)):
@@ -603,6 +611,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
     issues = []
+    if expected_video_streams is not None and len(videos) != expected_video_streams:
+        issues.append({"code": "EXPORT_VIDEO_STREAM_COUNT_MISMATCH",
+                       "severity": "error", "expected": expected_video_streams,
+                       "actual": len(videos)})
+    if expected_audio_streams is not None and len(audios) != expected_audio_streams:
+        issues.append({"code": "EXPORT_AUDIO_STREAM_COUNT_MISMATCH",
+                       "severity": "error", "expected": expected_audio_streams,
+                       "actual": len(audios)})
     # Expectations apply to every track. Missing metadata cannot prove a match.
     for ordinal, details in enumerate(video_details):
         for field, expected in (("width", expected_width), ("height", expected_height)):
