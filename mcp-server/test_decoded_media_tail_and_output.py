@@ -64,6 +64,39 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
     def test_just_under_three_windows_does_not_duplicate_overlap(self):
         self.check_windows(23.5, 8, [0.0, 15.5])
 
+    def test_full_signal_scan_requires_explicit_full_decode(self):
+        with self.assertRaisesRegex(ValueError, "full_signal_scan requires"):
+            qa.inspect(str(self.video), full_signal_scan=True)
+        with self.assertRaisesRegex(ValueError, "full_signal_scan must be boolean"):
+            qa.inspect(str(self.video), full_signal_scan="true", full_decode=True)
+
+    def test_failed_full_signal_filter_never_claims_full_coverage(self):
+        metadata = json.dumps({
+            "format": {"duration": "4.0", "start_time": "0"},
+            "streams": [{"index": 0, "codec_type": "video", "start_time": "0",
+                         "duration": "4.0", "width": 64, "height": 64,
+                         "avg_frame_rate": "10/1"}],
+        })
+        calls = []
+        def fake(command, timeout):
+            calls.append(command)
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            if "-vf" in command and "setpts=PTS-STARTPTS" in command:
+                return subprocess.CompletedProcess(command, 1, "", "filter failed")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False,
+                                full_decode=True, full_signal_scan=True,
+                                sample_seconds=2)
+        self.assertFalse(report["passed"], report)
+        self.assertFalse(report["fully_decoded"], report)
+        self.assertEqual(report["signal_scope"], "sampled_only")
+        self.assertIn("EXPORT_FULL_SIGNAL_FAILED",
+                      {issue["code"] for issue in report["issues"]})
+        self.assertTrue(any("-vf" in call and "setpts=PTS-STARTPTS" in call
+                            for call in calls))
+
     def test_subprocess_stdout_requires_utf8_but_stderr_is_diagnostic(self):
         # Metadata must never be silently altered by replacement decoding.
         invalid_stdout = [sys.executable, "-c",
