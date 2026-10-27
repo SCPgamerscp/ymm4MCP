@@ -93,6 +93,27 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertIn("ffmpeg -version | head -n 1", self.source)
         self.assertIn("ffprobe -version | head -n 1", self.source)
 
+    def test_all_open_prs_are_tested_from_one_immutable_archive(self):
+        # A clean 50-PR merge is not enough: both platforms must consume the
+        # same archive and run real regressions/builds without remote writes.
+        self.assertIn("conflicts: ${{ steps.merge-audit.outputs.conflicts }}", self.source)
+        self.assertIn("id: merge-audit", self.source)
+        self.assertIn('echo "conflicts=$failed" >> "$GITHUB_OUTPUT"', self.source)
+        self.assertIn("git archive --format=tar --output=all-open-prs-composed.tar HEAD", self.source)
+        self.assertIn("name: all-open-prs-composed-source", self.source)
+        for job in ("all-open-prs-python-integration", "all-open-prs-windows-package"):
+            self.assertIn(f"  {job}:", self.source)
+            self.assertIn("needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'",
+                          self.source)
+        self.assertIn("tar -xf all-open-prs-composed.tar -C composed", self.source)
+        self.assertIn("python -m unittest discover -s mcp-server -p 'test_*.py' -q",
+                      self.source)
+        self.assertIn("dotnet build composed/YMM4McpPlugin/YMM4McpPlugin.csproj",
+                      self.source)
+        self.assertIn("Get-ChildItem -Path composed/tests -Recurse -Filter 'Keyframe*.csproj'",
+                      self.source)
+        self.assertNotIn("git push", self.source)
+
     def test_all_open_pr_merge_audit_is_read_only_and_complete(self):
         # Individual mergeable=true flags do not prove a 50-PR sequence works.
         # The advisory job discovers current open PRs and attempts sequential
