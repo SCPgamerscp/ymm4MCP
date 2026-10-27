@@ -501,7 +501,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             full_signal_scan=False, expected_video_codec=None,
              expected_audio_codec=None, max_black_seconds=None,
              max_silence_seconds=None, max_freeze_seconds=None,
-             require_audio_peak_metrics=False):
+             require_audio_peak_metrics=False, expected_video_frames=None,
+             min_audio_peak_dbfs=None, max_audio_peak_dbfs=None,
+             max_stereo_imbalance_db=None):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -566,6 +568,21 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         raise ValueError("require_audio_peak_metrics must be boolean")
     if expected_audio_codec is not None and expected_audio_streams == 0:
         raise ValueError("expected_audio_codec conflicts with expected_audio_streams=0")
+    if (expected_video_frames is not None and
+            (type(expected_video_frames) is not int or
+             not 1 <= expected_video_frames <= 1_000_000_000)):
+        raise ValueError("expected_video_frames must be an integer in [1, 1000000000]")
+    for name, value, low, high in (
+            ("min_audio_peak_dbfs", min_audio_peak_dbfs, -120, 12),
+            ("max_audio_peak_dbfs", max_audio_peak_dbfs, -120, 12),
+            ("max_stereo_imbalance_db", max_stereo_imbalance_db, 0, 120)):
+        if (value is not None and
+                (type(value) not in (int, float) or
+                 not low <= value <= high or not math.isfinite(value))):
+            raise ValueError(f"{name} must be finite and in [{low}, {high}]")
+    if (min_audio_peak_dbfs is not None and max_audio_peak_dbfs is not None
+            and min_audio_peak_dbfs > max_audio_peak_dbfs):
+        raise ValueError("min_audio_peak_dbfs exceeds max_audio_peak_dbfs")
     target = Path(path)
     try:
         exists = target.is_file()
@@ -819,6 +836,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                        "actual": len(audios)})
     # Expectations apply to every track. Missing metadata cannot prove a match.
     for ordinal, details in enumerate(video_details):
+        if expected_video_frames is not None and details["reported_frames"] != expected_video_frames:
+            issues.append({
+                "code": ("EXPORT_VIDEO_FRAME_COUNT_UNKNOWN"
+                         if details["reported_frames"] is None
+                         else "EXPORT_VIDEO_FRAME_COUNT_MISMATCH"),
+                "severity": "error", "stream_type": "video",
+                "stream_ordinal": ordinal, "expected": expected_video_frames,
+                "actual": details["reported_frames"]})
         if expected_video_codec is not None and details["codec"] != expected_video_codec:
             issues.append({
                 "code": ("EXPORT_VIDEO_CODEC_UNKNOWN" if details["codec"] is None
@@ -1181,6 +1206,26 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                 "sample_start_seconds": round(start, 6),
                                 "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
+                if max_stereo_imbalance_db is not None and declared_channels == 2:
+                    if set(channel_peaks) != {1, 2}:
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE",
+                            "severity": "error", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6)})
+                    else:
+                        left, right = channel_peaks[1], channel_peaks[2]
+                        delta = (abs(left - right)
+                                 if math.isfinite(left) and math.isfinite(right)
+                                 else 0.0 if left == right == -math.inf
+                                 else math.inf)
+                        if delta > max_stereo_imbalance_db:
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_STEREO_IMBALANCE_EXCEEDED",
+                                "severity": "error", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "max_db": max_stereo_imbalance_db,
+                                "difference_db": (round(delta, 3)
+                                                  if math.isfinite(delta) else None)})
                 # A complete channel inventory or an Overall -inf peak
                 # suggests silence, but neither can override a finite peak
                 # measured elsewhere in this same sample. Inconsistent or
@@ -1193,6 +1238,32 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
                         "severity": "warning", "stream_ordinal": ordinal,
                         "sample_start_seconds": round(start, 6)})
+                if min_audio_peak_dbfs is not None or max_audio_peak_dbfs is not None:
+                    measured_peak = (peak if peak is not None else
+                                     -math.inf if (overall_silent or
+                                         (complete_channels and all(
+                                             value == -math.inf for value in
+                                             channel_peaks.values()))) else None)
+                    if measured_peak is None:
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_AUDIO_PEAK_UNVERIFIABLE",
+                            "severity": "error", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6)})
+                    else:
+                        if (min_audio_peak_dbfs is not None and
+                                measured_peak < min_audio_peak_dbfs):
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_AUDIO_PEAK_TOO_LOW",
+                                "severity": "error", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "min_dbfs": min_audio_peak_dbfs})
+                        if (max_audio_peak_dbfs is not None and
+                                measured_peak > max_audio_peak_dbfs):
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_AUDIO_PEAK_TOO_HIGH",
+                                "severity": "error", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "max_dbfs": max_audio_peak_dbfs})
                 if (require_audio_peak_metrics and peak is None
                         and not overall_silent and not channel_peaks):
                     issues.append({
