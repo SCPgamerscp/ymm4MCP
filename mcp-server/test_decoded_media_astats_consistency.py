@@ -98,17 +98,17 @@ class AstatsConsistencyTests(unittest.TestCase):
 
     def test_oversized_channel_id_is_ignored_without_integer_conversion(self):
         # Thousands of digits must not raise Python's int conversion limit.
-        log = ("[Parsed_astats_0 @ 0x123] Channel: " + "9" * 5000 + "\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -2\\n")
+        log = ("[Parsed_astats_0 @ 0x123] Channel: " + "9" * 5000 + "\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -2\n")
         self.assertEqual(qa._audio_channel_peaks(log), {})
         result = self.inspect_audio(log, channels=2)
         self.assertTrue(result["passed"], result)
 
     def test_invalid_channel_header_clears_previous_channel(self):
-        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -18\\n"
-               "[Parsed_astats_0 @ 0x123] Channel: 65\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -1\\n")
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -18\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 65\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -1\n")
         self.assertEqual(qa._audio_channel_peaks(log), {1: -18.0})
 
 
