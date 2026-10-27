@@ -16,7 +16,7 @@ class FailClosedExportInputsTests(unittest.TestCase):
         self.video = Path(directory.name) / "clip.mp4"
         self.video.write_bytes(b"synthetic export" * 5)
 
-    def check_probe(self, metadata):
+    def check_probe(self, metadata, **options):
         def fake_run(command, timeout):
             if command[0] == "ffprobe":
                 return subprocess.CompletedProcess(
@@ -24,7 +24,7 @@ class FailClosedExportInputsTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with patch.object(qa, "run", side_effect=fake_run):
-            return qa.inspect(str(self.video), require_audio=False)
+            return qa.inspect(str(self.video), require_audio=False, **options)
 
     def test_non_object_format_is_structured_probe_failure(self):
         # Previously `format.get(...)` raised AttributeError, escaping the
@@ -86,7 +86,7 @@ class FailClosedExportInputsTests(unittest.TestCase):
         report = self.check_probe({
             "format": {"duration": "2.0"},
             "streams": [{"codec_type": "video"}],
-        })
+        }, expected_audio_streams=0)
         self.assertTrue(report["passed"], report)
 
 
