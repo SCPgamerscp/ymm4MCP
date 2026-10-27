@@ -93,6 +93,24 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertIn("ffmpeg -version | head -n 1", self.source)
         self.assertIn("ffprobe -version | head -n 1", self.source)
 
+    def test_all_open_pr_merge_audit_is_read_only_and_complete(self):
+        # Individual mergeable=true flags do not prove a 50-PR sequence works.
+        # The advisory job discovers current open PRs and attempts sequential
+        # local merges, recording conflicts without pushing or masking them.
+        self.assertIn("  audit-open-pr-merge-compatibility:", self.source)
+        self.assertIn("  pull-requests: read", self.source)
+        self.assertIn(
+            'gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"',
+            self.source,
+        )
+        self.assertIn('mapfile -t numbers < <(sort -n -u', self.source)
+        self.assertIn('git checkout -B audit-open-prs refs/remotes/origin/main', self.source)
+        self.assertIn('git merge --no-ff --no-edit "refs/remotes/audit-pr/${number}"', self.source)
+        self.assertIn('git merge --abort', self.source)
+        self.assertIn('echo "**Composed: ', self.source)
+        self.assertIn('persist-credentials: false', self.source)
+        self.assertNotIn('git push', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()
