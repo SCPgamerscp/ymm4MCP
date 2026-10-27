@@ -251,7 +251,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration,start_time,nb_streams:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames",
+                     "format=duration,start_time,nb_streams:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames:stream_disposition=attached_pic",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -306,6 +306,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     or stream["codec_type"] not in (
                         "video", "audio", "subtitle", "data", "attachment", "unknown")):
                 raise ValueError("invalid stream metadata")
+            # Cover artwork is a video stream to ffprobe, but not a timed
+            # video track. Do not count or decode it as ordinary video.
+            disposition = stream.get("disposition", {})
+            if not isinstance(disposition, dict):
+                raise ValueError("invalid stream disposition")
+            attached_pic = disposition.get("attached_pic", 0)
+            if (type(attached_pic) is not int or attached_pic not in (0, 1)
+                    or (attached_pic and stream["codec_type"] != "video")):
+                raise ValueError("invalid attached-picture disposition")
             if "index" in stream:
                 index = stream["index"]
                 if (type(index) is not int or index < 0 or index > 2_147_483_647
@@ -318,7 +327,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     raise ValueError("out-of-order stream indices")
                 last_index = index
                 seen_indices.add(index)
-            if stream["codec_type"] == "video" and "nb_frames" in stream:
+            if (stream["codec_type"] == "video" and not attached_pic
+                    and "nb_frames" in stream):
                 frame_count = stream["nb_frames"]
                 # ffprobe uses N/A when the frame count is unknown. A reported
                 # zero or malformed count must not be mistaken for a valid track.
@@ -367,6 +377,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         # with FFmpeg's per-type stream selectors.
         if seen_indices and len(seen_indices) != len(streams):
             raise ValueError("partially indexed stream table")
+        # Absolute selectors are needed to skip cover artwork. Legacy mocks
+        # without indices remain supported only when there is no cover art.
+        has_cover_art = any(s.get("disposition", {}).get("attached_pic") == 1
+                            for s in streams)
+        if has_cover_art and len(seen_indices) != len(streams):
+            raise ValueError("cover-art stream indices are unavailable")
         if container_start is None:
             known_starts = [
                 _optional_stream_time(stream.get("start_time"), signed=True)
@@ -405,7 +421,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         return failure("EXPORT_FULL_DECODE_DURATION_LIMIT",
                        "全尺デコードは15分以内の動画に限定しています")
 
-    videos = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
+    videos = [s for s in streams if s["codec_type"] == "video"
+              and s.get("disposition", {}).get("attached_pic") != 1]
     audios = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"]
     # Sample decoding is synchronous: cap total stream work before launching
     # per-stream subprocesses, including streams not required by the caller.
@@ -614,7 +631,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "info", "-xerror", "-ss", format(start, ".6f"),
                        "-i", str(target), "-t", format(length, ".6f"),
-                       "-map", f"0:v:{ordinal}" if kind == "video" else f"0:a:{ordinal}",
+                       "-map", (f"0:{stream['index']}" if kind == "video" and has_cover_art
+                                else f"0:v:{ordinal}" if kind == "video"
+                                else f"0:a:{ordinal}"),
                        "-vf" if kind == "video" else "-af", signal_filter,
                        "-abort_on", "empty_output", "-f", "null", "-"]
             remaining = sample_deadline - time.monotonic()
@@ -699,9 +718,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
             if not present:
                 continue
+            mapping_args = ["-map", "0:v" if kind == "video" else "0:a"]
+            if kind == "video" and has_cover_art:
+                mapping_args = [part for stream in videos
+                                for part in ("-map", f"0:{stream['index']}")]
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "error", "-xerror", "-i", str(target),
-                       "-map", "0:v" if kind == "video" else "0:a",
+                       *mapping_args,
                        # Every mapped stream must produce decoded output. A
                        # populated first track must not hide an empty second.
                        "-abort_on", "empty_output+empty_output_stream",
