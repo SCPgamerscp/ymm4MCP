@@ -76,8 +76,10 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertIn("tar -xf issue22-composed.tar -C composed", self.source)
         self.assertIn("python -m unittest discover -s mcp-server -p 'test_*.py' -q",
                       self.source)
-        self.assertIn("python -m unittest -v test_decoded_media_real_ffmpeg",
-                      self.source)
+        self.assertIn(
+            "python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration",
+            self.source,
+        )
 
 
     def test_real_export_qa_uses_runner_ffmpeg_before_apt(self):
