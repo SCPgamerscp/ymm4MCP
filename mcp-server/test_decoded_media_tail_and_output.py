@@ -1624,5 +1624,36 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                     issue["code"] == "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT"
                     for issue in report["issues"]), report)
 
+
+    def test_sample_decode_requires_nonempty_individual_output_stream(self):
+        # A successful container-level output is not sufficient: FFmpeg must
+        # fail if the specifically selected track produces no decoded frames.
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        sampled = []
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            self.assertIn("-abort_on", command)
+            self.assertEqual(command[command.index("-abort_on") + 1],
+                             "empty_output+empty_output_stream")
+            selected = command[command.index("-map") + 1]
+            sampled.append(selected)
+            # Simulate FFmpeg rejecting an empty selected audio stream.
+            return subprocess.CompletedProcess(
+                command, 1 if selected == "0:a:0" else 0, "",
+                "Output stream is empty" if selected == "0:a:0" else "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertEqual(sampled, ["0:v:0", "0:a:0"])
+        self.assertFalse(report["passed"], report)
+        self.assertTrue(any(
+            issue["code"] == "EXPORT_DECODE_FAILED"
+            and issue["stream_type"] == "audio"
+            for issue in report["issues"]), report)
+
 if __name__ == "__main__":
     unittest.main()
