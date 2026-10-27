@@ -177,14 +177,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install real FFmpeg for decoded-export verification
+      - name: Ensure FFmpeg and ffprobe are available for real export QA
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          # Ubuntu runners generally include FFmpeg. Avoid unconditional
+          # apt update/install: package mirrors can stall the only remaining
+          # cross-platform QA job even after Windows integration succeeded.
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo 'Using FFmpeg and ffprobe already installed on the runner'
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
           command -v ffmpeg
           command -v ffprobe
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
       - name: Install composed MCP dependencies
         run: python -m pip install -r composed/mcp-server/requirements.txt
       - name: Run all composed Python regression tests
