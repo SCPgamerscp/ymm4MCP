@@ -1521,5 +1521,76 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                       [issue["code"] for issue in report["issues"]])
         self.assertNotIn("Infinity", json.dumps(report, allow_nan=False))
 
+
+    def test_signal_ranges_do_not_attribute_prestart_preroll_to_media(self):
+        # A stream starts at t=3s, inside both overlapping 8-second samples.
+        # FFmpeg may report a filter interval starting at the sample origin.
+        # Only the portion where the track exists may be reported.
+        metadata = json.dumps({
+            "format": {"duration": "10", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "3",
+                         "duration": "7"},
+                        {"codec_type": "audio", "start_time": "3",
+                         "duration": "7"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            sample_start = float(command[command.index("-ss") + 1])
+            end = 4 - sample_start
+            if "0:v:0" in command:
+                log = (f"black_start: 0 black_end: {end}\\n"
+                       f"freeze_start: 0 freeze_end: {end}\\n")
+            else:
+                log = f"silence_start: 0 silence_end: {end}\\n"
+            return subprocess.CompletedProcess(command, 0, "", log)
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        for field in ("black_frames", "frozen_frames", "long_silences"):
+            self.assertEqual(len(report[field]), 1, report[field])
+            self.assertEqual(report[field][0]["video_start_seconds"], 3.0)
+            self.assertEqual(report[field][0]["video_end_seconds"], 4.0)
+            self.assertEqual(report[field][0]["duration_seconds"], 1.0)
+
+    def test_signal_intervals_entirely_before_stream_start_are_discarded(self):
+        metadata = json.dumps({
+            "format": {"duration": "10", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "3",
+                         "duration": "7"},
+                        {"codec_type": "audio", "start_time": "3",
+                         "duration": "7"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            log = ("black_start: 0 black_end: 0.5\\n"
+                   "freeze_start: 0 freeze_end: 0.5\\n"
+                   if "0:v:0" in command else
+                   "silence_start: 0 silence_end: 0.5\\n")
+            return subprocess.CompletedProcess(command, 0, "", log)
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        for field in ("black_frames", "frozen_frames", "long_silences"):
+            self.assertEqual(report[field], [], report[field])
+
+    def test_inaudible_stereo_peaks_do_not_trigger_imbalance(self):
+        # A large dB difference below the audible QA threshold is not a
+        # meaningful left/right imbalance; active speech must still warn.
+        quiet = ("[Parsed_astats_0 @ 0x123] Channel: 1\\n"
+                 "[Parsed_astats_0 @ 0x123] Peak level dB: -100\\n"
+                 "[Parsed_astats_0 @ 0x123] Channel: 2\\n"
+                 "[Parsed_astats_0 @ 0x123] Peak level dB: -80\\n")
+        report = self.inspect_with_channel_astats(quiet)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any(issue["code"] ==
+                             "EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE"
+                             for issue in report["issues"]), report)
+        self.assertEqual(report["audio_channel_peaks"][0]["peak_dbfs_by_channel"],
+                         {"1": -100.0, "2": -80.0})
+
 if __name__ == "__main__":
     unittest.main()
