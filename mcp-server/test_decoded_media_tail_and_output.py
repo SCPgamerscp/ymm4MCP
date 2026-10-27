@@ -1059,6 +1059,11 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertTrue(report["passed"], report)
         self.assertTrue(report["fully_decoded"])
         self.assertEqual(report["verification_scope"], "full_video_decode")
+        with patch.object(qa, "run", side_effect=fake):
+            sampled = qa.inspect(str(self.video), require_audio=False)
+        self.assertTrue(sampled["passed"], sampled)
+        self.assertFalse(sampled["fully_decoded"])
+        self.assertEqual(sampled["verification_scope"], "sampled_video_decode")
         self.assertFalse(any("0:a" in " ".join(command)
                              for command in commands if command[0] == "ffmpeg"))
 
