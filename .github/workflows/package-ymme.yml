@@ -306,7 +306,7 @@ jobs:
           # Re-running from another extraction must preserve the same stable path.
           # Simulate an older launcher without -V:3: the explicit -3.12
           # fallback must still work after rejecting the obsolete -3 default.
-          $fallbackMarker = Join-Path $env:RUNNER_TEMP 'ymm4mcp-explicit-py-selected.txt'
+          $fallbackMarker = Join-Path $env:RUNNER_TEMP 'ymm4mcp-legacy-py-selected.txt'
           $disableLatest = Join-Path $fakeLauncherDir 'disable-latest'
           # A file next to the fake launcher is a deterministic switch even
           # when nested cmd.exe / PowerShell processes sanitize environment.
