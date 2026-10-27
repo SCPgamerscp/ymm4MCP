@@ -195,6 +195,45 @@ def _invalid_signal_durations(log, start_name, end_name):
     return False
 
 
+def _invalid_signal_duration_mismatch(log, start_name, end_name):
+    """Reject a duration contradicting a matching start/end interval.
+
+    Compare only complete numeric triples from the same trusted filter.
+    Orphan end/duration messages cannot establish a contradiction.
+    """
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    duration_name = start_name.replace("_start", "_duration")
+    pattern = re.compile(r"\b(" + "|".join(map(re.escape, (
+        start_name, end_name, duration_name))) + r"):\s*([^\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    active = None
+    completed_length = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, filter_name, (start_name, end_name, duration_name))
+        for name, raw in pattern.findall(payload):
+            if not number.fullmatch(raw):
+                continue  # Invalid syntax is handled by other guards.
+            value = float(raw)
+            if not math.isfinite(value):
+                continue
+            if name == start_name:
+                active = value if active is None else min(active, value)
+                completed_length = None
+            elif name == end_name:
+                completed_length = (value - active if active is not None
+                                    and value >= active else None)
+                active = None
+            else:
+                if (completed_length is not None
+                        and abs(completed_length - value)
+                        > max(0.05, completed_length * 0.00001)):
+                    return True
+                completed_length = None
+    return False
+
+
 def _audio_channel_peaks(log):
     """Read channel-specific FFmpeg astats peaks, including -inf for silence.
 
@@ -1141,6 +1180,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     "severity": "error", "stream_type": kind,
                     "stream_ordinal": ordinal,
                     "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_duration_mismatch(
+                    decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_DURATION_MISMATCH",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, signal_window_length):
                 signal_start = max(signal_start, signal_active_start)
@@ -1182,6 +1228,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         decoded.stderr or "", "freeze_start", "freeze_end"):
                     issues.append({
                         "code": "EXPORT_SAMPLE_SIGNAL_DURATION_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_duration_mismatch(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_DURATION_MISMATCH",
                         "severity": "error", "stream_type": kind,
                         "stream_ordinal": ordinal,
                         "sample_start_seconds": round(start, 6)})
@@ -1341,6 +1394,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     if _invalid_signal_durations(diagnostics, start_name, end_name):
                         full_signal_scan_ok = False
                         issues.append({"code": "EXPORT_FULL_SIGNAL_DURATION_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_duration_mismatch(
+                            diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_DURATION_MISMATCH",
                                        "severity": "error", "stream_type": kind,
                                        "stream_ordinal": ordinal})
                         continue
