@@ -251,7 +251,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration,start_time:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time",
+                     "format=duration,start_time,nb_streams:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -292,7 +292,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         # Bound the entire stream table before iterating over untrusted metadata.
         if len(streams) > 128:
             return failure("EXPORT_STREAM_LIMIT", "ストリーム数が多すぎます（最大128）")
+        # ffprobe reports the total stream count independently of the stream
+        # array. An incomplete or contradictory inventory must not be certified.
+        declared_streams = info["format"].get("nb_streams")
+        if declared_streams is not None and (
+                type(declared_streams) is not int or declared_streams != len(streams)):
+            raise ValueError("ffprobe stream count disagrees with stream table")
         seen_indices = set()
+        last_index = -1
         for stream in streams:
             if (not isinstance(stream, dict)
                     or not isinstance(stream.get("codec_type"), str)
@@ -304,7 +311,22 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 if (type(index) is not int or index < 0 or index > 2_147_483_647
                         or index in seen_indices):
                     raise ValueError("invalid or duplicate stream index")
+                # FFmpeg's 0:v:N/0:a:N selectors follow stream index order.
+                # Reject reordered metadata so diagnostics cannot be attributed
+                # to the wrong stream when per-type ordinals are constructed.
+                if index <= last_index:
+                    raise ValueError("out-of-order stream indices")
+                last_index = index
                 seen_indices.add(index)
+            if stream["codec_type"] == "video" and "nb_frames" in stream:
+                frame_count = stream["nb_frames"]
+                # ffprobe uses N/A when the frame count is unknown. A reported
+                # zero or malformed count must not be mistaken for a valid track.
+                if frame_count not in (None, "N/A"):
+                    if (type(frame_count) is not str
+                            or not re.fullmatch(r"[0-9]{1,19}", frame_count)
+                            or not 1 <= int(frame_count) <= 9_223_372_036_854_775_807):
+                        raise ValueError("invalid video frame count")
             # ffprobe may expose video dimensions even when the codec cannot
             # actually be decoded. Incomplete or impossible dimensions must
             # not be reported as a verified video stream.
