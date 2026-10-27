@@ -45,7 +45,7 @@ class DecodedMediaQATests(unittest.TestCase):
         self.assertTrue(all(isinstance(cmd, list) for cmd, _ in commands))
         self.assertTrue(all(timeout <= 30 for _, timeout in commands))
         self.assertTrue(all("-abort_on" in cmd and
-                            cmd[cmd.index("-abort_on") + 1] == "empty_output"
+                            cmd[cmd.index("-abort_on") + 1] == "empty_output+empty_output_stream"
                             for cmd, _ in commands if cmd[0] == "ffmpeg"))
 
     def test_full_decode_checks_all_streams_and_marks_full_scope(self):
@@ -71,7 +71,7 @@ class DecodedMediaQATests(unittest.TestCase):
                             == "empty_output+empty_output_stream" for cmd in full_commands))
         sampled_commands = [cmd for cmd, _ in commands if cmd[0] == "ffmpeg"
                             and "-ss" in cmd]
-        self.assertTrue(all(cmd[cmd.index("-abort_on") + 1] == "empty_output"
+        self.assertTrue(all(cmd[cmd.index("-abort_on") + 1] == "empty_output+empty_output_stream"
                             for cmd in sampled_commands))
         self.assertTrue(all(timeout <= 900 for _, timeout in commands))
 
