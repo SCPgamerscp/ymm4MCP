@@ -252,8 +252,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         # Compare track positions to the container origin, not wall-clock zero.
         container_start = _optional_stream_time(
             info["format"].get("start_time"), signed=True)
-        if container_start is None:
-            container_start = 0.0
+        # When format.start_time is absent, derive the origin from validated
+        # A/V stream timestamps below instead of assuming wall-clock zero.
         # The FFmpeg command uses microsecond precision; smaller durations
         # would round -t to zero and could falsely pass an empty sample.
         if not isinstance(streams, list) or not math.isfinite(duration) or duration < 0.000001:
@@ -292,9 +292,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 if "duration" in stream:
                     _optional_stream_time(stream["duration"])
                 if "start_time" in stream:
-                    stream_start = _optional_stream_time(stream["start_time"], signed=True)
-                    if stream_start is not None and stream_start - container_start > duration + 1:
-                        raise ValueError("stream starts beyond container end")
+                    _optional_stream_time(stream["start_time"], signed=True)
             if stream["codec_type"] == "audio":
                 if "sample_rate" in stream:
                     rate = stream["sample_rate"]
@@ -305,6 +303,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     channels = stream["channels"]
                     if type(channels) is not int or not 1 <= channels <= 64:
                         raise ValueError("invalid audio channel count")
+        if container_start is None:
+            known_starts = [
+                _optional_stream_time(stream.get("start_time"), signed=True)
+                for stream in streams if stream["codec_type"] in ("video", "audio")]
+            container_start = min((value for value in known_starts if value is not None),
+                                  default=0.0)
+        for stream in streams:
+            if stream["codec_type"] in ("video", "audio"):
+                stream_start = _optional_stream_time(stream.get("start_time"), signed=True)
+                if stream_start is not None and stream_start - container_start > duration + 1:
+                    raise ValueError("stream starts beyond container end")
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
@@ -367,6 +376,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                "severity": "warning", "stream_type": kind,
                                "stream_ordinal": ordinal,
                                "missing_head_seconds": round(track_start, 3)})
+            if track_start < -1.0:
+                # Negative preroll is allowed, but excessive offsets should
+                # be visible to the unattended editor as a QA warning.
+                issues.append({"code": "EXPORT_STREAM_STARTS_BEFORE_CONTAINER",
+                               "severity": "warning", "stream_type": kind,
+                               "stream_ordinal": ordinal,
+                               "preroll_seconds": round(-track_start, 3)})
             if track_duration is not None and track_start is not None:
                 if track_start + track_duration > duration + 1.0:
                     issues.append({"code": "EXPORT_STREAM_EXCEEDS_CONTAINER",
