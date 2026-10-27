@@ -76,7 +76,15 @@ jobs:
         run: |
           Push-Location mcp-server
           try {
-            python -m unittest -q test_decoded_media_qa test_decoded_media_tail_and_output test_decoded_media_duration_expectation_20261027 test_decoded_media_astats_consistency test_decoded_media_ffmpeg_nonfinite_20261027 test_decoded_media_probe_integrity_20261027 test_decoded_media_signal_consistency_20261027
+            # PR #229 adds new export QA regression modules over time. The
+            # previous hand-maintained module list silently omitted new tests,
+            # including expected output-format checks. Discover every matching
+            # module from the *composed* source tree, not PR #228 alone.
+            $qaTests = @(Get-ChildItem -LiteralPath . -Filter 'test_decoded_media_*.py' -File)
+            if ($qaTests.Count -lt 8) {
+              throw "Expected export decode QA regression modules from PR #229; found $($qaTests.Count)"
+            }
+            python -m unittest discover -s . -p 'test_decoded_media_*.py' -q
             if ($LASTEXITCODE -ne 0) { throw 'Composed export decode QA regressions failed' }
           }
           finally { Pop-Location }
