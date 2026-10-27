@@ -117,7 +117,10 @@ def _audio_channel_peaks(log):
             raw = match.group(1)
             peak = -math.inf if raw.lower() == "-inf" else float(raw)
             if peak == -math.inf or math.isfinite(peak):
-                peaks[channel] = peak
+                # Multiple astats summaries may occur in one decode. The
+                # last one can be silent even when earlier audio was loud;
+                # retain the highest measured peak across the whole sample.
+                peaks[channel] = max(peaks.get(channel, -math.inf), peak)
     return peaks
 
 
@@ -138,7 +141,9 @@ def _audio_overall_silent(log):
         elif payload.startswith("Channel:"):
             in_overall = False
         elif in_overall and payload.startswith("Peak level dB:"):
-            silent = payload == "Peak level dB: -inf"
+            # Overall summaries can repeat. A later silent summary must
+            # not erase evidence of an earlier non-silent segment.
+            silent = (silent is not False and payload == "Peak level dB: -inf")
     return silent is True
 
 
@@ -742,6 +747,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                         "silent_channels": sorted(
                             channel for channel, value in channel_peaks.items()
                             if value == -math.inf)})
+                overall_silent = _audio_overall_silent(decoded.stderr or "")
+                complete_channels = (channel_peaks and declared_channels is not None
+                                     and set(channel_peaks) ==
+                                     set(range(1, declared_channels + 1)))
                 if channel_peaks and declared_channels is not None:
                     expected = set(range(1, declared_channels + 1))
                     observed = set(channel_peaks)
@@ -752,13 +761,6 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                             "sample_start_seconds": round(start, 6),
                             "declared_channels": declared_channels,
                             "observed_channels": sorted(observed)})
-                    elif all(value == -math.inf for value in channel_peaks.values()):
-                        # astats emits -inf for truly silent samples. A short
-                        # clip can be silent without reaching silencedetect d=2.
-                        issues.append({
-                            "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
-                            "severity": "warning", "stream_ordinal": ordinal,
-                            "sample_start_seconds": round(start, 6)})
                     elif declared_channels == 2:
                         left, right = channel_peaks[1], channel_peaks[2]
                         if ((math.isfinite(left) and math.isfinite(right)
@@ -772,11 +774,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                 "sample_start_seconds": round(start, 6),
                                 "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
-                # Some FFmpeg versions omit channel sections but still emit
-                # a valid Overall -inf peak. Without this fallback a short
-                # entirely silent clip passes without any silence finding.
-                if (not channel_peaks
-                        and _audio_overall_silent(decoded.stderr or "")):
+                # A complete channel inventory can establish silence on its
+                # own. An Overall -inf peak covers every channel even when
+                # ffprobe omitted the channel count or astats omitted some
+                # channel sections. Emit this finding only once per sample.
+                if (overall_silent or (complete_channels and all(
+                        value == -math.inf for value in channel_peaks.values()))):
                     issues.append({
                         "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
                         "severity": "warning", "stream_ordinal": ordinal,
