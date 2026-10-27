@@ -39,7 +39,7 @@ def _trusted_filter_payload(line, filter_name, bare_names):
 def _signal_ranges(log, start_name, end_name, window_duration=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])")
+                         + r"):\s*([+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|nan|inf(?:inity)?))(?=$|[\s,;])", re.IGNORECASE)
     start = None
     ranges = []
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
@@ -50,9 +50,11 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, filter_name, bare_names)
         for name, timestamp in pattern.findall(payload):
+            # A malformed non-finite end invalidates the active interval.
+            # Otherwise an unmatched start would be extended to sample EOF
+            # and invent a black/silent/frozen span.
             value = float(timestamp)
             if not math.isfinite(value):
-                # Do not serialize Infinity or create an invented signal span.
                 start = None
                 continue
             # FFmpeg may report negative silence_start during filter preroll.
@@ -153,7 +155,8 @@ def _audio_overall_silent(log):
         elif in_overall and payload.startswith("Peak level dB:"):
             # Overall summaries can repeat. A later silent summary must
             # not erase evidence of an earlier non-silent segment.
-            silent = (silent is not False and payload.casefold() == "peak level db: -inf")
+            silent = (silent is not False and re.fullmatch(
+                r"Peak level dB:\s*-inf", payload, re.IGNORECASE) is not None)
     return silent is True
 
 
