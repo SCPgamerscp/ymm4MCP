@@ -1310,6 +1310,68 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                                 {"codec_type": "audio"}]})
                 self.assertTrue(self.inspect_with_probe(metadata)["passed"])
 
+    def test_attached_cover_art_does_not_displace_real_video_mapping(self):
+        metadata = json.dumps({
+            "format": {"duration": "12", "nb_streams": 3},
+            "streams": [
+                {"codec_type": "video", "index": 0, "nb_frames": "0",
+                 "disposition": {"attached_pic": 1}},
+                {"codec_type": "video", "index": 1, "nb_frames": "300",
+                 "width": 1920, "height": 1080,
+                 "disposition": {"attached_pic": 0}},
+                {"codec_type": "audio", "index": 2}]})
+        commands = []
+
+        def fake(command, timeout):
+            commands.append(command)
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), full_decode=True)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["video_streams"], 1)
+        self.assertEqual(report["video_details"][0]["width"], 1920)
+        samples = [command for command in commands
+                   if command[0] == "ffmpeg" and "-ss" in command]
+        self.assertEqual({command[command.index("-map") + 1]
+                          for command in samples}, {"0:1", "0:a:0"})
+        full_video = [command for command in commands
+                      if command[0] == "ffmpeg" and "-ss" not in command
+                      and "0:1" in command]
+        self.assertEqual(len(full_video), 1)
+        self.assertNotIn("0:v", full_video[0])
+
+    def test_cover_art_alone_cannot_satisfy_video_requirement(self):
+        metadata = json.dumps({
+            "format": {"duration": "12", "nb_streams": 2},
+            "streams": [{"codec_type": "video", "index": 0,
+                         "disposition": {"attached_pic": 1}},
+                        {"codec_type": "audio", "index": 1}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_VIDEO_STREAM_MISSING",
+                      [issue["code"] for issue in report["issues"]])
+
+    def test_invalid_or_unindexed_cover_art_disposition_fails_closed(self):
+        for disposition in (None, True, {"attached_pic": True},
+                            {"attached_pic": 2}, {"attached_pic": "1"}):
+            with self.subTest(disposition=disposition):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", "index": 0,
+                                 "disposition": disposition},
+                                {"codec_type": "audio", "index": 1}]})
+                self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                                 "EXPORT_PROBE_FAILED")
+        unindexed = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video",
+                         "disposition": {"attached_pic": 1}},
+                        {"codec_type": "video"}, {"codec_type": "audio"}]})
+        self.assertEqual(self.inspect_with_probe(unindexed)["error_code"],
+                         "EXPORT_PROBE_FAILED")
+
     def test_signal_parser_ignores_metadata_and_unrelated_logs(self):
         # FFmpeg -v info prints attacker-controlled container metadata. It
         # must not be interpreted as a black/silence/freeze filter finding.
