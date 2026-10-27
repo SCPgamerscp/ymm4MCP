@@ -303,7 +303,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             # audio format when ffprobe reports zero or malformed parameters.
             if stream["codec_type"] in ("video", "audio"):
                 if "duration" in stream:
-                    _optional_stream_time(stream["duration"])
+                    stream_duration = _optional_stream_time(stream["duration"])
+                    # An explicitly empty A/V track cannot be certified by
+                    # decoding some other stream or a permissive FFmpeg build.
+                    if stream_duration == 0:
+                        raise ValueError("zero-duration audio/video stream")
                 if "start_time" in stream:
                     _optional_stream_time(stream["start_time"], signed=True)
             if stream["codec_type"] == "audio":
@@ -316,6 +320,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     channels = stream["channels"]
                     if type(channels) is not int or not 1 <= channels <= 64:
                         raise ValueError("invalid audio channel count")
+        # Real ffprobe stream tables either provide an index for every
+        # stream or for none. A partial table cannot be reconciled reliably
+        # with FFmpeg's per-type stream selectors.
+        if seen_indices and len(seen_indices) != len(streams):
+            raise ValueError("partially indexed stream table")
         if container_start is None:
             known_starts = [
                 _optional_stream_time(stream.get("start_time"), signed=True)
