@@ -557,6 +557,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                         track_duration is not None
                         and start >= relative_start + track_duration):
                     continue
+            # A stream can end inside the requested sample window. FFmpeg
+            # then emits no *_end event, but the missing media after its end
+            # must not be counted as observed black/silent/frozen content.
+            signal_window_length = length
+            if track_start is not None and track_duration is not None:
+                signal_window_length = min(
+                    length, max(0.0, relative_start + track_duration - start))
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
             signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
@@ -603,7 +610,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             start_name, end_name = (("black_start", "black_end") if kind == "video"
                                     else ("silence_start", "silence_end"))
             for signal_start, signal_end in _signal_ranges(
-                    decoded.stderr or "", start_name, end_name, length):
+                    decoded.stderr or "", start_name, end_name, signal_window_length):
                 event = {"sample_start_seconds": round(start, 6),
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
@@ -619,7 +626,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                   long_silences)
             if kind == "video":
                 for freeze_start, freeze_end in _signal_ranges(
-                        decoded.stderr or "", "freeze_start", "freeze_end", length):
+                        decoded.stderr or "", "freeze_start", "freeze_end",
+                        signal_window_length):
                     event = {"sample_start_seconds": round(start, 6),
                              "stream_ordinal": ordinal,
                              "filter_start_seconds": round(freeze_start, 3),
