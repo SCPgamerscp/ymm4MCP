@@ -30,6 +30,15 @@ def _trusted_filter_payload(line, filter_name, bare_names):
     # Tests and callers may provide the filter's unprefixed diagnostic text.
     if any(line.startswith(name + ":") for name in bare_names):
         return line
+    # Bare astats summaries sometimes omit the colon ("Overall"). Malformed
+    # bare peak/channel labels must also reach validation instead of vanishing.
+    # Prefixed diagnostics from other filters still cannot masquerade as astats.
+    if "Overall" in bare_names and line.strip() == "Overall":
+        return line
+    if "Peak level dB" in bare_names and line.startswith("Peak level dB"):
+        return line
+    if "Channel" in bare_names and re.match(r"^Channel(?:\s|:|$)", line):
+        return line
     match = re.match(
         r"^\[(?:Parsed_)?" + re.escape(filter_name)
         + r"(?:_[0-9]+)?\s+@\s+[^\]]+\]\s*(.*)$", line)
@@ -155,7 +164,7 @@ def _audio_channel_peaks(log):
         if payload == "Overall":
             channel = None
             continue
-        if payload.startswith("Channel:"):
+        if re.match(r"^Channel(?:\s|:|$)", payload):
             # Invalid channel headers must also clear the previous channel,
             # otherwise the following peak can be attributed to the wrong one.
             channel = None
@@ -190,7 +199,7 @@ def _audio_channel_headers(log):
     invalid = False
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, "astats", ("Channel",)).strip()
-        if not payload.startswith("Channel:"):
+        if not re.match(r"^Channel(?:\s|:|$)", payload):
             continue
         match = re.fullmatch(r"Channel:\s*([1-9][0-9]{0,2})", payload)
         if match and int(match.group(1)) <= 64:
