@@ -60,7 +60,7 @@ def has_frame(frames: list[dict], at: int) -> bool:
 
 
 def snapshot_all_animations(client: httpx.Client, base: str,
-                            headers: dict[str, str], item_id: str) -> dict[str, list[dict]]:
+                            headers: dict[str, str], item_id: str) -> tuple[dict[str, list[dict]], str]:
     """Snapshot every animation, not only Zoom/X, before any write.
 
     YMM4 may share one KeyFrames collection across multiple properties.
@@ -86,7 +86,10 @@ def snapshot_all_animations(client: httpx.Client, base: str,
                        for frame in frames)):
             raise ProbeError("Malformed animation inventory; refusing edit")
         snapshot[prop] = frames
-    return snapshot
+    revision = result.get("revision")
+    if not isinstance(revision, str) or not revision:
+        raise ProbeError("Animation inventory revision unavailable; refusing edit")
+    return snapshot, revision
 
 
 def validate_test_item(client: httpx.Client, base: str,
@@ -117,11 +120,13 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
     validate_test_item(client, base, headers, item_id, at)
     # Capture every property before writing: YMM4 may share one KeyFrames
     # collection among Zoom, X and other animation properties.
-    baseline = snapshot_all_animations(client, base, headers, item_id)
+    baseline, baseline_revision = snapshot_all_animations(client, base, headers, item_id)
     for prop in values:
         if prop not in baseline:
             raise ProbeError(f"{prop}: Animation or keyframes unavailable")
-        frames, _ = keyframes(client, base, headers, item_id, prop)
+        frames, revision = keyframes(client, base, headers, item_id, prop)
+        if revision != baseline_revision:
+            raise ProbeError(f"{prop}: item changed during preflight; refusing edit")
         if frames != baseline[prop]:
             raise ProbeError(f"{prop}: inconsistent preflight readback; refusing edit")
         if has_frame(frames, at):
@@ -136,7 +141,17 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
         failure: Exception | None = None
         cleanup_error: Exception | None = None
         try:
+            # Check the complete inventory again before EACH write. A prior
+            # probe/cleanup or another editor may have changed an unrelated
+            # animation since the initial preflight. A matching Zoom/X list
+            # alone is not sufficient evidence that the item is unchanged.
+            current, current_revision = snapshot_all_animations(
+                client, base, headers, item_id)
+            if current != baseline:
+                raise ProbeError(f"{prop}: animation inventory changed; refusing edit")
             _, revision = keyframes(client, base, headers, item_id, prop)
+            if revision != current_revision:
+                raise ProbeError(f"{prop}: item changed before write; refusing edit")
             # Record BEFORE the POST: a failed request might have mutated YMM4.
             touched = True
             result = api(client, base, headers, "POST", "/items/keyframe",
@@ -181,7 +196,7 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                     # Removing a shared frame may silently alter unrelated
                     # Animation values or pre-existing frames. Verify the
                     # entire inventory, including added/removed properties.
-                    restored = snapshot_all_animations(client, base, headers, item_id)
+                    restored, _ = snapshot_all_animations(client, base, headers, item_id)
                     if restored != baseline:
                         changed = sorted(set(restored) ^ set(baseline))
                         changed += sorted(name for name in restored.keys() & baseline.keys()
