@@ -17,9 +17,11 @@ class ExportQualityGateTests(unittest.TestCase):
         self.video.write_bytes(b"test export media " * 8)
 
     def inspect(self, *, video_codec="h264", audio_codec="aac", include_audio=True,
-                video_log="", audio_log="", **options):
+                video_log="", audio_log="", video_frames=None, **options):
         streams = [{"codec_type": "video", "start_time": "0",
                     "duration": "4"}]
+        if video_frames is not None:
+            streams[0]["nb_frames"] = video_frames
         if video_codec is not None:
             streams[0]["codec_name"] = video_codec
         if include_audio:
@@ -129,6 +131,65 @@ class ExportQualityGateTests(unittest.TestCase):
                     self.inspect(**options)
                 else:
                     self.inspect(include_audio=require_audio, **options)
+
+    def test_expected_video_frame_count_checks_all_tracks(self):
+        report = self.inspect(video_frames="120", expected_video_frames=120)
+        self.assertTrue(report["passed"], report)
+        for frames, code in (("119", "EXPORT_VIDEO_FRAME_COUNT_MISMATCH"),
+                             (None, "EXPORT_VIDEO_FRAME_COUNT_UNKNOWN")):
+            with self.subTest(frames=frames):
+                report = self.inspect(video_frames=frames, expected_video_frames=120)
+                self.assertFalse(report["passed"], report)
+                self.assertIn(code, {i["code"] for i in report["issues"]})
+
+    def test_audio_peak_ceiling_blocks_loud_samples(self):
+        report = self.inspect(max_audio_peak_dbfs=-1.0,
+                              audio_log="Overall\\nPeak level dB: -0.05")
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_SAMPLE_AUDIO_PEAK_TOO_HIGH",
+                      {i["code"] for i in report["issues"]})
+
+    def test_audio_peak_floor_blocks_quiet_and_silent_samples(self):
+        for log in ("Overall\\nPeak level dB: -45",
+                    "Overall\\nPeak level dB: -inf"):
+            with self.subTest(log=log):
+                report = self.inspect(min_audio_peak_dbfs=-20, audio_log=log)
+                self.assertFalse(report["passed"], report)
+                self.assertIn("EXPORT_SAMPLE_AUDIO_PEAK_TOO_LOW",
+                              {i["code"] for i in report["issues"]})
+
+    def test_peak_gate_rejects_missing_measurement(self):
+        report = self.inspect(max_audio_peak_dbfs=-1.0)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_SAMPLE_AUDIO_PEAK_UNVERIFIABLE",
+                      {i["code"] for i in report["issues"]})
+
+    def test_stereo_balance_gate_rejects_unbalanced_channels(self):
+        log = ("Channel: 1\\nPeak level dB: -5\\n"
+               "Channel: 2\\nPeak level dB: -30\\n"
+               "Overall\\nPeak level dB: -5")
+        report = self.inspect(max_stereo_imbalance_db=12, audio_log=log)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_SAMPLE_STEREO_IMBALANCE_EXCEEDED",
+                      {i["code"] for i in report["issues"]})
+
+    def test_stereo_balance_gate_requires_channel_measurements(self):
+        report = self.inspect(max_stereo_imbalance_db=12,
+                              audio_log="Overall\\nPeak level dB: -5")
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE",
+                      {i["code"] for i in report["issues"]})
+
+    def test_additional_gate_arguments_are_strict(self):
+        for options in ({"expected_video_frames": True},
+                        {"expected_video_frames": 0},
+                        {"min_audio_peak_dbfs": float("nan")},
+                        {"max_audio_peak_dbfs": -130},
+                        {"max_stereo_imbalance_db": -1},
+                        {"min_audio_peak_dbfs": -1,
+                         "max_audio_peak_dbfs": -10}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.inspect(**options)
 
 
 if __name__ == "__main__":
