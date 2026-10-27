@@ -145,6 +145,56 @@ def _invalid_signal_timestamps(log, start_name, end_name):
     return False
 
 
+
+def _invalid_signal_sequence(log, start_name, end_name):
+    """Reject an end preceding an active start, even when both are numeric.
+
+    A backward end is not evidence that a black/silent/frozen interval
+    finished; treating it as EOF-terminated could invent a long warning.
+    Duplicate starts and unpaired ends are tolerated for concatenated logs.
+    """
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    pattern = re.compile(r"\\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
+                         + r"):\\s*([^\\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    active = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
+        for name, raw in pattern.findall(payload):
+            if not number.fullmatch(raw):
+                continue  # Syntax is checked separately.
+            timestamp = float(raw)
+            if not math.isfinite(timestamp):
+                continue
+            if name == start_name:
+                active = timestamp if active is None else min(active, timestamp)
+            elif active is not None:
+                if timestamp < active:
+                    return True
+                active = None
+    return False
+
+
+def _invalid_signal_durations(log, start_name, end_name):
+    """Reject malformed, non-finite or negative FFmpeg signal durations."""
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    duration_name = start_name.replace("_start", "_duration")
+    pattern = re.compile(r"\\b" + re.escape(duration_name) + r":\\s*([^\\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, filter_name, (start_name, end_name, duration_name))
+        for raw in pattern.findall(payload):
+            if not number.fullmatch(raw):
+                return True
+            value = float(raw)
+            if not math.isfinite(value) or value < 0:
+                return True
+    return False
+
+
 def _audio_channel_peaks(log):
     """Read channel-specific FFmpeg astats peaks, including -inf for silence.
 
@@ -252,6 +302,20 @@ def _optional_stream_time(value, *, signed=False):
     if not math.isfinite(seconds) or (not signed and seconds < 0):
         raise ValueError("invalid stream time")
     return seconds
+
+
+
+def _stream_timing_details(stream, container_start):
+    """Expose track timing relative to the container for targeted repairs."""
+    start = _optional_stream_time(stream.get("start_time"), signed=True)
+    length = _optional_stream_time(stream.get("duration"))
+    relative = start - container_start if start is not None else None
+    return {
+        "start_seconds": round(relative, 6) if relative is not None else None,
+        "duration_seconds": round(length, 6) if length is not None else None,
+        "end_seconds": (round(relative + length, 6)
+                        if relative is not None and length is not None else None),
+    }
 
 
 def _frame_rate(value):
@@ -663,6 +727,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         return failure("EXPORT_STREAM_LIMIT", "映像・音声ストリームが多すぎます（最大16）")
     video_details = [
         {"stream_ordinal": i, "stream_index": stream.get("index"),
+         **_stream_timing_details(stream, container_start),
          "width": stream.get("width"), "height": stream.get("height"),
          "fps": _frame_rate(stream.get("avg_frame_rate")),
          "fps_ratio": _frame_rate_ratio(stream.get("avg_frame_rate")),
@@ -672,6 +737,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         for i, stream in enumerate(videos)]
     audio_details = [
         {"stream_ordinal": i, "stream_index": stream.get("index"),
+         **_stream_timing_details(stream, container_start),
          "sample_rate": int(stream["sample_rate"]) if "sample_rate" in stream else None,
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
@@ -1063,6 +1129,18 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     "severity": "error", "stream_type": kind,
                     "stream_ordinal": ordinal,
                     "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_sequence(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_ORDER_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_durations(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_DURATION_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, signal_window_length):
                 signal_start = max(signal_start, signal_active_start)
@@ -1090,6 +1168,20 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         decoded.stderr or "", "freeze_start", "freeze_end"):
                     issues.append({
                         "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_sequence(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_ORDER_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_durations(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_DURATION_INVALID",
                         "severity": "error", "stream_type": kind,
                         "stream_ordinal": ordinal,
                         "sample_start_seconds": round(start, 6)})
@@ -1237,6 +1329,18 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     if _invalid_signal_timestamps(diagnostics, start_name, end_name):
                         full_signal_scan_ok = False
                         issues.append({"code": "EXPORT_FULL_SIGNAL_TIMESTAMP_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_sequence(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_ORDER_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_durations(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_DURATION_INVALID",
                                        "severity": "error", "stream_type": kind,
                                        "stream_ordinal": ordinal})
                         continue
