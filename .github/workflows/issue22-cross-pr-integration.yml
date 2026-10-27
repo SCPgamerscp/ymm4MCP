@@ -212,12 +212,15 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      conflicts: ${{ steps.merge-audit.outputs.conflicts }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Audit sequential integration of every open PR (no push)
+        id: merge-audit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -232,6 +235,7 @@ jobs:
           mapfile -t numbers < <(sort -n -u "$RUNNER_TEMP/open-pr-numbers.txt")
           if (( ${#numbers[@]} == 0 )); then
             echo "No open PRs to audit" >> "$GITHUB_STEP_SUMMARY"
+            echo "conflicts=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch --no-tags origin main:refs/remotes/origin/main
@@ -280,8 +284,100 @@ jobs:
           done
           echo >> "$GITHUB_STEP_SUMMARY"
           echo "**Composed: ${passed}; skipped/failed: ${failed}; total: ${#numbers[@]}.**" >> "$GITHUB_STEP_SUMMARY"
+          echo "conflicts=$failed" >> "$GITHUB_OUTPUT"
           if (( failed > 0 )); then
             echo "::warning::${failed} open PRs could not be composed in numeric order; see the job summary."
           fi
           # Advisory only: existing #22 release CI remains independently
           # actionable even when unrelated PRs have integration conflicts.
+
+      - name: Archive exact all-PR composition when conflict-free
+        if: steps.merge-audit.outputs.conflicts == '0'
+        shell: bash
+        run: git archive --format=tar --output=all-open-prs-composed.tar HEAD
+      - uses: actions/upload-artifact@v4
+        if: steps.merge-audit.outputs.conflicts == '0'
+        with:
+          name: all-open-prs-composed-source
+          path: all-open-prs-composed.tar
+          if-no-files-found: error
+
+  all-open-prs-python-integration:
+    # The audit's clean merge alone cannot prove 50 PRs work together.
+    # Test the exact archived tree; never re-fetch moving PR heads here.
+    needs: audit-open-pr-merge-compatibility
+    if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-open-prs-composed-source
+      - name: Restore the exact 50-PR candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir composed
+          tar -xf all-open-prs-composed.tar -C composed
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install combined Python dependencies
+        run: python -m pip install -r composed/mcp-server/requirements.txt
+      - name: Run all Python regressions against all open PRs
+        working-directory: composed
+        run: python -m unittest discover -s mcp-server -p 'test_*.py' -q
+
+  all-open-prs-windows-package:
+    # Build the *entire* conflict-free open-PR tree, not only the curated
+    # 15-PR subset. No release, tag, push, or PR merge is performed.
+    needs: audit-open-pr-merge-compatibility
+    if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-open-prs-composed-source
+      - name: Restore the exact 50-PR candidate
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path composed | Out-Null
+          tar -xf all-open-prs-composed.tar -C composed
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restore all-PR composition' }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test all composed keyframe regression projects
+        shell: pwsh
+        run: |
+          $projects = @(Get-ChildItem -Path composed/tests -Recurse -Filter 'Keyframe*.csproj' -File)
+          if ($projects.Count -lt 5) { throw "Expected keyframe regression projects; found $($projects.Count)" }
+          foreach ($project in $projects) {
+            dotnet run --project $project.FullName --configuration Release
+            if ($LASTEXITCODE -ne 0) { throw "Failed keyframe test: $($project.FullName)" }
+          }
+      - name: Download official YMM4 Lite references
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'YukkuriMovieMaker_v4_Lite.zip'
+          $directory = Join-Path $env:RUNNER_TEMP 'ymm4-lite'
+          Invoke-WebRequest -Uri 'https://files.manjubox.net/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          $dlls = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter 'YukkuriMovieMaker.Plugin.dll' -File)
+          if ($dlls.Count -ne 1) { throw "Expected one YMM4 Plugin DLL; found $($dlls.Count)" }
+          $libPath = $dlls[0].DirectoryName
+          if (-not (Test-Path -LiteralPath (Join-Path $libPath 'YukkuriMovieMaker.Controls.dll'))) {
+            throw 'YMM4 Controls DLL is missing'
+          }
+          "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
+      - name: Build complete all-PR .ymme package
+        shell: pwsh
+        run: |
+          dotnet build composed/YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
+          if ($LASTEXITCODE -ne 0) { throw 'Full open-PR plugin build failed' }
+          $packages = @(Get-ChildItem -Path composed/artifacts -Filter 'YMM4McpPlugin-*.ymme' -File)
+          if ($packages.Count -ne 1 -or $packages[0].Length -le 0) {
+            throw "Expected one nonempty .ymme, found $($packages.Count)"
+          }
+          Write-Output "All-open-PR package built (not published): $($packages[0].Name)"
