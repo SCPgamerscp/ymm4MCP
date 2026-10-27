@@ -102,7 +102,11 @@ class AstatsConsistencyTests(unittest.TestCase):
                "[Parsed_astats_0 @ 0x123] Peak level dB: -2\n")
         self.assertEqual(qa._audio_channel_peaks(log), {})
         result = self.inspect_audio(log, channels=2)
-        self.assertTrue(result["passed"], result)
+        # Invalid channel headers cannot be trusted as successful audio QA,
+        # even though the parser safely avoids converting huge integers.
+        self.assertFalse(result["passed"], result)
+        self.assertIn("EXPORT_SAMPLE_AUDIO_CHANNEL_HEADER_INVALID",
+                      [issue["code"] for issue in result["issues"]])
 
     def test_invalid_channel_header_clears_previous_channel(self):
         log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
