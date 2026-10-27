@@ -735,14 +735,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     relative_start = stream_start - container_start
                     if not math.isfinite(relative_start):
                         raise ValueError("stream start offset overflow")
-                    if relative_start > duration + 1:
-                        raise ValueError("stream starts beyond container end")
+                    if relative_start >= duration:
+                        raise ValueError("stream starts at or beyond container end")
                     # Finite individual timestamps can still overflow when
                     # added. Reject them before QA emits Infinity in JSON.
                     track_length = _optional_stream_time(stream.get("duration"))
-                    if track_length is not None and not math.isfinite(
-                            relative_start + track_length):
-                        raise ValueError("stream end offset overflow")
+                    if track_length is not None:
+                        relative_end = relative_start + track_length
+                        if not math.isfinite(relative_end):
+                            raise ValueError("stream end offset overflow")
+                        if relative_end <= 0:
+                            raise ValueError("stream ends before container begins")
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
@@ -967,6 +970,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     signal_records = {"video": [], "audio": [], "freeze": []}
     # A track outside all chosen windows must not be silently certified.
     sampled_tracks = set()
+    sample_counts = {}
 
     def record_signal(kind, event, code, destination):
         records = signal_records[kind]
@@ -1079,6 +1083,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                "details": (decoded.stderr or "")[-500:]})
                 continue
             sampled_tracks.add((kind, ordinal))
+            sample_counts[(kind, ordinal)] = sample_counts.get((kind, ordinal), 0) + 1
             if kind == "audio":
                 if _invalid_audio_peak_metrics(decoded.stderr or ""):
                     issues.append({
@@ -1328,6 +1333,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "severity": "error", "stream_type": kind,
                                    "stream_ordinal": ordinal})
                     break
+                # A successful filter pass cannot be placed on the export
+                # timeline without both the track origin and its end. Do not
+                # invent a container-wide duration for an unknown-length track.
+                track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+                track_duration = _optional_stream_time(stream.get("duration"))
+                if track_start is None or track_duration is None:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_TIMING_UNVERIFIABLE",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    continue
                 # Reset presentation timestamps to zero before filtering.
                 # The original track start is restored in public video-time
                 # coordinates below (late-starting audio is not at t=0).
@@ -1365,11 +1381,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "stream_ordinal": ordinal,
                                    "details": (scanned.stderr or "")[-500:]})
                     continue
-                track_start = _optional_stream_time(stream.get("start_time"), signed=True)
-                track_duration = _optional_stream_time(stream.get("duration"))
-                offset = (track_start - container_start
-                          if track_start is not None else 0.0)
-                active_duration = track_duration if track_duration is not None else duration
+                offset = track_start - container_start
+                active_duration = track_duration
                 diagnostics = (scanned.stderr or "")
                 definitions = ([("black_start", "black_end", "video",
                                  "EXPORT_SAMPLE_BLACK_FRAMES", black_frames),
@@ -1460,4 +1473,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             "audio_peak_db": max((p["peak_dbfs"] for p in audio_peaks), default=None),
             "audio_channel_peaks": audio_channel_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
-            "audio_streams": len(audios), "samples": samples, "path": str(target)}
+            "audio_streams": len(audios), "samples": samples,
+            "sampled_stream_count": len(sampled_tracks),
+            "sampled_streams": [
+                {"stream_type": kind, "stream_ordinal": ordinal,
+                 "sample_count": sample_counts.get((kind, ordinal), 0)}
+                for kind, tracks in (("video", videos), ("audio", audios))
+                for ordinal in range(len(tracks))],
+            "path": str(target)}
