@@ -436,10 +436,51 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     frozen_frames = []
     long_silences = []
     audio_peaks = []
-    # Overlapping head/tail sample windows can observe the same signal twice.
-    # Track exact global ranges per stream so a single defect is not reported
-    # twice to an unattended repair agent.
-    seen_signals = {"video": set(), "audio": set(), "freeze": set()}
+    # Overlapping decode windows can clip one physical defect into different
+    # absolute ranges. Coalesce overlapping intervals per signal type/track
+    # and keep the public event and its separate QA issue in sync.
+    signal_records = {"video": [], "audio": [], "freeze": []}
+
+    def record_signal(kind, event, code, destination):
+        records = signal_records[kind]
+        start = event["video_start_seconds"]
+        end = event["video_end_seconds"]
+        matches = []
+        # A new interval can bridge two previously disjoint detections.
+        # Expand until the union is stable (transitive overlap).
+        while True:
+            additional = [(stored, issue) for stored, issue in records
+                          if stored["stream_ordinal"] == event["stream_ordinal"]
+                          and not any(stored is prior for prior, _ in matches)
+                          and stored["video_start_seconds"] <= end
+                          and start <= stored["video_end_seconds"]]
+            if not additional:
+                break
+            matches.extend(additional)
+            start = min(start, *(stored["video_start_seconds"]
+                                 for stored, _ in additional))
+            end = max(end, *(stored["video_end_seconds"]
+                             for stored, _ in additional))
+        if not matches:
+            issue = {"code": code, "severity": "warning", **event}
+            destination.append(event)
+            issues.append(issue)
+            records.append((event, issue))
+            return
+        anchor_event, anchor_issue = matches[0]
+        for redundant_event, redundant_issue in matches[1:]:
+            records[:] = [(stored, issue) for stored, issue in records
+                          if stored is not redundant_event]
+            destination[:] = [stored for stored in destination
+                              if stored is not redundant_event]
+            issues[:] = [issue for issue in issues
+                         if issue is not redundant_issue]
+        # sample_start/filter_* describe the first observation; the video_*
+        # coordinates and duration describe the merged absolute union.
+        for target in (anchor_event, anchor_issue):
+            target["video_start_seconds"] = round(start, 6)
+            target["video_end_seconds"] = round(end, 6)
+            target["duration_seconds"] = round(end - start, 3)
     # Per-command timeouts alone allow up to 32 slow subprocesses. Bound
     # the complete synchronous sampling pass to two minutes.
     sample_deadline = time.monotonic() + 120
@@ -498,11 +539,6 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                     else ("silence_start", "silence_end"))
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, length):
-                signal_key = (ordinal, round(start + signal_start, 6),
-                              round(start + signal_end, 6))
-                if signal_key in seen_signals[kind]:
-                    continue
-                seen_signals[kind].add(signal_key)
                 event = {"sample_start_seconds": round(start, 6),
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
@@ -511,20 +547,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                           "video_end_seconds": round(start + signal_end, 6),
                          "duration_seconds": round(signal_end - signal_start, 3)}
                 if kind == "video":
-                    black_frames.append(event)
-                    code = "EXPORT_SAMPLE_BLACK_FRAMES"
+                    record_signal("video", event, "EXPORT_SAMPLE_BLACK_FRAMES",
+                                  black_frames)
                 else:
-                    long_silences.append(event)
-                    code = "EXPORT_SAMPLE_LONG_SILENCE"
-                issues.append({"code": code, "severity": "warning", **event})
+                    record_signal("audio", event, "EXPORT_SAMPLE_LONG_SILENCE",
+                                  long_silences)
             if kind == "video":
                 for freeze_start, freeze_end in _signal_ranges(
                         decoded.stderr or "", "freeze_start", "freeze_end", length):
-                    signal_key = (ordinal, round(start + freeze_start, 6),
-                                  round(start + freeze_end, 6))
-                    if signal_key in seen_signals["freeze"]:
-                        continue
-                    seen_signals["freeze"].add(signal_key)
                     event = {"sample_start_seconds": round(start, 6),
                              "stream_ordinal": ordinal,
                              "filter_start_seconds": round(freeze_start, 3),
@@ -532,9 +562,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                               "video_start_seconds": round(start + freeze_start, 6),
                               "video_end_seconds": round(start + freeze_end, 6),
                              "duration_seconds": round(freeze_end - freeze_start, 3)}
-                    frozen_frames.append(event)
-                    issues.append({"code": "EXPORT_SAMPLE_FROZEN_FRAMES",
-                                   "severity": "warning", **event})
+                    record_signal("freeze", event, "EXPORT_SAMPLE_FROZEN_FRAMES",
+                                  frozen_frames)
     full_decode_ok = False
     if full_decode and videos:
         full_decode_ok = True
