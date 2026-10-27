@@ -901,5 +901,57 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertFalse(any(issue["code"] == "EXPORT_STREAM_EXCEEDS_CONTAINER"
                              for issue in report["issues"]))
 
+    def test_unknown_track_origin_does_not_invent_end_gap(self):
+        # A track with an unknown start might occupy the final 12 seconds.
+        # Duration alone cannot establish that it ends before the container.
+        metadata = json.dumps({
+            "format": {"duration": "20", "start_time": "10"},
+            "streams": [{"codec_type": "video", "start_time": "10",
+                         "duration": "20"},
+                        {"codec_type": "audio", "duration": "12"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any(i["code"] in (
+            "EXPORT_STREAM_ENDS_EARLY", "EXPORT_STREAM_EXCEEDS_CONTAINER",
+            "EXPORT_STREAM_STARTS_LATE") for i in report["issues"]))
+
+    def test_overlapping_sample_windows_do_not_repeat_same_signal(self):
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            start = float(command[command.index("-ss") + 1])
+            relative_start, relative_end = 5 - start, 7 - start
+            if command[command.index("-map") + 1] == "0:v:0":
+                log = (f"black_start: {relative_start} black_end: {relative_end}\\n"
+                       f"freeze_start: {relative_start} freeze_end: {relative_end}\\n")
+            else:
+                log = f"silence_start: {relative_start} silence_end: {relative_end}\\n"
+            return subprocess.CompletedProcess(command, 0, "", log)
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(len(report["samples"]), 2)
+        for key in ("black_frames", "frozen_frames", "long_silences"):
+            self.assertEqual(len(report[key]), 1, (key, report[key]))
+            self.assertEqual(report[key][0]["video_start_seconds"], 5.0)
+            self.assertEqual(report[key][0]["video_end_seconds"], 7.0)
+        self.assertEqual(sum(i["code"].startswith("EXPORT_SAMPLE_") for i
+                             in report["issues"]), 3)
+
+    def test_stream_end_overflow_is_invalid_metadata(self):
+        # Although the container itself exceeds the duration policy, malformed
+        # stream arithmetic must never be propagated as a valid finite value.
+        metadata = json.dumps({
+            "format": {"duration": "1e308", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "1e308",
+                         "duration": "1e308"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
 if __name__ == "__main__":
     unittest.main()
