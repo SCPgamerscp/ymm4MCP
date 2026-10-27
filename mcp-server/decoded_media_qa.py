@@ -583,6 +583,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     if (min_audio_peak_dbfs is not None and max_audio_peak_dbfs is not None
             and min_audio_peak_dbfs > max_audio_peak_dbfs):
         raise ValueError("min_audio_peak_dbfs exceeds max_audio_peak_dbfs")
+    audio_quality_requested = (
+        expected_audio_codec is not None or require_audio_peak_metrics or
+        min_audio_peak_dbfs is not None or max_audio_peak_dbfs is not None or
+        max_stereo_imbalance_db is not None)
+    if expected_audio_streams == 0 and audio_quality_requested:
+        raise ValueError("audio QA options conflict with expected_audio_streams=0")
     target = Path(path)
     try:
         exists = target.is_file()
@@ -983,7 +989,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "missing_tail_seconds": round(missing, 3)})
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
-    if (require_audio or expected_audio_codec is not None
+    if (require_audio or audio_quality_requested
             or expected_audio_sample_rate is not None
             or expected_audio_channels is not None) and not audios:
         issues.append({"code": "EXPORT_AUDIO_STREAM_MISSING", "severity": "error"})
@@ -1206,6 +1212,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                 "sample_start_seconds": round(start, 6),
                                 "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
+                if max_stereo_imbalance_db is not None and declared_channels != 2:
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_STEREO_CHANNELS_UNVERIFIABLE",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6),
+                        "declared_channels": declared_channels})
                 if max_stereo_imbalance_db is not None and declared_channels == 2:
                     if set(channel_peaks) != {1, 2}:
                         issues.append({
