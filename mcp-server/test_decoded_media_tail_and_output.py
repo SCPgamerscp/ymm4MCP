@@ -1259,5 +1259,33 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             self.assertEqual(report[key][0]["video_end_seconds"], 6.0)
             self.assertEqual(report[key][0]["duration_seconds"], 1.0)
 
+    def test_signal_parser_ignores_metadata_and_unrelated_logs(self):
+        # FFmpeg -v info prints attacker-controlled container metadata. It
+        # must not be interpreted as a black/silence/freeze filter finding.
+        log = ("title: black_start: 1 black_end: 5\\n"
+               "comment: silence_start: 2 silence_end: 6\\n"
+               "[h264 @ 0x123] freeze_start: 1 freeze_end: 5\\n")
+        for start, end in (("black_start", "black_end"),
+                           ("silence_start", "silence_end"),
+                           ("freeze_start", "freeze_end")):
+            self.assertEqual(qa._signal_ranges(log, start, end, 8), [])
+
+    def test_audio_peak_parser_ignores_metadata_but_accepts_astats(self):
+        self.assertIsNone(qa._audio_peak_db(
+            "title: Peak level dB: 0\\n[other @ 0x123] Peak level dB: 0"))
+        self.assertEqual(qa._audio_peak_db(
+            "[Parsed_astats_0 @ 0x123] Peak level dB: -3.5\\n"
+            "Peak level dB: -2.5"), -2.5)
+        self.assertEqual(qa._signal_ranges(
+            "[Parsed_blackdetect_0 @ 0x123] black_start: 1 black_end: 3",
+            "black_start", "black_end", 8), [(1.0, 3.0)])
+        self.assertEqual(qa._signal_ranges(
+            "[silencedetect @ 0x123] silence_start: 1 silence_end: 3",
+            "silence_start", "silence_end", 8), [(1.0, 3.0)])
+        self.assertEqual(qa._signal_ranges(
+            "[freezedetect @ 0x123] lavfi.freezedetect.freeze_start: 1 "
+            "lavfi.freezedetect.freeze_end: 3",
+            "freeze_start", "freeze_end", 8), [(1.0, 3.0)])
+
 if __name__ == "__main__":
     unittest.main()
