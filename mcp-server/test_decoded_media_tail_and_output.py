@@ -926,10 +926,10 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             start = float(command[command.index("-ss") + 1])
             relative_start, relative_end = 5 - start, 7 - start
             if command[command.index("-map") + 1] == "0:v:0":
-                log = (f"black_start: {relative_start} black_end: {relative_end}\\n"
-                       f"freeze_start: {relative_start} freeze_end: {relative_end}\\n")
+                log = (f"black_start: {relative_start} black_end: {relative_end}\n"
+                       f"freeze_start: {relative_start} freeze_end: {relative_end}\n")
             else:
-                log = f"silence_start: {relative_start} silence_end: {relative_end}\\n"
+                log = f"silence_start: {relative_start} silence_end: {relative_end}\n"
             return subprocess.CompletedProcess(command, 0, "", log)
 
         with patch.object(qa, "run", side_effect=fake):
