@@ -1195,8 +1195,9 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                          "duration": "0.2"}]})
         report = self.inspect_with_probe(metadata)
         self.assertFalse(report["passed"])
-        self.assertIn("EXPORT_STREAM_NOT_SAMPLED",
-                      [issue["code"] for issue in report["issues"]])
+        # The probe now rejects impossible timing before starting any decode.
+        self.assertFalse(report["success"])
+        self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
 
     def test_invalid_ffmpeg_sample_stdout_is_structured_failure(self):
         metadata = json.dumps({
