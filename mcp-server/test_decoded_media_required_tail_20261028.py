@@ -89,6 +89,14 @@ class RequiredTrackTailTests(unittest.TestCase):
         self.assertFalse(result["passed"], result)
         self.assertEqual(self.tail(result, "audio", 1)["severity"], "error")
 
+    def test_strict_mode_rejects_unknown_track_end(self):
+        result = self.inspect(audio_durations=(None,), require_tracks_to_end=True)
+        self.assertFalse(result["passed"], result)
+        self.assertTrue(any(issue["code"] == "EXPORT_STREAM_TAIL_UNVERIFIABLE"
+                            and issue["stream_type"] == "audio"
+                            and issue["severity"] == "error"
+                            for issue in result["issues"]), result)
+
     def test_rejects_non_boolean_strict_option(self):
         with self.assertRaisesRegex(ValueError, "require_tracks_to_end"):
             self.inspect(require_tracks_to_end="true")
