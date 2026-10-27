@@ -1504,5 +1504,22 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH")
             for issue in report["issues"]), report)
 
+
+    def test_audio_channel_peak_metrics_are_json_safe_and_actionable(self):
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -2.25\n")
+        report = self.inspect_with_channel_astats(log)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["audio_channel_peaks"], [{
+            "sample_start_seconds": 0.0,
+            "stream_ordinal": 0,
+            "peak_dbfs_by_channel": {"1": None, "2": -2.25},
+            "silent_channels": [1]}])
+        self.assertIn("EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE",
+                      [issue["code"] for issue in report["issues"]])
+        self.assertNotIn("Infinity", json.dumps(report, allow_nan=False))
+
 if __name__ == "__main__":
     unittest.main()
