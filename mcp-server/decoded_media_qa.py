@@ -717,6 +717,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             # at the container origin. Avoid invented end/gap warnings.
             if track_start is not None:
                 track_start -= container_start
+            if require_tracks_to_end and (track_start is None or track_duration is None):
+                issues.append({"code": "EXPORT_STREAM_TAIL_UNVERIFIABLE",
+                               "severity": "error", "stream_type": kind,
+                               "stream_ordinal": ordinal})
             if track_start is not None and track_start > 1.0:
                 issues.append({"code": "EXPORT_STREAM_STARTS_LATE",
                                "severity": "warning", "stream_type": kind,
