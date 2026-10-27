@@ -44,8 +44,9 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
     ranges = []
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
                    "freeze_start": "freezedetect"}[start_name]
-    bare_names = ("black_start", "black_end", "silence_start",
-                  "silence_end", "freeze_start", "freeze_end")
+    # Bare diagnostics are supported for older FFmpeg logs and fixtures,
+    # but another filter\'s line must never supply this filter\'s events.
+    bare_names = (start_name, end_name)
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, filter_name, bare_names)
         for name, timestamp in pattern.findall(payload):
@@ -955,6 +956,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                            else None),
             "fps": video_details[0]["fps"] if video_details else None,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
+            # Highest observed sample peak across every audio track/window.
+            # None means no finite measurement, not proof of silence.
+            "audio_peak_db": max((p["peak_dbfs"] for p in audio_peaks), default=None),
             "audio_channel_peaks": audio_channel_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
             "audio_streams": len(audios), "samples": samples, "path": str(target)}
