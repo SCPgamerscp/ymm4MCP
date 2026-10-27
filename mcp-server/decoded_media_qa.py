@@ -85,6 +85,42 @@ def _audio_peak_db(log):
     return max(peaks) if peaks else None
 
 
+
+def _audio_channel_peaks(log):
+    """Read channel-specific FFmpeg astats peaks, including -inf for silence.
+
+    A separate Overall section is never a channel measurement. Only astats
+    diagnostics are trusted; media title/comment text must not supply peaks.
+    """
+    peaks = {}
+    channel = None
+    channel_pattern = re.compile(r"Channel:\s*([1-9][0-9]*)")
+    peak_pattern = re.compile(
+        r"Peak level dB:\s*(-inf|[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)",
+        re.IGNORECASE)
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, "astats", ("Channel", "Overall", "Peak level dB")).strip()
+        if payload == "Overall":
+            channel = None
+            continue
+        match = channel_pattern.fullmatch(payload)
+        if match:
+            channel = int(match.group(1))
+            if channel > 64:
+                channel = None
+            continue
+        if channel is None:
+            continue
+        match = peak_pattern.fullmatch(payload)
+        if match:
+            raw = match.group(1)
+            peak = -math.inf if raw.lower() == "-inf" else float(raw)
+            if peak == -math.inf or math.isfinite(peak):
+                peaks[channel] = peak
+    return peaks
+
+
 def _optional_stream_time(value, *, signed=False):
     """Parse optional ffprobe stream times without accepting ambiguous values."""
     if value is None or value == "N/A":
@@ -664,6 +700,37 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 continue
             sampled_tracks.add((kind, ordinal))
             if kind == "audio":
+                channel_peaks = _audio_channel_peaks(decoded.stderr or "")
+                declared_channels = audio_details[ordinal]["channels"]
+                if channel_peaks and declared_channels is not None:
+                    expected = set(range(1, declared_channels + 1))
+                    observed = set(channel_peaks)
+                    if observed != expected:
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH",
+                            "severity": "warning", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6),
+                            "declared_channels": declared_channels,
+                            "observed_channels": sorted(observed)})
+                    elif all(value == -math.inf for value in channel_peaks.values()):
+                        # astats emits -inf for truly silent samples. A short
+                        # clip can be silent without reaching silencedetect d=2.
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
+                            "severity": "warning", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6)})
+                    elif declared_channels == 2:
+                        left, right = channel_peaks[1], channel_peaks[2]
+                        if ((math.isfinite(left) and math.isfinite(right)
+                             and abs(left - right) >= 12)
+                                or (left == -math.inf and right > -60)
+                                or (right == -math.inf and left > -60)):
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE",
+                                "severity": "warning", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
+                                "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
                 peak = _audio_peak_db(decoded.stderr or "")
                 if peak is not None:
                     peak_event = {"sample_start_seconds": round(start, 6),
