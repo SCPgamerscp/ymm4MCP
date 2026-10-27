@@ -27,6 +27,10 @@ jobs:
           python-version: '3.12'
       - name: Compose main with the open Issue 22 and 140 PRs (runner only)
         shell: bash
+        env:
+          # A queued/rerun PR check must test the exact #228 revision it reports.
+          # Manual dispatches intentionally compose the latest open PR heads.
+          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
         run: |
           set -euo pipefail
           git config user.name "Issue 22 integration CI"
@@ -40,7 +44,12 @@ jobs:
           # before shipping a .ymme. A successful standalone PR build cannot
           # prove that both issue groups are compatible.
           for number in 221 228 234 241 243 244 248 257 259 218 219 251 254 255; do
-            git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
+            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
+              # Pin the triggering PR to its event SHA, not a newer moving ref.
+              git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
+            else
+              git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
+            fi
             printf 'Composing PR #%s at %s\n' "${number}" "$(git rev-parse "refs/remotes/pr/${number}")"
             git merge --no-ff --no-edit "refs/remotes/pr/${number}"
           done
