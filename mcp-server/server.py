@@ -229,12 +229,12 @@ TOOLS = [
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
                 "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa/decoded_export_qa: 期待する動画の長さ"},
                 "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa/decoded_export_qa: 尺の許容誤差。既定1秒"},
-                "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
-                "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
-                "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa: 期待する平均FPS"},
-                "expected_audio_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 384000, "description": "get_info/export_qa: 期待する音声サンプルレート (Hz)"},
-                "expected_audio_channels": {"type": "integer", "minimum": 1, "maximum": 8, "description": "get_info/export_qa: 期待する音声チャンネル数"},
-                "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa: 平均FPSの許容誤差。既定0.1"},
+                "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa/decoded_export_qa: 期待する出力幅"},
+                "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa/decoded_export_qa: 期待する出力高さ"},
+                "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa/decoded_export_qa: 期待する平均FPS"},
+                "expected_audio_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 384000, "description": "get_info/export_qa/decoded_export_qa: 期待する音声サンプルレート (Hz)"},
+                "expected_audio_channels": {"type": "integer", "minimum": 1, "maximum": 8, "description": "get_info/export_qa/decoded_export_qa: 期待する音声チャンネル数"},
+                "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa/decoded_export_qa: 平均FPSの許容誤差。既定0.1"},
                 "require_audio": {"type": "boolean", "description": "get_info/export_qa/decoded_export_qa: 音声トラックを必須とする"},
                 "sample_seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "decoded_export_qa: 冒頭・末尾のデコード秒数。既定8秒"},
                 "full_decode": {"type": "boolean", "description": "decoded_export_qa: 最大15分の動画を全尺デコード。既定false（冒頭・末尾のみ）"},
@@ -1053,7 +1053,10 @@ async def dispatch(args: dict) -> Any:
                         sample_seconds=args.get("sample_seconds", 8),
                         full_decode=args.get("full_decode", False),
                         **{key: args[key] for key in (
-                            "expected_duration_seconds", "duration_tolerance_seconds")
+                            "expected_duration_seconds", "duration_tolerance_seconds",
+                            "expected_width", "expected_height", "expected_fps",
+                            "fps_tolerance", "expected_audio_sample_rate",
+                            "expected_audio_channels")
                            if key in args})
                 case "export_qa":
                     path = args.get("path")
@@ -1337,7 +1340,10 @@ async def dispatch(args: dict) -> Any:
                 config = args["decoded_export_check"]
                 if not isinstance(config, dict) or "path" not in config or \
                         set(config) - {"path", "require_audio", "sample_seconds", "full_decode",
-                                       "expected_duration_seconds", "duration_tolerance_seconds"}:
+                                       "expected_duration_seconds", "duration_tolerance_seconds",
+                                       "expected_width", "expected_height", "expected_fps",
+                                       "fps_tolerance", "expected_audio_sample_rate",
+                                       "expected_audio_channels"}:
                     raise ValueError("decoded_export_check requires path and supported options")
                 criteria["decoded_export"] = config
                 report = await dispatch({"action": "get_info", "sub_action": "decoded_export_qa", **config})
