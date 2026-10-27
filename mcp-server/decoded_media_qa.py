@@ -153,7 +153,7 @@ def _audio_overall_silent(log):
         elif in_overall and payload.startswith("Peak level dB:"):
             # Overall summaries can repeat. A later silent summary must
             # not erase evidence of an earlier non-silent segment.
-            silent = (silent is not False and payload == "Peak level dB: -inf")
+            silent = (silent is not False and payload.casefold() == "peak level db: -inf")
     return silent is True
 
 
