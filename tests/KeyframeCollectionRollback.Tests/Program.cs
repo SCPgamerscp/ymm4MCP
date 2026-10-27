@@ -224,6 +224,82 @@ Check(floatImmutable.Values[1] is float immutableReplaced
     && immutableReplaced == 0.1f,
     "float-backed immutable replacement wrote the wrong value");
 
+// YMM4 4.56 can expose Frames/Values without a usable native removal API.
+// Removing a middle frame must remove the matching value, not the start value.
+var deleteMutable = new TestAnimation(
+    new FaultyList { 10, 20 }, new FaultyList { 1.0, 2.0, 3.0 });
+Check(KeyframeCollectionRemoval.TryRemove(deleteMutable, 10),
+    "mutable keyframe removal should succeed");
+Check(deleteMutable.Frames.Count == 1 && Convert.ToInt32(deleteMutable.Frames[0]) == 20
+    && deleteMutable.Values.Count == 2 && Convert.ToDouble(deleteMutable.Values[0]) == 1.0
+    && Convert.ToDouble(deleteMutable.Values[1]) == 3.0,
+    "mutable removal did not preserve the matching frame/value alignment");
+Check(!KeyframeCollectionRemoval.TryRemove(deleteMutable, 0),
+    "the implicit starting value must not be removed");
+Check(!KeyframeCollectionRemoval.TryRemove(deleteMutable, 123),
+    "a missing frame must not be reported as removed");
+Check(KeyframeCollectionRemoval.TryClear(deleteMutable),
+    "mutable clear should succeed atomically");
+Check(deleteMutable.Frames.Count == 0 && deleteMutable.Values.Count == 1
+    && Convert.ToDouble(deleteMutable.Values[0]) == 1.0,
+    "mutable clear must preserve the implicit start value");
+
+var deleteImmutable = new TestAnimation(
+    ImmutableList.Create(10, 20), ImmutableList.Create(1.0, 2.0, 3.0));
+Check(KeyframeCollectionRemoval.TryRemove(deleteImmutable, 10),
+    "immutable keyframe removal should succeed");
+Check(deleteImmutable.Frames.Count == 1 && Convert.ToInt32(deleteImmutable.Frames[0]) == 20
+    && deleteImmutable.Values.Count == 2 && Convert.ToDouble(deleteImmutable.Values[1]) == 3.0,
+    "immutable removal must replace both collections");
+Check(KeyframeCollectionRemoval.TryClear(deleteImmutable),
+    "immutable keyframe clear should succeed");
+Check(deleteImmutable.Frames.Count == 0 && deleteImmutable.Values.Count == 1,
+    "immutable clear must retain the implicit starting value");
+
+// A nonconforming IList may throw after deleting an entry, ignore RemoveAt,
+// or delete the wrong entry. The operation must restore both collections.
+var deleteThrows = new FaultyList { 1.0, 2.0, 3.0 };
+deleteThrows.ThrowAfterRemove = true;
+var failedDelete = new TestAnimation(new FaultyList { 10, 20 }, deleteThrows);
+Check(!KeyframeCollectionRemoval.TryRemove(failedDelete, 10),
+    "removal that throws after mutation must fail");
+Check(failedDelete.Frames.Count == 2 && failedDelete.Values.Count == 3
+    && Convert.ToDouble(failedDelete.Values[1]) == 2.0,
+    "failed removal must restore both lists");
+
+var ignoredDeleteFrames = new FaultyList { 10, 20 };
+ignoredDeleteFrames.IgnoreRemove = true;
+var ignoredDelete = new TestAnimation(ignoredDeleteFrames, new FaultyList { 1.0, 2.0, 3.0 });
+Check(!KeyframeCollectionRemoval.TryRemove(ignoredDelete, 10),
+    "ignored frame deletion must not be reported as success");
+Check(ignoredDelete.Frames.Count == 2 && ignoredDelete.Values.Count == 3,
+    "ignored deletion must restore the removed value");
+
+var wrongDeleteValues = new FaultyList { 1.0, 2.0, 3.0 };
+wrongDeleteValues.RemoveFromFront = true;
+var wrongDelete = new TestAnimation(new FaultyList { 10, 20 }, wrongDeleteValues);
+Check(!KeyframeCollectionRemoval.TryRemove(wrongDelete, 10),
+    "wrong-index deletion must fail");
+Check(wrongDelete.Frames.Count == 2 && wrongDelete.Values.Count == 3
+    && Convert.ToDouble(wrongDelete.Values[0]) == 1.0,
+    "wrong-index deletion must restore the original start value");
+
+var failedClearFrames = new FaultyList { 10, 20 };
+failedClearFrames.ThrowAfterRemove = true;
+var failedClear = new TestAnimation(failedClearFrames, new FaultyList { 1.0, 2.0, 3.0 });
+Check(!KeyframeCollectionRemoval.TryClear(failedClear),
+    "clear that throws halfway must fail");
+Check(failedClear.Frames.Count == 2 && failedClear.Values.Count == 3,
+    "failed clear must restore both collections");
+
+var unsafeImmutableDelete = new FailingImmutableAnimation(
+    ImmutableList.Create(10, 20), ImmutableList.Create(1.0, 2.0, 3.0));
+bool refusedUnsafeDelete = false;
+try { KeyframeCollectionRemoval.TryRemove(unsafeImmutableDelete, 10); }
+catch (InvalidOperationException) { refusedUnsafeDelete = true; }
+Check(refusedUnsafeDelete,
+    "an unrecoverable immutable deletion must abort rather than allow another fallback");
+
 Console.WriteLine("Keyframe collection rollback tests passed");
 
 internal sealed class TestAnimation
@@ -241,6 +317,8 @@ internal sealed class FaultyList : ArrayList
     public bool ReplaceOnInsert { get; set; }
     public bool InsertTwice { get; set; }
     public bool ThrowAfterRemove { get; set; }
+    public bool IgnoreRemove { get; set; }
+    public bool RemoveFromFront { get; set; }
     public override void Insert(int index, object? value)
     {
         if (IgnoreInsert) return;
@@ -254,7 +332,8 @@ internal sealed class FaultyList : ArrayList
     }
     public override void RemoveAt(int index)
     {
-        base.RemoveAt(index);
+        if (IgnoreRemove) return;
+        base.RemoveAt(RemoveFromFront ? 0 : index);
         if (ThrowAfterRemove) throw new InvalidOperationException("remove failed after mutation");
     }
 }
