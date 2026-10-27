@@ -319,8 +319,10 @@ jobs:
             Remove-Item Env:YMM4MCP_PY_LATEST_FAIL -ErrorAction SilentlyContinue
             Remove-Item Env:YMM4MCP_PY_SELECT_MARKER -ErrorAction SilentlyContinue
           }
-          if ($rerunExit -ne 0 -or -not (Test-Path -LiteralPath $fallbackMarker) -or
-              [IO.File]::ReadAllText($fallbackMarker).Trim() -cne 'selected') {
+          $fallbackExists = Test-Path -LiteralPath $fallbackMarker
+          $fallbackValue = if ($fallbackExists) { [IO.File]::ReadAllText($fallbackMarker).Trim() } else { '<missing>' }
+          Write-Output "Legacy launcher fallback: exit=$rerunExit; marker=$fallbackValue"
+          if ($rerunExit -ne 0 -or $fallbackValue -cne 'selected') {
             throw 'Installer failed to fall back to registered Python 3.12 on older launcher'
           }
           if ([IO.File]::ReadAllText($installedConfig) -cne $customConfig -or
