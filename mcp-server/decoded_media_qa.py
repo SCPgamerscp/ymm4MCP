@@ -30,8 +30,8 @@ def _trusted_filter_payload(line, filter_name, bare_names):
     if any(line.startswith(name + ":") for name in bare_names):
         return line
     match = re.match(
-        r"^\\[(?:Parsed_)?" + re.escape(filter_name)
-        + r"(?:_[0-9]+)?\\s+@\\s+[^\\]]+\\]\\s*(.*)$", line)
+        r"^\[(?:Parsed_)?" + re.escape(filter_name)
+        + r"(?:_[0-9]+)?\s+@\s+[^\]]+\]\s*(.*)$", line)
     return match.group(1) if match else ""
 
 
@@ -74,7 +74,7 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
 def _audio_peak_db(log):
     """Highest finite sample peak from FFmpeg astats (dBFS); not true-peak."""
     peaks = []
-    pattern = re.compile(r"\\bPeak level dB:\\s*([+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\\s,;])")
+    pattern = re.compile(r"\bPeak level dB:\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])")
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, "astats", ("Peak level dB",))
         for value in pattern.findall(payload):
