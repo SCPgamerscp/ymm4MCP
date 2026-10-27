@@ -819,5 +819,51 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                                   st_mtime_ns=500, st_ctime_ns=701)
         self.assertNotEqual(qa._file_identity(original), qa._file_identity(changed))
 
+
+    def test_missing_format_origin_uses_earliest_stream_timestamp(self):
+        # Some containers omit format.start_time even when all tracks have
+        # nonzero presentation timestamps. Their first track is not delayed.
+        metadata = json.dumps({
+            "format": {"duration": "20"},
+            "streams": [{"codec_type": "video", "start_time": "10",
+                         "duration": "20"},
+                        {"codec_type": "audio", "start_time": "12",
+                         "duration": "18"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        late = [issue for issue in report["issues"]
+                if issue["code"] == "EXPORT_STREAM_STARTS_LATE"]
+        self.assertEqual(len(late), 1)
+        self.assertEqual(late[0]["stream_type"], "audio")
+        self.assertEqual(late[0]["missing_head_seconds"], 2.0)
+        self.assertFalse(any(issue["code"] in (
+            "EXPORT_STREAM_ENDS_EARLY", "EXPORT_STREAM_EXCEEDS_CONTAINER")
+            for issue in report["issues"]))
+
+    def test_missing_format_origin_without_track_timestamps_defaults_to_zero(self):
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any("STARTS" in issue["code"] for issue in report["issues"]))
+
+    def test_large_negative_stream_preroll_is_reported_not_rejected(self):
+        metadata = json.dumps({
+            "format": {"duration": "20", "start_time": "10"},
+            "streams": [{"codec_type": "video", "start_time": "8",
+                         "duration": "22"},
+                        {"codec_type": "audio", "start_time": "10",
+                         "duration": "20"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        early = [issue for issue in report["issues"]
+                 if issue["code"] == "EXPORT_STREAM_STARTS_BEFORE_CONTAINER"]
+        self.assertEqual(len(early), 1)
+        self.assertEqual(early[0]["stream_type"], "video")
+        self.assertEqual(early[0]["preroll_seconds"], 2.0)
+        self.assertFalse(any(issue["code"] == "EXPORT_STREAM_EXCEEDS_CONTAINER"
+                             for issue in report["issues"]))
+
 if __name__ == "__main__":
     unittest.main()
