@@ -12,9 +12,10 @@ $pythonCommand = $null
 $pythonArgs = @()
 if (Get-Command py -ErrorAction SilentlyContinue) {
     # A user-configured py -3 default may be Python 3.9 even when a newer
-    # interpreter is registered with the Windows launcher. Probe explicit
-    # supported versions before falling back to python.exe.
-    foreach ($selector in @('-3', '-3.14', '-3.13', '-3.12', '-3.11', '-3.10')) {
+    # interpreter is registered. -V:3 asks the modern Windows launcher for
+    # the newest registered Python 3 (including versions after 3.14). Older
+    # launchers can reject it, so retain the explicit-version fallbacks.
+    foreach ($selector in @('-3', '-V:3', '-3.14', '-3.13', '-3.12', '-3.11', '-3.10')) {
         try {
             & py $selector -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
             if ($LASTEXITCODE -eq 0) {
