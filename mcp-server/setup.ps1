@@ -119,20 +119,54 @@ if ($ConfigureClaudeDesktop) {
                 $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force
             }
             $current = $config.mcpServers.ymm4
+            if ($null -ne $current -and $current -isnot [pscustomobject]) {
+                throw "既存の mcpServers.ymm4 は JSON オブジェクトである必要があります: $configPath"
+            }
+            # Keep user-managed MCP settings (for example API credentials,
+            # timeout and disabled flags) when reinstalling or upgrading.
+            # Only the executable/script paths and an explicitly requested
+            # -Port belong to the installer. Do not mutate $current.env:
+            # the original config must remain intact until the atomic commit.
+            $desiredEntry = [pscustomobject]@{
+                command = $entry.command
+                args = @($entry.args)
+            }
+            if ($null -ne $current) {
+                foreach ($property in $current.PSObject.Properties) {
+                    if ($property.Name -notin @('command', 'args', 'env')) {
+                        $desiredEntry | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                    }
+                }
+            }
+            $desiredEnv = [pscustomobject]@{}
+            if ($null -ne $current -and $null -ne $current.env) {
+                if ($current.env -isnot [pscustomobject]) {
+                    throw "既存の mcpServers.ymm4.env は JSON オブジェクトである必要があります: $configPath"
+                }
+                foreach ($property in $current.env.PSObject.Properties) {
+                    $desiredEnv | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                }
+            }
+            if ($null -ne $Port) {
+                $desiredEnv | Add-Member -NotePropertyName YMM4_API_BASE -NotePropertyValue $entry.env.YMM4_API_BASE -Force
+            }
+            if (@($desiredEnv.PSObject.Properties).Count -gt 0) {
+                $desiredEntry | Add-Member -NotePropertyName env -NotePropertyValue $desiredEnv
+            }
             $sameEntry = $null -ne $current -and
                          $current.command -ceq $entry.command -and
                          ($current.args -is [array]) -and
                          @($current.args).Count -eq 1 -and
                          @($current.args)[0] -ceq $entry.args[0] -and
-                         (($null -eq $current.env -and $null -eq $entry.env) -or
-                          ($null -ne $current.env -and $null -ne $entry.env -and
+                         ($null -eq $Port -or
+                          ($null -ne $current.env -and
                            $current.env.YMM4_API_BASE -ceq $entry.env.YMM4_API_BASE))
             if ($sameEntry) {
                 Write-Output "Claude Desktop の設定は更新済みです: $configPath"
                 continue
             }
 
-            $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
+            $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $desiredEntry -Force
             $configDir = Split-Path -Parent $configPath
             [IO.Directory]::CreateDirectory($configDir) | Out-Null
             $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"
