@@ -1661,8 +1661,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         # The Overall-only fallback must recognize the same valid spelling.
         for value in ("-inf", "-Inf", "-INF"):
             with self.subTest(value=value):
-                log = ("[Parsed_astats_0 @ 0x123] Overall\\n"
-                       "[Parsed_astats_0 @ 0x123] Peak level dB: " + value + "\\n")
+                log = ("[Parsed_astats_0 @ 0x123] Overall\n"
+                       "[Parsed_astats_0 @ 0x123] Peak level dB: " + value + "\n")
                 report = self.inspect_with_channel_astats(log)
                 self.assertTrue(report["passed"], report)
                 self.assertEqual(sum(
