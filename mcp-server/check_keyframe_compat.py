@@ -59,6 +59,34 @@ def has_frame(frames: list[dict], at: int) -> bool:
     return any(frame["at"] == at for frame in frames)
 
 
+def snapshot_all_animations(client: httpx.Client, base: str,
+                            headers: dict[str, str], item_id: str) -> dict[str, list[dict]]:
+    """Snapshot every animation, not only Zoom/X, before any write.
+
+    YMM4 may share one KeyFrames collection across multiple properties.
+    Removing a test key can alter unrelated animations; a successful cleanup
+    must restore the complete observable item state.
+    """
+    path = f"/items/keyframes?item_id={quote(item_id, safe='')}"
+    result = api(client, base, headers, "GET", path)
+    animations = result.get("animations")
+    if not isinstance(animations, list) or not animations:
+        raise ProbeError("Cannot snapshot all item animations; refusing edit")
+    snapshot: dict[str, list[dict]] = {}
+    for animation in animations:
+        if not isinstance(animation, dict):
+            raise ProbeError("Malformed animation inventory; refusing edit")
+        prop, frames = animation.get("prop"), animation.get("keyframes")
+        if (not isinstance(prop, str) or not prop or prop in snapshot
+                or not isinstance(frames, list)
+                or any(not isinstance(frame, dict)
+                       or type(frame.get("at")) is not int or frame["at"] < 0
+                       for frame in frames)):
+            raise ProbeError("Malformed animation inventory; refusing edit")
+        snapshot[prop] = frames
+    return snapshot
+
+
 def validate_test_item(client: httpx.Client, base: str,
                        headers: dict[str, str], item_id: str, at: int) -> None:
     """Fail before writing if the selected image or relative frame is unsafe."""
@@ -85,16 +113,17 @@ def validate_test_item(client: httpx.Client, base: str,
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, at: int, values: dict[str, float]) -> None:
     validate_test_item(client, base, headers, item_id, at)
-    # Validate every property before the first write, so a missing X/Zoom
-    # cannot leave the other property modified.
-    baseline: dict[str, list[dict]] = {}
+    # Capture every property before writing: YMM4 may share one KeyFrames
+    # collection among Zoom, X and other animation properties.
+    baseline = snapshot_all_animations(client, base, headers, item_id)
     for prop in values:
+        if prop not in baseline:
+            raise ProbeError(f"{prop}: Animation or keyframes unavailable")
         frames, _ = keyframes(client, base, headers, item_id, prop)
+        if frames != baseline[prop]:
+            raise ProbeError(f"{prop}: inconsistent preflight readback; refusing edit")
         if has_frame(frames, at):
             raise ProbeError(f"{prop}: frame {at} already exists; refusing overwrite")
-        # Capture all original keys, not just the proposed insertion position.
-        # Shared YMM4 KeyFrames can affect other Animation properties as well.
-        baseline[prop] = frames
 
     # KeyFrames can be shared by all animations on a YMM4 timeline item.
     # Test one property at a time: remove Zoom's frame before inserting X's,
@@ -131,15 +160,17 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                             {"item_id": item_id, "expected_revision": revision,
                              "prop": prop, "action": "remove", "at": at})
                     # Removing a shared frame may silently alter unrelated
-                    # Animation values or pre-existing frames. A missing test
-                    # frame alone is NOT proof that cleanup restored the project.
-                    for checked_prop, original_frames in baseline.items():
-                        restored, _ = keyframes(client, base, headers, item_id, checked_prop)
-                        if restored != original_frames:
-                            raise ProbeError(
-                                f"{checked_prop}: original keyframes changed after "
-                                f"{prop} cleanup; restore the test project from backup")
-                    print(f"PASS {prop}: all original Zoom/X keyframes restored")
+                    # Animation values or pre-existing frames. Verify the
+                    # entire inventory, including added/removed properties.
+                    restored = snapshot_all_animations(client, base, headers, item_id)
+                    if restored != baseline:
+                        changed = sorted(set(restored) ^ set(baseline))
+                        changed += sorted(name for name in restored.keys() & baseline.keys()
+                                          if restored[name] != baseline[name])
+                        raise ProbeError(
+                            f"{', '.join(changed)}: original keyframes changed after "
+                            f"{prop} cleanup; restore the test project from backup")
+                    print(f"PASS {prop}: all original item animations restored")
                 except Exception as exc:
                     cleanup_error = exc
         if cleanup_error is not None:
