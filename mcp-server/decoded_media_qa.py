@@ -736,8 +736,19 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                        track_start + track_duration - duration, 3)})
                 missing = duration - (track_start + track_duration)
                 if missing > 1.0:
+                    # A truncated *required primary* track makes a finished
+                    # export incomplete even if FFmpeg successfully decodes
+                    # the remaining samples. Optional/secondary tracks can
+                    # legitimately end earlier and remain advisory.
+                    required_primary = ordinal == 0 and (
+                        kind == "video" or require_audio
+                        or expected_audio_sample_rate is not None
+                        or expected_audio_channels is not None
+                        or (expected_audio_streams is not None
+                            and expected_audio_streams > 0))
                     issues.append({"code": "EXPORT_STREAM_ENDS_EARLY",
-                                   "severity": "warning", "stream_type": kind,
+                                   "severity": "error" if required_primary else "warning",
+                                   "stream_type": kind,
                                    "stream_ordinal": ordinal,
                                    "missing_tail_seconds": round(missing, 3)})
     if not videos:
