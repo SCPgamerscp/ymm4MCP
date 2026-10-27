@@ -155,9 +155,9 @@ def _invalid_signal_sequence(log, start_name, end_name):
     """
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
                    "freeze_start": "freezedetect"}[start_name]
-    pattern = re.compile(r"\\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\\s*([^\\s]*)")
-    number = re.compile(r"[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
+                         + r"):\s*([^\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     active = None
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
@@ -181,8 +181,8 @@ def _invalid_signal_durations(log, start_name, end_name):
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
                    "freeze_start": "freezedetect"}[start_name]
     duration_name = start_name.replace("_start", "_duration")
-    pattern = re.compile(r"\\b" + re.escape(duration_name) + r":\\s*([^\\s]*)")
-    number = re.compile(r"[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    pattern = re.compile(r"\b" + re.escape(duration_name) + r":\s*([^\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     for line in log.splitlines():
         payload = _trusted_filter_payload(
             line, filter_name, (start_name, end_name, duration_name))
