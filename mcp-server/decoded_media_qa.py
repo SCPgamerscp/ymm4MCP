@@ -639,7 +639,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     scope = ("full_audio_video_decode" if fully_decoded and audios
              else "full_video_decode" if fully_decoded
              else "incomplete" if not passed
-             else "sampled_audio_video_decode")
+             else "sampled_audio_video_decode" if audios
+             else "sampled_video_decode")
     return {"success": True,
             "passed": passed,
             "issues": issues,
