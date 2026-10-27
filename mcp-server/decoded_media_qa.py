@@ -11,6 +11,7 @@ from pathlib import Path
 from jobs import is_absolute_media_path
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+MAX_SIGNAL_EVENTS = 256  # Per signal type, across all tracks and windows.
 
 
 def _unique_object_pairs(pairs):
@@ -577,11 +578,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             end = max(end, *(stored["video_end_seconds"]
                              for stored, _ in additional))
         if not matches:
+            # Distinct findings are scanned during overlap coalescing. Bound
+            # the count to avoid quadratic work on pathological filter logs.
+            if len(records) >= MAX_SIGNAL_EVENTS:
+                return False
             issue = {"code": code, "severity": "warning", **event}
             destination.append(event)
             issues.append(issue)
             records.append((event, issue))
-            return
+            return True
         anchor_event, anchor_issue = matches[0]
         for redundant_event, redundant_issue in matches[1:]:
             records[:] = [(stored, issue) for stored, issue in records
@@ -596,6 +601,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             target["video_start_seconds"] = round(start, 6)
             target["video_end_seconds"] = round(end, 6)
             target["duration_seconds"] = round(end - start, 3)
+        return True
     # Per-command timeouts alone allow up to 32 slow subprocesses. Bound
     # the complete synchronous sampling pass to two minutes.
     sample_deadline = time.monotonic() + 120
@@ -683,11 +689,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                           "video_end_seconds": round(start + signal_end, 6),
                          "duration_seconds": round(signal_end - signal_start, 3)}
                 if kind == "video":
-                    record_signal("video", event, "EXPORT_SAMPLE_BLACK_FRAMES",
-                                  black_frames)
+                    if not record_signal("video", event, "EXPORT_SAMPLE_BLACK_FRAMES",
+                                         black_frames):
+                        return failure("EXPORT_SIGNAL_LIMIT",
+                                       "黒画面検出イベント数が上限を超えました")
                 else:
-                    record_signal("audio", event, "EXPORT_SAMPLE_LONG_SILENCE",
-                                  long_silences)
+                    if not record_signal("audio", event, "EXPORT_SAMPLE_LONG_SILENCE",
+                                         long_silences):
+                        return failure("EXPORT_SIGNAL_LIMIT",
+                                       "無音検出イベント数が上限を超えました")
             if kind == "video":
                 for freeze_start, freeze_end in _signal_ranges(
                         decoded.stderr or "", "freeze_start", "freeze_end",
@@ -699,8 +709,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                               "video_start_seconds": round(start + freeze_start, 6),
                               "video_end_seconds": round(start + freeze_end, 6),
                              "duration_seconds": round(freeze_end - freeze_start, 3)}
-                    record_signal("freeze", event, "EXPORT_SAMPLE_FROZEN_FRAMES",
-                                  frozen_frames)
+                    if not record_signal("freeze", event, "EXPORT_SAMPLE_FROZEN_FRAMES",
+                                         frozen_frames):
+                        return failure("EXPORT_SIGNAL_LIMIT",
+                                       "フリーズ検出イベント数が上限を超えました")
     # A short track may lie entirely between sample windows. Do not claim
     # that QA passed when that track was never actually decoded.
     for kind, tracks in (("video", videos), ("audio", audios)):
