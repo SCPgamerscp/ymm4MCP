@@ -669,6 +669,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             if track_start is not None and track_duration is not None:
                 signal_window_length = min(
                     length, max(0.0, relative_start + track_duration - start))
+            # Stream timestamps are absolute, but FFmpeg filter timestamps
+            # are relative to this sample. Never report preroll before the
+            # known stream start as black/silent/frozen media.
+            signal_active_start = (max(0.0, relative_start - start)
+                                   if track_start is not None else 0.0)
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
             signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
@@ -736,7 +741,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     elif declared_channels == 2:
                         left, right = channel_peaks[1], channel_peaks[2]
                         if ((math.isfinite(left) and math.isfinite(right)
-                             and abs(left - right) >= 12)
+                             and max(left, right) > -60
+                              and abs(left - right) >= 12)
                                 or (left == -math.inf and right > -60)
                                 or (right == -math.inf and left > -60)):
                             issues.append({
@@ -762,6 +768,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                     else ("silence_start", "silence_end"))
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, signal_window_length):
+                signal_start = max(signal_start, signal_active_start)
+                if signal_start >= signal_end:
+                    continue
                 event = {"sample_start_seconds": round(start, 6),
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
@@ -783,6 +792,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 for freeze_start, freeze_end in _signal_ranges(
                         decoded.stderr or "", "freeze_start", "freeze_end",
                         signal_window_length):
+                    freeze_start = max(freeze_start, signal_active_start)
+                    if freeze_start >= freeze_end:
+                        continue
                     event = {"sample_start_seconds": round(start, 6),
                              "stream_ordinal": ordinal,
                              "filter_start_seconds": round(freeze_start, 3),
