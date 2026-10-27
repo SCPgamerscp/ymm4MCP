@@ -943,6 +943,70 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(sum(i["code"].startswith("EXPORT_SAMPLE_") for i
                              in report["issues"]), 3)
 
+    def test_partially_clipped_sample_signals_merge_and_update_issues(self):
+        # One physical defect spans both 8-second windows, but each ffmpeg
+        # invocation can report only the portion inside its own window.
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            start = float(command[command.index("-ss") + 1])
+            relative_start, relative_end = 5 - start, 11 - start
+            if "0:v:0" in command:
+                log = (f"black_start: {relative_start} black_end: {relative_end}\\n"
+                       f"freeze_start: {relative_start} freeze_end: {relative_end}\\n")
+            else:
+                log = f"silence_start: {relative_start} silence_end: {relative_end}\\n"
+            return subprocess.CompletedProcess(command, 0, "", log)
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        for key, code in (("black_frames", "EXPORT_SAMPLE_BLACK_FRAMES"),
+                          ("frozen_frames", "EXPORT_SAMPLE_FROZEN_FRAMES"),
+                          ("long_silences", "EXPORT_SAMPLE_LONG_SILENCE")):
+            events = report[key]
+            matching_issues = [issue for issue in report["issues"]
+                               if issue["code"] == code]
+            self.assertEqual(len(events), 1, (key, events))
+            self.assertEqual(len(matching_issues), 1, matching_issues)
+            for record in (events[0], matching_issues[0]):
+                self.assertEqual(record["video_start_seconds"], 5)
+                self.assertEqual(record["video_end_seconds"], 11)
+                self.assertEqual(record["duration_seconds"], 6)
+
+    def test_signal_merge_bridges_two_previous_intervals(self):
+        # Two detections from the first window are connected by a later
+        # detection. Coalescing must remove the redundant event AND QA issue.
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            start = float(command[command.index("-ss") + 1])
+            log = ("black_start: 5 black_end: 6\\n"
+                   "black_start: 7 black_end: 8\\n" if start == 0
+                   else "black_start: 1.5 black_end: 3.5\\n")
+            return subprocess.CompletedProcess(command, 0, "", log)
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(len(report["black_frames"]), 1, report["black_frames"])
+        event = report["black_frames"][0]
+        self.assertEqual((event["video_start_seconds"], event["video_end_seconds"],
+                          event["duration_seconds"]), (5, 8, 3))
+        matching = [issue for issue in report["issues"]
+                    if issue["code"] == "EXPORT_SAMPLE_BLACK_FRAMES"]
+        self.assertEqual(len(matching), 1, matching)
+        self.assertEqual(matching[0]["video_end_seconds"], 8)
+        self.assertEqual(matching[0]["duration_seconds"], 3)
+
     def test_stream_end_overflow_is_invalid_metadata(self):
         # Although the container itself exceeds the duration policy, malformed
         # stream arithmetic must never be propagated as a valid finite value.
