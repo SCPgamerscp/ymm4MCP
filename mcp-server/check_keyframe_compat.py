@@ -67,8 +67,10 @@ def snapshot_all_animations(client: httpx.Client, base: str,
     Removing a test key can alter unrelated animations; a successful cleanup
     must restore the complete observable item state.
     """
-    path = f"/items/keyframes?item_id={quote(item_id, safe='')}"
+    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&strict_inventory=1"
     result = api(client, base, headers, "GET", path)
+    if result.get("inventory_complete") is not True:
+        raise ProbeError("Incomplete animation inventory; refusing edit")
     animations = result.get("animations")
     if not isinstance(animations, list) or not animations:
         raise ProbeError("Cannot snapshot all item animations; refusing edit")
@@ -130,16 +132,25 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
     # otherwise the first edit can create a shared frame for the second.
     for prop, value in values.items():
         touched = False
+        cleanup_revision: str | None = None
         failure: Exception | None = None
         cleanup_error: Exception | None = None
         try:
             _, revision = keyframes(client, base, headers, item_id, prop)
             # Record BEFORE the POST: a failed request might have mutated YMM4.
             touched = True
-            api(client, base, headers, "POST", "/items/keyframe",
-                {"item_id": item_id, "expected_revision": revision,
-                 "prop": prop, "action": "set", "at": at, "value": value})
-            frames, _ = keyframes(client, base, headers, item_id, prop)
+            result = api(client, base, headers, "POST", "/items/keyframe",
+                         {"item_id": item_id, "expected_revision": revision,
+                          "prop": prop, "action": "set", "at": at, "value": value})
+            # Prefer the revision returned by the mutation itself: another
+            # caller may edit the item before the next readback.
+            returned_revision = result.get("revision")
+            if isinstance(returned_revision, str) and returned_revision:
+                cleanup_revision = returned_revision
+            frames, readback_revision = keyframes(client, base, headers, item_id, prop)
+            if cleanup_revision is not None and readback_revision != cleanup_revision:
+                raise ProbeError(f"{prop}: item changed after write; refusing cleanup")
+            cleanup_revision = readback_revision
             matches = [f for f in frames if f["at"] == at]
             if len(matches) != 1:
                 raise ProbeError(f"{prop}: inserted frame not uniquely visible")
@@ -151,13 +162,21 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             print(f"PASS {prop}: inserted frame={at} value={actual}")
         except Exception as exc:
             failure = exc
+            # The plugin's revision guard rejects the write before mutation.
+            # Removing a pre-existing frame after that rejection is unsafe.
+            if "REVISION_CONFLICT" in str(exc):
+                touched = False
         finally:
             if touched:
                 try:
                     frames, revision = keyframes(client, base, headers, item_id, prop)
                     if has_frame(frames, at):
+                        if cleanup_revision is not None and revision != cleanup_revision:
+                            raise ProbeError(
+                                f"{prop}: item changed after readback; refusing cleanup")
                         api(client, base, headers, "POST", "/items/keyframe",
-                            {"item_id": item_id, "expected_revision": revision,
+                            {"item_id": item_id,
+                             "expected_revision": cleanup_revision or revision,
                              "prop": prop, "action": "remove", "at": at})
                     # Removing a shared frame may silently alter unrelated
                     # Animation values or pre-existing frames. Verify the
