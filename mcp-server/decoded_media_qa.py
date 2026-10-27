@@ -307,8 +307,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             known_starts = [
                 _optional_stream_time(stream.get("start_time"), signed=True)
                 for stream in streams if stream["codec_type"] in ("video", "audio")]
-            container_start = min((value for value in known_starts if value is not None),
-                                  default=0.0)
+            # A missing timestamp on any A/V track makes the origin ambiguous.
+            # Do not shift the timeline using only a late-starting audio track.
+            container_start = (min(known_starts) if known_starts
+                               and all(value is not None for value in known_starts)
+                               else 0.0)
         for stream in streams:
             if stream["codec_type"] in ("video", "audio"):
                 stream_start = _optional_stream_time(stream.get("start_time"), signed=True)
