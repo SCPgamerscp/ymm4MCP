@@ -1,4 +1,4 @@
-name: Issue 22 combined setup and release verification
+name: Issue 22 and 140 combined setup, keyframe and release verification
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compose main with the open Issue 22 PRs (runner only)
+      - name: Compose main with the open Issue 22 and 140 PRs (runner only)
         shell: bash
         run: |
           set -euo pipefail
@@ -36,13 +36,16 @@ jobs:
           # These changes touch separate files but must work as one release:
           # UI links, publishing/installer, HTTP host/body validation,
           # connection discovery, settings persistence, and startup behavior.
-          for number in 221 228 234 241 243 244 248 257 259; do
+          # Also compose the five #140 keyframe fixes against the same plugin
+          # before shipping a .ymme. A successful standalone PR build cannot
+          # prove that both issue groups are compatible.
+          for number in 221 228 234 241 243 244 248 257 259 218 219 251 254 255; do
             git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
             printf 'Composing PR #%s at %s\n' "${number}" "$(git rev-parse "refs/remotes/pr/${number}")"
             git merge --no-ff --no-edit "refs/remotes/pr/${number}"
           done
           git status --short
-      - name: Test composed Issue 22 Python setup and transport modules
+      - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
         shell: pwsh
         run: |
           python -m pip install -r mcp-server/requirements.txt
@@ -53,7 +56,7 @@ jobs:
           # Windows runner as the YMM4 plugin and installer.
           Push-Location mcp-server
           try {
-            python -m unittest -q test_release_workflow test_connection_descriptor_integrity test_check_connection_version_integrity test_http_host_ipv6_aliases test_http_body_limit
+            python -m unittest -q test_release_workflow test_connection_descriptor_integrity test_check_connection_version_integrity test_http_host_ipv6_aliases test_http_body_limit test_check_keyframe_compat
             if ($LASTEXITCODE -ne 0) { throw 'Composed Issue 22 Python tests failed' }
           }
           finally { Pop-Location }
@@ -72,6 +75,15 @@ jobs:
           )) {
             dotnet run --project $project --configuration Release
             if ($LASTEXITCODE -ne 0) { throw "Failed composed test: $project" }
+          }
+      - name: Test all composed keyframe C# regression projects
+        shell: pwsh
+        run: |
+          $projects = @(Get-ChildItem -Path tests -Recurse -Filter 'Keyframe*.csproj' -File | Sort-Object FullName)
+          if ($projects.Count -lt 5) { throw "Expected at least five keyframe test projects; found $($projects.Count)" }
+          foreach ($project in $projects) {
+            dotnet run --project $project.FullName --configuration Release
+            if ($LASTEXITCODE -ne 0) { throw "Composed keyframe regression failed: $($project.FullName)" }
           }
       - name: Download official YMM4 Lite references
         shell: pwsh
@@ -106,5 +118,5 @@ jobs:
       - name: State the remaining live acceptance gates
         shell: pwsh
         run: |
-          Write-Output 'Combined source/tests/package passed; no GitHub PR was merged.'
-          Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, and UI port-change E2E.'
+          Write-Output 'Combined Issue #22/#140 source, regression suites and package passed; no GitHub PR was merged.'
+          Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, UI port-change E2E, and YMM4 4.56.1.1 keyframe E2E.'
