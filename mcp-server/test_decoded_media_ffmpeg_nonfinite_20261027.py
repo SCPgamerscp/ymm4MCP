@@ -71,7 +71,7 @@ class FFmpegChannelInventoryTests(unittest.TestCase):
 
     def test_out_of_range_channel_header_is_reported_without_peak(self):
         report = self._inspect_audio_log(
-            "[Parsed_astats_0 @ 0x1] Channel: 999\\n")
+            "[Parsed_astats_0 @ 0x1] Channel: 999\n")
         mismatches = [issue for issue in report["issues"]
                       if issue["code"] == "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH"]
         self.assertEqual(len(mismatches), 1, report)
@@ -80,7 +80,7 @@ class FFmpegChannelInventoryTests(unittest.TestCase):
 
     def test_unexpected_channel_header_is_reported_without_peak(self):
         report = self._inspect_audio_log(
-            "[Parsed_astats_0 @ 0x1] Channel: 3\\n")
+            "[Parsed_astats_0 @ 0x1] Channel: 3\n")
         mismatches = [issue for issue in report["issues"]
                       if issue["code"] == "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH"]
         self.assertEqual(len(mismatches), 1, report)
@@ -88,8 +88,8 @@ class FFmpegChannelInventoryTests(unittest.TestCase):
 
     def test_valid_channel_headers_without_peaks_do_not_misreport_count(self):
         report = self._inspect_audio_log(
-            "[Parsed_astats_0 @ 0x1] Channel: 1\\n"
-            "[Parsed_astats_0 @ 0x1] Channel: 2\\n")
+            "[Parsed_astats_0 @ 0x1] Channel: 1\n"
+            "[Parsed_astats_0 @ 0x1] Channel: 2\n")
         self.assertFalse(any(
             issue["code"] == "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH"
             for issue in report["issues"]), report)
