@@ -335,11 +335,15 @@ namespace YMM4McpPlugin
         {
             if (TryInvokeNamed(anim, KeyframeRemoveNames, frame)) return true;
             var keyFrames = GetPropObj(anim, "KeyFrames");
-            return keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
+            if (keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame)) return true;
+            return KeyframeCollectionRemoval.TryRemove(anim, frame);
         }
 
         private static bool ClearKeyframes(object anim)
         {
+            // Prefer a single verified transaction over a series of removals.
+            // Otherwise a failure halfway through leaves an edited animation.
+            if (KeyframeCollectionRemoval.TryClear(anim)) return true;
             var frames = ReadFrameList(anim).OrderByDescending(f => f).ToArray();
             if (frames.Length == 0)
             {
@@ -349,7 +353,19 @@ namespace YMM4McpPlugin
             }
             bool any = false;
             foreach (var frame in frames)
-                any |= RemoveKeyframe(anim, frame);
+            {
+                if (!RemoveKeyframe(anim, frame))
+                {
+                    if (any)
+                        throw new InvalidOperationException(
+                            "Keyframe clear stopped after a partial native removal; inspect the animation before retrying.");
+                    return false;
+                }
+                any = true;
+            }
+            if (ReadFrameList(anim).Count != 0)
+                throw new InvalidOperationException(
+                    "Native keyframe clear returned success but some frames remain.");
             return any;
         }
 
