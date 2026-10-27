@@ -292,7 +292,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     "width" in stream or "height" in stream):
                 width, height = stream.get("width"), stream.get("height")
                 if (type(width) is not int or type(height) is not int
-                        or not 1 <= width <= 16_384 or not 1 <= height <= 16_384):
+                        or not 1 <= width <= 16_384 or not 1 <= height <= 16_384
+                        # A 16K-by-16K frame may allocate >1 GiB per frame.
+                        # Keep decoded pixel buffers within a bounded 64 Mi-pixel budget.
+                        or width * height > 67_108_864):
                     raise ValueError("invalid video dimensions")
             if stream["codec_type"] == "video" and "avg_frame_rate" in stream:
                 _frame_rate(stream["avg_frame_rate"])
@@ -447,6 +450,29 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         starts.append((duration - sample_seconds) / 2)
     if duration > sample_seconds:
         starts.append(max(0.0, duration - sample_seconds))
+    # A brief secondary track can fall entirely between the three regular
+    # windows. When its validated timing is known, add one bounded targeted
+    # window rather than falsely certifying a track that was never decoded.
+    # At most one additional window per A/V stream is added (maximum 16).
+    for stream in videos + audios:
+        track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+        track_duration = _optional_stream_time(stream.get("duration"))
+        if track_start is None or track_duration is None:
+            continue
+        left = max(0.0, track_start - container_start)
+        right = min(duration, track_start - container_start + track_duration)
+        if right <= left:
+            continue
+        if any(window < right and left < min(duration, window + sample_seconds)
+               for window in starts):
+            continue
+        # Place the target within the actual track; leave enough room for
+        # FFmpeg's microsecond timestamp rounding and short preroll.
+        center = (left + right) / 2
+        window = max(0.0, min(center - sample_seconds / 2,
+                              max(0.0, duration - sample_seconds)))
+        starts.append(window)
+    starts.sort()
     samples = []
     black_frames = []
     frozen_frames = []
