@@ -82,7 +82,7 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             calls.append(command)
             if command[0] == "ffprobe":
                 return subprocess.CompletedProcess(command, 0, metadata, "")
-            if "-vf" in command and "setpts=PTS-STARTPTS" in command:
+            if "-vf" in command and any("setpts=PTS-STARTPTS" in part for part in command):
                 return subprocess.CompletedProcess(command, 1, "", "filter failed")
             return subprocess.CompletedProcess(command, 0, "", "")
         with patch.object(qa, "run", side_effect=fake):
@@ -94,7 +94,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(report["signal_scope"], "sampled_only")
         self.assertIn("EXPORT_FULL_SIGNAL_FAILED",
                       {issue["code"] for issue in report["issues"]})
-        self.assertTrue(any("-vf" in call and "setpts=PTS-STARTPTS" in call
+        self.assertTrue(any("-vf" in call and any("setpts=PTS-STARTPTS" in part
+                                                    for part in call)
                             for call in calls))
 
     def test_subprocess_stdout_requires_utf8_but_stderr_is_diagnostic(self):
