@@ -144,14 +144,14 @@ class ExportQualityGateTests(unittest.TestCase):
 
     def test_audio_peak_ceiling_blocks_loud_samples(self):
         report = self.inspect(max_audio_peak_dbfs=-1.0,
-                              audio_log="Overall\\nPeak level dB: -0.05")
+                              audio_log="Overall\nPeak level dB: -0.05")
         self.assertFalse(report["passed"], report)
         self.assertIn("EXPORT_SAMPLE_AUDIO_PEAK_TOO_HIGH",
                       {i["code"] for i in report["issues"]})
 
     def test_audio_peak_floor_blocks_quiet_and_silent_samples(self):
-        for log in ("Overall\\nPeak level dB: -45",
-                    "Overall\\nPeak level dB: -inf"):
+        for log in ("Overall\nPeak level dB: -45",
+                    "Overall\nPeak level dB: -inf"):
             with self.subTest(log=log):
                 report = self.inspect(min_audio_peak_dbfs=-20, audio_log=log)
                 self.assertFalse(report["passed"], report)
@@ -165,9 +165,9 @@ class ExportQualityGateTests(unittest.TestCase):
                       {i["code"] for i in report["issues"]})
 
     def test_stereo_balance_gate_rejects_unbalanced_channels(self):
-        log = ("Channel: 1\\nPeak level dB: -5\\n"
-               "Channel: 2\\nPeak level dB: -30\\n"
-               "Overall\\nPeak level dB: -5")
+        log = ("Channel: 1\nPeak level dB: -5\n"
+               "Channel: 2\nPeak level dB: -30\n"
+               "Overall\nPeak level dB: -5")
         report = self.inspect(max_stereo_imbalance_db=12, audio_log=log)
         self.assertFalse(report["passed"], report)
         self.assertIn("EXPORT_SAMPLE_STEREO_IMBALANCE_EXCEEDED",
@@ -175,7 +175,7 @@ class ExportQualityGateTests(unittest.TestCase):
 
     def test_stereo_balance_gate_requires_channel_measurements(self):
         report = self.inspect(max_stereo_imbalance_db=12,
-                              audio_log="Overall\\nPeak level dB: -5")
+                              audio_log="Overall\nPeak level dB: -5")
         self.assertFalse(report["passed"], report)
         self.assertIn("EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE",
                       {i["code"] for i in report["issues"]})
