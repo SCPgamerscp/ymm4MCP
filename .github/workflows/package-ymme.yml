@@ -125,9 +125,11 @@ jobs:
           $storeConfigDir = Join-Path $env:LOCALAPPDATA 'Packages/Claude_test/LocalCache/Roaming/Claude'
           [IO.Directory]::CreateDirectory($storeConfigDir) | Out-Null
           $storeConfigPath = Join-Path $storeConfigDir 'claude_desktop_config.json'
-          '{"theme":"store","mcpServers":{"other":{"command":"store.exe"}}}' |
+          # Existing ymm4 entries can contain user-managed API credentials and
+          # timeout/disabled settings. An installer upgrade must not erase them.
+          '{"theme":"store","mcpServers":{"other":{"command":"store.exe"},"ymm4":{"command":"old-store.exe","args":["old-store.py"],"env":{"GEMINI_API_KEY":"store-placeholder","YMM4_API_BASE":"http://127.0.0.1:8766/api"},"disabled":true}}}' |
             Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
-          '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"}}}' |
+          '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"},"ymm4":{"command":"old-classic.exe","args":["old-classic.py"],"env":{"GEMINI_API_KEY":"classic-placeholder","PYTHONUTF8":"1","YMM4_API_BASE":"http://127.0.0.1:8767/api"},"timeout":120}}}' |
             Set-Content -LiteralPath $configPath -Encoding UTF8
           # Simulate an extracted Release ZIP that the user later deletes.
           $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
@@ -178,6 +180,15 @@ jobs:
               -not $storeConfig.mcpServers.ymm4.command) {
             throw 'Microsoft Store Claude Desktop settings were not configured safely'
           }
+          if ($config.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'classic-placeholder' -or
+              $config.mcpServers.ymm4.env.PYTHONUTF8 -cne '1' -or
+              $config.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:8767/api' -or
+              $config.mcpServers.ymm4.timeout -ne 120 -or
+              $storeConfig.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'store-placeholder' -or
+              $storeConfig.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:8766/api' -or
+              $storeConfig.mcpServers.ymm4.disabled -ne $true) {
+            throw 'Installer erased existing ymm4 credentials, custom settings or ports'
+          }
           if (-not $config.mcpServers.ymm4.command -or
               -not (Test-Path -LiteralPath $config.mcpServers.ymm4.command)) {
             throw 'MCP server executable was not installed or configured'
@@ -203,7 +214,7 @@ jobs:
           try {
             $env:PATH = "$fakeLauncherDir;$originalPath"
             $env:YMM4MCP_PY_FORCE_FAIL = '1'
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extracted 'setup.ps1') -ConfigureClaudeDesktop
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extracted 'setup.ps1') -ConfigureClaudeDesktop -Port 9001
           }
           finally {
             $env:PATH = $originalPath
@@ -217,6 +228,17 @@ jobs:
               $manualStore.mcpServers.ymm4.command -cne $installedPython -or
               @($manualStore.mcpServers.ymm4.args)[0] -cne $installedScript) {
             throw 'Manual setup must not register disposable ZIP extraction paths'
+          }
+          # -Port changes only YMM4_API_BASE; credentials and custom fields
+          # must survive both ordinary installs and explicit port updates.
+          if ($manualClassic.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:9001/api' -or
+              $manualStore.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:9001/api' -or
+              $manualClassic.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'classic-placeholder' -or
+              $manualClassic.mcpServers.ymm4.env.PYTHONUTF8 -cne '1' -or
+              $manualClassic.mcpServers.ymm4.timeout -ne 120 -or
+              $manualStore.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'store-placeholder' -or
+              $manualStore.mcpServers.ymm4.disabled -ne $true) {
+            throw 'Manual setup damaged existing ymm4 settings during port update'
           }
           Remove-Item -LiteralPath $extracted -Recurse -Force
           if (-not (Test-Path -LiteralPath $installedPython) -or
