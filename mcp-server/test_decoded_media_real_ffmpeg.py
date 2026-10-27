@@ -71,5 +71,33 @@ class RealFfmpegExportQaTests(unittest.TestCase):
         self.assertFalse(report["fully_decoded"])
 
 
+    def test_full_signal_scan_detects_blackout_between_sample_windows(self):
+        # With 2s samples at 0, 7 and 14, a black segment at 4-6s
+        # is invisible to sampling even when full_decode=True.
+        # The opt-in signal pass must find it in the *entire* decoded movie.
+        video = Path(self.directory.name) / "middle-blackout.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=64x64:r=10:d=16",
+            "-vf", "drawbox=c=black:t=fill:enable='between(t,4,6)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+        options = dict(require_audio=False, sample_seconds=2, full_decode=True)
+        sampled = qa.inspect(str(video), **options)
+        self.assertTrue(sampled["passed"], sampled)
+        self.assertEqual(sampled["signal_scope"], "sampled_only")
+        self.assertFalse(any(3.5 <= event["video_start_seconds"] <= 6.5
+                             for event in sampled["black_frames"]), sampled)
+
+        scanned = qa.inspect(str(video), full_signal_scan=True, **options)
+        self.assertTrue(scanned["passed"], scanned)
+        self.assertTrue(scanned["fully_decoded"], scanned)
+        self.assertEqual(scanned["signal_scope"], "full")
+        self.assertEqual(scanned["samples"], sampled["samples"])
+        self.assertTrue(any(3.5 <= event["video_start_seconds"] <= 4.5
+                            and event["video_end_seconds"] >= 6
+                            for event in scanned["black_frames"]), scanned)
+
+
 if __name__ == "__main__":
     unittest.main()
