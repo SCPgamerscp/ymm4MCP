@@ -102,6 +102,14 @@ def _reject_nonfinite_json(value):
     raise ValueError("non-standard JSON number: " + value)
 
 
+def _finite_json_float(value):
+    """Reject JSON exponent overflow, even in otherwise unused metadata."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number")
+    return number
+
+
 def _check_probe_depth(value, max_depth=64):
     """Bound nested ffprobe metadata, including unused fields, without recursion."""
     pending = [(value, 0)]
@@ -236,7 +244,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         return failure("EXPORT_PROBE_FAILED", "ffprobeで動画を解析できません")
     try:
         info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs,
-                          parse_constant=_reject_nonfinite_json)
+                          parse_constant=_reject_nonfinite_json,
+                          parse_float=_finite_json_float)
         _check_probe_depth(info)
         streams = info["streams"]
         raw_duration = info["format"]["duration"]
