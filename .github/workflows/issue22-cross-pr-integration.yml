@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   setup-cross-pr-integration:
@@ -202,3 +203,85 @@ jobs:
       - name: Run real decoded-export MP4 and stream-tail smoke tests (not mocks)
         working-directory: composed/mcp-server
         run: python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration test_decoded_media_required_tail_20261028
+
+  audit-open-pr-merge-compatibility:
+    # Advisory merge-queue simulation: inspect ALL open PRs, not only the
+    # hand-picked 15-PR release composition. No remote ref is ever updated.
+    # A conflicting PR is skipped so the remaining PRs can still be checked;
+    # the summary explicitly states this is NOT a guarantee of mergeability.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Audit sequential integration of every open PR (no push)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "Read-only PR integration audit"
+          git config user.email "pr-audit@users.noreply.github.com"
+          # Query the current open PRs, rather than silently ignoring newly
+          # opened fixes. Explicit API errors must fail, not mean "zero PRs".
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq '.[].number' > "$RUNNER_TEMP/open-pr-numbers.txt"
+          mapfile -t numbers < <(sort -n -u "$RUNNER_TEMP/open-pr-numbers.txt")
+          if (( ${#numbers[@]} == 0 )); then
+            echo "No open PRs to audit" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git checkout -B audit-open-prs refs/remotes/origin/main
+          passed=0
+          failed=0
+          {
+            echo "## Open PR sequential merge audit (advisory)"
+            echo
+            echo "Base: \`main\` at \`$(git rev-parse --short HEAD)\`; open PRs: ${#numbers[@]}."
+            echo "Only the runner's temporary branch is modified. No GitHub PR is merged."
+            echo "Conflicting PRs are skipped; later results depend on earlier successful merges."
+            echo
+            echo "| PR | Result | Conflicted files / error |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for number in "${numbers[@]}"; do
+            if ! git fetch --no-tags origin \
+              "refs/pull/${number}/head:refs/remotes/audit-pr/${number}" \
+              > "$RUNNER_TEMP/audit-fetch.log" 2>&1; then
+              failed=$((failed + 1))
+              echo "| #${number} | FETCH FAILED | Could not retrieve PR head |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            if git merge --no-ff --no-edit "refs/remotes/audit-pr/${number}" \
+              > "$RUNNER_TEMP/audit-merge.log" 2>&1; then
+              passed=$((passed + 1))
+              echo "| #${number} | clean | — |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              failed=$((failed + 1))
+              conflict_files="$(git diff --name-only --diff-filter=U | tr '\n' ',' | sed 's/,$//')"
+              if [[ -z "$conflict_files" ]]; then
+                conflict_files="merge failed (see workflow log)"
+              fi
+              # Escape Markdown table separators in path names.
+              conflict_files="${conflict_files//|/\\|}"
+              echo "| #${number} | CONFLICT / FAILED | ${conflict_files} |" >> "$GITHUB_STEP_SUMMARY"
+              if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+                git merge --abort
+              fi
+              if [[ -n "$(git status --porcelain)" ]]; then
+                echo "Could not restore clean audit checkout after PR #${number}" >&2
+                exit 1
+              fi
+            fi
+          done
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "**Composed: ${passed}; skipped/failed: ${failed}; total: ${#numbers[@]}.**" >> "$GITHUB_STEP_SUMMARY"
+          if (( failed > 0 )); then
+            echo "::warning::${failed} open PRs could not be composed in numeric order; see the job summary."
+          fi
+          # Advisory only: existing #22 release CI remains independently
+          # actionable even when unrelated PRs have integration conflicts.
