@@ -498,7 +498,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             fps_tolerance=0.1, expected_audio_sample_rate=None,
             expected_audio_channels=None, expected_video_streams=None,
             expected_audio_streams=None, require_tracks_to_end=False,
-            full_signal_scan=False):
+            full_signal_scan=False, expected_video_codec=None,
+             expected_audio_codec=None, max_black_seconds=None,
+             max_silence_seconds=None, max_freeze_seconds=None,
+             require_audio_peak_metrics=False):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -547,6 +550,22 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     if (type(fps_tolerance) not in (int, float) or
             not 0 <= fps_tolerance <= 10 or not math.isfinite(fps_tolerance)):
         raise ValueError("fps_tolerance must be finite and in [0, 10]")
+    for name, value in (("expected_video_codec", expected_video_codec),
+                        ("expected_audio_codec", expected_audio_codec)):
+        if value is not None and (type(value) is not str or
+                                  not re.fullmatch(r"[a-z0-9_]{1,32}", value)):
+            raise ValueError(f"{name} must be a lowercase FFmpeg codec name")
+    for name, value in (("max_black_seconds", max_black_seconds),
+                        ("max_silence_seconds", max_silence_seconds),
+                        ("max_freeze_seconds", max_freeze_seconds)):
+        if (value is not None and
+                (type(value) not in (int, float) or
+                 not 0 <= value <= 900 or not math.isfinite(value))):
+            raise ValueError(f"{name} must be finite and in [0, 900]")
+    if type(require_audio_peak_metrics) is not bool:
+        raise ValueError("require_audio_peak_metrics must be boolean")
+    if expected_audio_codec is not None and expected_audio_streams == 0:
+        raise ValueError("expected_audio_codec conflicts with expected_audio_streams=0")
     target = Path(path)
     try:
         exists = target.is_file()
@@ -563,7 +582,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration,start_time,nb_streams,size:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames,time_base:stream_disposition=attached_pic",
+                     "format=duration,start_time,nb_streams,size:stream=index,codec_type,codec_name,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames,time_base:stream_disposition=attached_pic",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -637,6 +656,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             if (type(attached_pic) is not int or attached_pic not in (0, 1)
                     or (attached_pic and stream["codec_type"] != "video")):
                 raise ValueError("invalid attached-picture disposition")
+            if "codec_name" in stream and stream["codec_name"] is not None:
+                if (type(stream["codec_name"]) is not str or
+                        not re.fullmatch(r"[a-z0-9_]{1,32}", stream["codec_name"])):
+                    raise ValueError("invalid stream codec name")
             if "index" in stream:
                 index = stream["index"]
                 if (type(index) is not int or index < 0 or index > 2_147_483_647
@@ -770,6 +793,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     video_details = [
         {"stream_ordinal": i, "stream_index": stream.get("index"),
          **_stream_timing_details(stream, container_start),
+         "codec": stream.get("codec_name"),
          "width": stream.get("width"), "height": stream.get("height"),
          "fps": _frame_rate(stream.get("avg_frame_rate")),
          "fps_ratio": _frame_rate_ratio(stream.get("avg_frame_rate")),
@@ -780,6 +804,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     audio_details = [
         {"stream_ordinal": i, "stream_index": stream.get("index"),
          **_stream_timing_details(stream, container_start),
+         "codec": stream.get("codec_name"),
          "sample_rate": int(stream["sample_rate"]) if "sample_rate" in stream else None,
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
@@ -794,6 +819,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                        "actual": len(audios)})
     # Expectations apply to every track. Missing metadata cannot prove a match.
     for ordinal, details in enumerate(video_details):
+        if expected_video_codec is not None and details["codec"] != expected_video_codec:
+            issues.append({
+                "code": ("EXPORT_VIDEO_CODEC_UNKNOWN" if details["codec"] is None
+                         else "EXPORT_VIDEO_CODEC_MISMATCH"),
+                "severity": "error", "stream_type": "video",
+                "stream_ordinal": ordinal, "expected": expected_video_codec,
+                "actual": details["codec"]})
         for field, expected in (("width", expected_width), ("height", expected_height)):
             if expected is None:
                 continue
@@ -817,6 +849,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     "expected": expected_fps, "actual": actual,
                     "tolerance": fps_tolerance})
     for ordinal, details in enumerate(audio_details):
+        if expected_audio_codec is not None and details["codec"] != expected_audio_codec:
+            issues.append({
+                "code": ("EXPORT_AUDIO_CODEC_UNKNOWN" if details["codec"] is None
+                         else "EXPORT_AUDIO_CODEC_MISMATCH"),
+                "severity": "error", "stream_type": "audio",
+                "stream_ordinal": ordinal, "expected": expected_audio_codec,
+                "actual": details["codec"]})
         for field, expected in (
                 ("sample_rate", expected_audio_sample_rate),
                 ("channels", expected_audio_channels)):
@@ -919,7 +958,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "missing_tail_seconds": round(missing, 3)})
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
-    if (require_audio or expected_audio_sample_rate is not None
+    if (require_audio or expected_audio_codec is not None
+            or expected_audio_sample_rate is not None
             or expected_audio_channels is not None) and not audios:
         issues.append({"code": "EXPORT_AUDIO_STREAM_MISSING", "severity": "error"})
     starts = [0.0]
@@ -1152,6 +1192,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     issues.append({
                         "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
                         "severity": "warning", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if (require_audio_peak_metrics and peak is None
+                        and not overall_silent and not channel_peaks):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_METRICS_UNAVAILABLE",
+                        "severity": "error", "stream_ordinal": ordinal,
                         "sample_start_seconds": round(start, 6)})
                 if peak is not None:
                     peak_event = {"sample_start_seconds": round(start, 6),
@@ -1437,6 +1483,21 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                            "全尺信号検出イベント数が上限を超えました")
             if full_deadline - time.monotonic() <= 0:
                 break
+    # Explicit quality gates turn *observed* signal defects into blocking
+    # errors. They do not claim that sampled-only scans cover the entire file.
+    # Apply them after merging overlapping sample and full-scan intervals.
+    for signal_events, threshold, code in (
+            (black_frames, max_black_seconds, "EXPORT_BLACK_DURATION_EXCEEDED"),
+            (long_silences, max_silence_seconds, "EXPORT_SILENCE_DURATION_EXCEEDED"),
+            (frozen_frames, max_freeze_seconds, "EXPORT_FREEZE_DURATION_EXCEEDED")):
+        if threshold is None:
+            continue
+        for event in signal_events:
+            measured = event["video_end_seconds"] - event["video_start_seconds"]
+            if measured > threshold:
+                issues.append({
+                    "code": code, "severity": "error",
+                    "max_seconds": threshold, **event})
     # A video replaced or modified during ffprobe/ffmpeg cannot be certified
     # using observations from different file versions.
     try:
