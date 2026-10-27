@@ -71,6 +71,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Composed Issue 22 Python tests failed' }
           }
           finally { Pop-Location }
+      - name: Test composed export decode QA from PR 229 (#61)
+        shell: pwsh
+        run: |
+          Push-Location mcp-server
+          try {
+            python -m unittest -q test_decoded_media_qa test_decoded_media_tail_and_output test_decoded_media_duration_expectation_20261027 test_decoded_media_astats_consistency test_decoded_media_ffmpeg_nonfinite_20261027 test_decoded_media_probe_integrity_20261027 test_decoded_media_signal_consistency_20261027
+            if ($LASTEXITCODE -ne 0) { throw 'Composed export decode QA regressions failed' }
+          }
+          finally { Pop-Location }
       - name: Test composed setup and HTTP safety helpers
         shell: pwsh
         run: |
