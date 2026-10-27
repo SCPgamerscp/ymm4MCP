@@ -1,0 +1,99 @@
+name: Issue 22 combined setup and release verification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-cross-pr-integration:
+    # This workflow belongs to PR #228 until it is merged. A manual run can
+    # re-check the same set later; no GitHub PR is merged or pushed by this job.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compose main with the open Issue 22 PRs (runner only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Issue 22 integration CI"
+          git config user.email "integration-ci@users.noreply.github.com"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git checkout -B issue22-composed refs/remotes/origin/main
+          # These changes touch separate files but must work as one release:
+          # UI links, publishing/installer, HTTP host/body validation,
+          # connection discovery, settings persistence, and startup behavior.
+          for number in 221 228 234 241 243 244 248 257 259; do
+            git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
+            printf 'Composing PR #%s at %s\n' "${number}" "$(git rev-parse "refs/remotes/pr/${number}")"
+            git merge --no-ff --no-edit "refs/remotes/pr/${number}"
+          done
+          git status --short
+      - name: Test all composed Python MCP modules
+        run: |
+          python -m pip install -r mcp-server/requirements.txt
+          python -m unittest discover -s mcp-server -p "test_*.py" -q
+      - name: Test composed setup and HTTP safety helpers
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'mcp-server/setup.ps1'), [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors) { throw ($parseErrors | Out-String) }
+          foreach ($project in @(
+            'tests/RepositoryLinkPolicy.Tests/RepositoryLinkPolicy.Tests.csproj',
+            'tests/SettingsFileSafety.Tests/SettingsFileSafety.Tests.csproj',
+            'tests/SettingsViewSnapshot.Tests/SettingsViewSnapshot.Tests.csproj',
+            'tests/RequestBodyValidation.Tests/RequestBodyValidation.Tests.csproj'
+          )) {
+            dotnet run --project $project --configuration Release
+            if ($LASTEXITCODE -ne 0) { throw "Failed composed test: $project" }
+          }
+      - name: Download official YMM4 Lite references
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'YukkuriMovieMaker_v4_Lite.zip'
+          $directory = Join-Path $env:RUNNER_TEMP 'ymm4-lite'
+          Invoke-WebRequest -Uri 'https://files.manjubox.net/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          $pluginDlls = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter 'YukkuriMovieMaker.Plugin.dll' -File)
+          if ($pluginDlls.Count -ne 1) { throw "Expected one YMM4 Plugin DLL; found $($pluginDlls.Count)" }
+          $libPath = $pluginDlls[0].DirectoryName
+          if (-not (Test-Path -LiteralPath (Join-Path $libPath 'YukkuriMovieMaker.Controls.dll'))) {
+            throw 'YMM4 Controls DLL is missing'
+          }
+          "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
+      - name: Build and verify composed YMM4 .ymme
+        shell: pwsh
+        run: |
+          dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
+          if ($LASTEXITCODE -ne 0) { throw 'Composed YMM4 plugin build failed' }
+          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          $package = "artifacts/YMM4McpPlugin-$version.ymme"
+          if (-not (Test-Path -LiteralPath $package)) { throw "Missing .ymme: $package" }
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $package).Path)
+          try {
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+            foreach ($required in @('YMM4McpPlugin/YMM4McpPlugin.dll', 'YMM4McpPlugin/YMM4McpPlugin.deps.json')) {
+              if ($entries -notcontains $required) { throw "Missing .ymme entry: $required" }
+            }
+          }
+          finally { $zip.Dispose() }
+      - name: State the remaining live acceptance gates
+        shell: pwsh
+        run: |
+          Write-Output 'Combined source/tests/package passed; no GitHub PR was merged.'
+          Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, and UI port-change E2E.'
