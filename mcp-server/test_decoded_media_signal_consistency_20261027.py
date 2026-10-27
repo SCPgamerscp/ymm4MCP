@@ -135,5 +135,30 @@ class SignalConsistencyTests(unittest.TestCase):
         self.assertIsNone(report["audio_peak_db"])
 
 
+    def test_stream_metadata_exposes_exact_fps_and_real_indices(self):
+        metadata = {"format": {"duration": "1.5"}, "streams": [
+            {"codec_type": "video", "index": 0,
+             "disposition": {"attached_pic": 1}},
+            {"codec_type": "video", "index": 2,
+             "avg_frame_rate": "60000/2002", "nb_frames": "45"},
+            {"codec_type": "audio", "index": 5, "sample_rate": "48000"}]}
+        report, calls = self.inspect(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["video_details"][0]["stream_index"], 2)
+        self.assertEqual(report["video_details"][0]["fps_ratio"], "30000/1001")
+        self.assertEqual(report["video_details"][0]["reported_frames"], 45)
+        self.assertEqual(report["audio_details"][0]["stream_index"], 5)
+        self.assertTrue(any("0:2" in command for command in calls
+                            if command[0] == "ffmpeg"))
+
+    def test_unknown_fps_ratio_remains_null(self):
+        metadata = {"format": {"duration": "1.5"}, "streams": [
+            {"codec_type": "video", "avg_frame_rate": "0/0"},
+            {"codec_type": "audio"}]}
+        report, _ = self.inspect(metadata)
+        self.assertTrue(report["passed"], report)
+        self.assertIsNone(report["video_details"][0]["fps_ratio"])
+
+
 if __name__ == "__main__":
     unittest.main()
