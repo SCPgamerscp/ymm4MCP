@@ -20,6 +20,12 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 {"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","expected_duration_seconds":600,"duration_tolerance_seconds":0.5}
 ```
 
+期待する動画形式を指定できます。 `expected_width` / `expected_height`（各1〜16384）、`expected_fps`（0超〜240、`fps_tolerance` は既定0.1）、`expected_audio_sample_rate`（8000〜384000Hz）、`expected_audio_channels`（1〜8）を指定すると、**全ての該当ストリーム**を検証します。不一致は `EXPORT_VIDEO_FORMAT_MISMATCH` / `EXPORT_AUDIO_FORMAT_MISMATCH`、必要なメタデータ欠落は `EXPORT_VIDEO_FORMAT_UNKNOWN` / `EXPORT_AUDIO_FORMAT_UNKNOWN`（いずれもerror）です。音声形式を指定すると `require_audio:false` でも音声が必須になります。未指定なら従来の検証動作です。
+
+```json
+{"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","expected_width":1920,"expected_height":1080,"expected_fps":30,"fps_tolerance":0.1,"expected_audio_sample_rate":48000,"expected_audio_channels":2}
+```
+
 `qa_gate` に `decoded_export_check` として同じ設定を渡すと、構造QAと併せて合否判定に反映できます。
 
 ```json
