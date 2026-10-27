@@ -1190,5 +1190,42 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertIn("EXPORT_FULL_DECODE_FAILED",
                       [issue["code"] for issue in report["issues"]])
 
+    def test_partially_indexed_stream_table_is_rejected(self):
+        # ffprobe normally indexes every stream. A mixed table may hide a
+        # missing track or make the ordinal-to-stream mapping ambiguous.
+        metadata = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "index": 0},
+                        {"codec_type": "audio"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertFalse(report["passed"], report)
+        self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        # Legacy mocks that omit all indices remain supported.
+        legacy = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        self.assertTrue(self.inspect_with_probe(legacy)["passed"])
+
+    def test_zero_duration_audio_or_video_stream_cannot_pass(self):
+        # A reported empty stream must not pass merely because a mock or
+        # permissive decoder returns exit code zero for a sample.
+        for kind in ("video", "audio"):
+            with self.subTest(kind=kind):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", **(
+                        {"duration": "0"} if kind == "video" else {})},
+                        {"codec_type": "audio", **(
+                            {"duration": "0.000"} if kind == "audio" else {})}]})
+                report = self.inspect_with_probe(metadata)
+                self.assertFalse(report["passed"], report)
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        # Unknown durations must not be mistaken for known-empty tracks.
+        unknown = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "duration": "N/A"},
+                        {"codec_type": "audio"}]})
+        self.assertTrue(self.inspect_with_probe(unknown)["passed"])
+
 if __name__ == "__main__":
     unittest.main()
