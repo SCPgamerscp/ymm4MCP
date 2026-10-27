@@ -50,8 +50,14 @@ class RequiredTrackTailTests(unittest.TestCase):
         self.assertEqual(len(matches), 1, result)
         return matches[0]
 
-    def test_required_primary_audio_ending_early_fails_qa(self):
+    def test_default_primary_audio_ending_early_is_advisory(self):
         result = self.inspect()
+        self.assertTrue(result["success"], result)
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(self.tail(result, "audio")["severity"], "warning")
+
+    def test_strict_primary_audio_ending_early_fails_qa(self):
+        result = self.inspect(require_tracks_to_end=True)
         self.assertTrue(result["success"], result)
         self.assertFalse(result["passed"], result)
         self.assertEqual(self.tail(result, "audio")["severity"], "error")
@@ -61,13 +67,14 @@ class RequiredTrackTailTests(unittest.TestCase):
         self.assertTrue(result["passed"], result)
         self.assertEqual(self.tail(result, "audio")["severity"], "warning")
 
-    def test_expected_audio_format_makes_primary_audio_required(self):
+    def test_audio_format_expectation_does_not_imply_tail_continuity(self):
         result = self.inspect(require_audio=False, expected_audio_sample_rate=44100)
-        self.assertFalse(result["passed"], result)
-        self.assertEqual(self.tail(result, "audio")["severity"], "error")
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(self.tail(result, "audio")["severity"], "warning")
 
-    def test_primary_video_ending_early_fails_qa(self):
-        result = self.inspect(video_duration="1.0", audio_durations=("4.0",))
+    def test_strict_primary_video_ending_early_fails_qa(self):
+        result = self.inspect(video_duration="1.0", audio_durations=("4.0",),
+                              require_tracks_to_end=True)
         self.assertFalse(result["passed"], result)
         self.assertEqual(self.tail(result, "video")["severity"], "error")
 
@@ -75,6 +82,16 @@ class RequiredTrackTailTests(unittest.TestCase):
         result = self.inspect(audio_durations=("4.0", "1.0"))
         self.assertTrue(result["passed"], result)
         self.assertEqual(self.tail(result, "audio", 1)["severity"], "warning")
+
+    def test_strict_secondary_audio_is_checked_too(self):
+        result = self.inspect(audio_durations=("4.0", "1.0"),
+                              require_tracks_to_end=True)
+        self.assertFalse(result["passed"], result)
+        self.assertEqual(self.tail(result, "audio", 1)["severity"], "error")
+
+    def test_rejects_non_boolean_strict_option(self):
+        with self.assertRaisesRegex(ValueError, "require_tracks_to_end"):
+            self.inspect(require_tracks_to_end="true")
 
 
 if __name__ == "__main__":
