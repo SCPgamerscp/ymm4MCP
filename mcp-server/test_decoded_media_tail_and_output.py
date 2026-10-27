@@ -1262,9 +1262,9 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
     def test_signal_parser_ignores_metadata_and_unrelated_logs(self):
         # FFmpeg -v info prints attacker-controlled container metadata. It
         # must not be interpreted as a black/silence/freeze filter finding.
-        log = ("title: black_start: 1 black_end: 5\\n"
-               "comment: silence_start: 2 silence_end: 6\\n"
-               "[h264 @ 0x123] freeze_start: 1 freeze_end: 5\\n")
+        log = ("title: black_start: 1 black_end: 5\n"
+               "comment: silence_start: 2 silence_end: 6\n"
+               "[h264 @ 0x123] freeze_start: 1 freeze_end: 5\n")
         for start, end in (("black_start", "black_end"),
                            ("silence_start", "silence_end"),
                            ("freeze_start", "freeze_end")):
@@ -1272,9 +1272,9 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
 
     def test_audio_peak_parser_ignores_metadata_but_accepts_astats(self):
         self.assertIsNone(qa._audio_peak_db(
-            "title: Peak level dB: 0\\n[other @ 0x123] Peak level dB: 0"))
+            "title: Peak level dB: 0\n[other @ 0x123] Peak level dB: 0"))
         self.assertEqual(qa._audio_peak_db(
-            "[Parsed_astats_0 @ 0x123] Peak level dB: -3.5\\n"
+            "[Parsed_astats_0 @ 0x123] Peak level dB: -3.5\n"
             "Peak level dB: -2.5"), -2.5)
         self.assertEqual(qa._signal_ranges(
             "[Parsed_blackdetect_0 @ 0x123] black_start: 1 black_end: 3",
