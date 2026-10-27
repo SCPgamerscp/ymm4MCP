@@ -77,7 +77,7 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s mcp-server -p 'test_*.py' -q",
                       self.source)
         self.assertIn(
-            "python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration",
+            "python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration test_decoded_media_required_tail_20261028",
             self.source,
         )
 
