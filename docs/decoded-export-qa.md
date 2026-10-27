@@ -32,6 +32,18 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 {"action":"qa_gate","decoded_export_check":{"path":"C:/Videos/final.mp4","require_audio":true,"sample_seconds":8}}
 ```
 
+## オプション：コーデック指定・黒画面/無音/フリーズの合否ゲート
+
+`expected_video_codec` / `expected_audio_codec` を指定すると、全ての映像/音声トラックのFFprobe `codec_name` を照合します。例: `h264`, `hevc`, `aac`, `opus`。未取得なら `EXPORT_VIDEO_CODEC_UNKNOWN` / `EXPORT_AUDIO_CODEC_UNKNOWN`、不一致なら `EXPORT_VIDEO_CODEC_MISMATCH` / `EXPORT_AUDIO_CODEC_MISMATCH`（いずれもerror）です。指定する名前は小文字英数字・アンダースコアのみ（1〜32文字）です。音声コーデックを指定すると音声トラックは必須になります。
+
+`max_black_seconds` / `max_silence_seconds` / `max_freeze_seconds` を指定すると、**実際に観測した**各黒画面・無音・静止区間が閾値を超えた場合、`EXPORT_BLACK_DURATION_EXCEEDED` / `EXPORT_SILENCE_DURATION_EXCEEDED` / `EXPORT_FREEZE_DURATION_EXCEEDED`（error）として不合格にします。閾値は0〜900秒です。未指定時は従来どおり警告のみです。複数のサンプル窓で重複観測した同一区間は結合後に判定します。**サンプル検証だけでは未観測区間の品質を保証できません**。全尺の品質条件を検証したい場合は `full_decode:true` と `full_signal_scan:true` を併用してください。
+
+`require_audio_peak_metrics:true` は、デコードに成功した音声サンプルでもFFmpeg `astats` の有効なピーク測定が存在しない場合に `EXPORT_SAMPLE_AUDIO_METRICS_UNAVAILABLE`（error）を返します。完全無音を示す `-inf` は有効な測定値です。既定は `false` で互換性を維持します。すべて `qa_gate.decoded_export_check` でも指定できます。
+
+```json
+{"action":"qa_gate","decoded_export_check":{"path":"C:/Videos/final.mp4","expected_video_codec":"h264","expected_audio_codec":"aac","max_black_seconds":2,"max_silence_seconds":3,"max_freeze_seconds":4,"require_audio_peak_metrics":true,"full_decode":true,"full_signal_scan":true}}
+```
+
 ## オプション：全トラックの末尾までの継続確認
 
 音声トラックはBGMなどの演出で動画より早く終了することがあるため、`EXPORT_STREAM_ENDS_EARLY` は既定で**警告**です。音声を含めた全ストリームが動画の末尾まで続くことを完成条件とする場合、`require_tracks_to_end:true` を指定してください。映像・音声の各トラックがコンテナ尺より**1秒超**短いと `EXPORT_STREAM_ENDS_EARLY`（error）になり、必要なストリーム時刻メタデータを取得できない場合は `EXPORT_STREAM_TAIL_UNVERIFIABLE`（error）になります。短いBGM・SEなどを別トラックとして含む作品では指定しないでください。
