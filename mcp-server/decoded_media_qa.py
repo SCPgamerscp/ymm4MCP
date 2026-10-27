@@ -330,6 +330,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                         raise ValueError("stream start offset overflow")
                     if relative_start > duration + 1:
                         raise ValueError("stream starts beyond container end")
+                    # Finite individual timestamps can still overflow when
+                    # added. Reject them before QA emits Infinity in JSON.
+                    track_length = _optional_stream_time(stream.get("duration"))
+                    if track_length is not None and not math.isfinite(
+                            relative_start + track_length):
+                        raise ValueError("stream end offset overflow")
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
@@ -384,15 +390,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         for ordinal, stream in enumerate(tracks):
             track_duration = _optional_stream_time(stream.get("duration"))
             track_start = _optional_stream_time(stream.get("start_time"), signed=True)
-            if track_start is None:
-                track_start = container_start
-            track_start -= container_start
+            # An unknown track origin is not evidence that the track starts
+            # at the container origin. Avoid invented end/gap warnings.
+            if track_start is not None:
+                track_start -= container_start
             if track_start is not None and track_start > 1.0:
                 issues.append({"code": "EXPORT_STREAM_STARTS_LATE",
                                "severity": "warning", "stream_type": kind,
                                "stream_ordinal": ordinal,
                                "missing_head_seconds": round(track_start, 3)})
-            if track_start < -1.0:
+            if track_start is not None and track_start < -1.0:
                 # Negative preroll is allowed, but excessive offsets should
                 # be visible to the unattended editor as a QA warning.
                 issues.append({"code": "EXPORT_STREAM_STARTS_BEFORE_CONTAINER",
@@ -429,6 +436,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     frozen_frames = []
     long_silences = []
     audio_peaks = []
+    # Overlapping head/tail sample windows can observe the same signal twice.
+    # Track exact global ranges per stream so a single defect is not reported
+    # twice to an unattended repair agent.
+    seen_signals = {"video": set(), "audio": set(), "freeze": set()}
     # Per-command timeouts alone allow up to 32 slow subprocesses. Bound
     # the complete synchronous sampling pass to two minutes.
     sample_deadline = time.monotonic() + 120
@@ -487,6 +498,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                     else ("silence_start", "silence_end"))
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, length):
+                signal_key = (ordinal, round(start + signal_start, 6),
+                              round(start + signal_end, 6))
+                if signal_key in seen_signals[kind]:
+                    continue
+                seen_signals[kind].add(signal_key)
                 event = {"sample_start_seconds": round(start, 6),
                          "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
@@ -504,6 +520,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             if kind == "video":
                 for freeze_start, freeze_end in _signal_ranges(
                         decoded.stderr or "", "freeze_start", "freeze_end", length):
+                    signal_key = (ordinal, round(start + freeze_start, 6),
+                                  round(start + freeze_end, 6))
+                    if signal_key in seen_signals["freeze"]:
+                        continue
+                    seen_signals["freeze"].add(signal_key)
                     event = {"sample_start_seconds": round(start, 6),
                              "stream_ordinal": ordinal,
                              "filter_start_seconds": round(freeze_start, 3),
