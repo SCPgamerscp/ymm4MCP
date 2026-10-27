@@ -18,6 +18,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8-sig")
         cls.release = cls.workflow.split("\n  release:\n", 1)[1]
 
+    def test_server_archive_excludes_untracked_credentials(self):
+        # This regression protects the published ZIP, not only the installer.
+        self.assertIn('git archive --format=zip "--output=$serverPackage" HEAD mcp-server',
+                      self.workflow)
+        self.assertIn('[IO.File]::WriteAllText($localToken', self.workflow)
+        self.assertIn('[IO.File]::WriteAllText($localEnv', self.workflow)
+        self.assertIn('Sensitive or ephemeral files in Python release ZIP',
+                      self.workflow)
+        self.assertNotIn('Compress-Archive -Path mcp-server', self.workflow)
+
     def test_release_requires_both_test_and_package_jobs(self):
         self.assertIn("needs: [package, python-tests]", self.release)
         self.assertIn("group: ymm4mcp-release", self.release)
