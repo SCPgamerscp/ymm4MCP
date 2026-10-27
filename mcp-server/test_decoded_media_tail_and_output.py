@@ -956,10 +956,10 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             start = float(command[command.index("-ss") + 1])
             relative_start, relative_end = 5 - start, 11 - start
             if "0:v:0" in command:
-                log = (f"black_start: {relative_start} black_end: {relative_end}\\n"
-                       f"freeze_start: {relative_start} freeze_end: {relative_end}\\n")
+                log = (f"black_start: {relative_start} black_end: {relative_end}\n"
+                       f"freeze_start: {relative_start} freeze_end: {relative_end}\n")
             else:
-                log = f"silence_start: {relative_start} silence_end: {relative_end}\\n"
+                log = f"silence_start: {relative_start} silence_end: {relative_end}\n"
             return subprocess.CompletedProcess(command, 0, "", log)
 
         with patch.object(qa, "run", side_effect=fake):
@@ -989,9 +989,9 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             if command[0] == "ffprobe":
                 return subprocess.CompletedProcess(command, 0, metadata, "")
             start = float(command[command.index("-ss") + 1])
-            log = ("black_start: 5 black_end: 6\\n"
-                   "black_start: 7 black_end: 8\\n" if start == 0
-                   else "black_start: 1.5 black_end: 3.5\\n")
+            log = ("black_start: 5 black_end: 6\n"
+                   "black_start: 7 black_end: 8\n" if start == 0
+                   else "black_start: 1.5 black_end: 3.5\n")
             return subprocess.CompletedProcess(command, 0, "", log)
 
         with patch.object(qa, "run", side_effect=fake):
