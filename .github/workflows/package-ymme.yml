@@ -321,24 +321,30 @@ jobs:
             # A manual release is explicit and cannot silently overwrite a tag or release.
             gh release view $tag --json tagName *> $null
             if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; bump Version for a new release" }
-            # gh release create may create the tag and then fail before the
-            # Release or its assets exist. A rerun must recover safely rather
-            # than leaving users permanently unable to publish this version.
-            gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              # Reuse only a tag that resolves to THIS tested main commit.
-              # Never move or overwrite a tag pointing at other source code.
-              git fetch --no-tags origin "refs/tags/$tag"
-              if ($LASTEXITCODE -ne 0) { throw "Could not inspect existing tag $tag" }
-              $tagCommit = (git rev-list -n 1 FETCH_HEAD).Trim()
-              if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $env:GITHUB_SHA) {
-                throw "Tag $tag points to a different commit; bump Version instead of overwriting it"
-              }
-              gh release create $tag $packagePath $serverPackage[0].FullName --verify-tag --title $tag --notes $notes
+            # Explicitly create the tag with an atomic Git ref API call.
+            # A failed release upload can leave this tag behind; reruns may
+            # resume ONLY when it still points to the exact tested main SHA.
+            # Distinguish a missing tag (exit 2) from network/auth errors.
+            $tagRef = "refs/tags/$tag"
+            $null = git ls-remote --exit-code --refs origin $tagRef
+            $tagProbeExit = $LASTEXITCODE
+            if ($tagProbeExit -eq 2) {
+              # POST fails instead of overwriting if another publisher races.
+              gh api -X POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=$tagRef" -f "sha=$env:GITHUB_SHA" --silent
+              if ($LASTEXITCODE -ne 0) { throw "Could not create immutable release tag $tag" }
             }
-            else {
-              gh release create $tag $packagePath $serverPackage[0].FullName --target $env:GITHUB_SHA --title $tag --notes $notes
+            elseif ($tagProbeExit -ne 0) {
+              throw "Could not check whether release tag $tag exists (git exit $tagProbeExit)"
             }
+            git fetch --no-tags origin $tagRef
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect release tag $tag" }
+            $tagCommit = (git rev-list -n 1 FETCH_HEAD).Trim()
+            if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $env:GITHUB_SHA) {
+              throw "Tag $tag points to a different commit; bump Version instead of overwriting it"
+            }
+            # --verify-tag ensures the Release operation never silently
+            # creates or retargets a tag, including on safe retry.
+            gh release create $tag $packagePath $serverPackage[0].FullName --verify-tag --title $tag --notes $notes
             if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
             $createdRelease = $true
           }
