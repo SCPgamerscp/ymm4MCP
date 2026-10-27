@@ -114,6 +114,37 @@ class ExpectedDecodedFormatTests(unittest.TestCase):
                                expected_fps=30, fps_tolerance=0.001)
         self.assertFalse(report["passed"])
 
+    def test_expected_track_counts_reject_extra_video_and_audio(self):
+        streams = [
+            {"codec_type": "video"}, {"codec_type": "video"},
+            {"codec_type": "audio"}, {"codec_type": "audio"},
+        ]
+        report, _ = self.check(
+            streams, expected_video_streams=1, expected_audio_streams=1)
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            {i["code"] for i in report["issues"]
+             if i["code"].endswith("STREAM_COUNT_MISMATCH")},
+            {"EXPORT_VIDEO_STREAM_COUNT_MISMATCH",
+             "EXPORT_AUDIO_STREAM_COUNT_MISMATCH"})
+
+    def test_expected_zero_audio_is_allowed_only_when_audio_optional(self):
+        streams = [{"codec_type": "video"}]
+        report, _ = self.check(
+            streams, require_audio=False,
+            expected_video_streams=1, expected_audio_streams=0)
+        self.assertTrue(report["passed"], report)
+        with self.assertRaises(ValueError):
+            qa.inspect(str(self.video), expected_audio_streams=0)
+
+    def test_expected_zero_audio_rejects_unexpected_audio_track(self):
+        streams = [{"codec_type": "video"}, {"codec_type": "audio"}]
+        report, _ = self.check(
+            streams, require_audio=False, expected_audio_streams=0)
+        self.assertFalse(report["passed"])
+        self.assertIn("EXPORT_AUDIO_STREAM_COUNT_MISMATCH",
+                      [i["code"] for i in report["issues"]])
+
     def test_invalid_expectations_fail_before_subprocess(self):
         invalid = (
             {"expected_width": True},
@@ -124,6 +155,10 @@ class ExpectedDecodedFormatTests(unittest.TestCase):
             {"expected_fps": True},
             {"fps_tolerance": float("inf")},
             {"fps_tolerance": -1},
+            {"expected_video_streams": 0},
+            {"expected_video_streams": True},
+            {"expected_audio_streams": -1},
+            {"expected_audio_streams": 17},
         )
         for options in invalid:
             with self.subTest(options=options), self.assertRaises(ValueError):
