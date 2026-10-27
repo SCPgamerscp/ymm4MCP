@@ -223,9 +223,13 @@ def _audio_overall_silent(log):
         if payload == "Overall":
             in_overall = True
         elif re.match(r"^Channel(?:\s|:|$)", payload):
-            # A malformed channel header is still a section boundary.
-            # Never attribute its following peak to the preceding Overall.
+            # A malformed channel header is a section boundary, but also
+            # makes the earlier Overall summary insufficient evidence of
+            # complete silence in this sample.
             in_overall = False
+            header = re.fullmatch(r"Channel:\s*([1-9][0-9]{0,2})", payload)
+            if not header or int(header.group(1)) > 64:
+                silent = None
         elif in_overall and payload.startswith("Peak level dB:"):
             # Overall summaries can repeat. A later silent summary must
             # not erase evidence of an earlier non-silent segment.
