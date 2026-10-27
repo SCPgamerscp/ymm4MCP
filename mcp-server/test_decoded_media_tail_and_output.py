@@ -139,6 +139,17 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                         {"codec_type": "audio", "index": 3}]}))
         self.assertTrue(valid["passed"], valid)
 
+    def test_json_exponent_overflow_is_rejected_even_in_unused_fields(self):
+        prefix = ('{"format":{"duration":"8"},"streams":'
+                  '[{"codec_type":"video"},{"codec_type":"audio"}],'
+                  '"unused":{"value":')
+        for value in ("1e9999", "-1e9999", "1e309"):
+            with self.subTest(value=value):
+                report = self.inspect_with_probe(prefix + value + "}}")
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+        valid = self.inspect_with_probe(prefix + "1.25e2}}")
+        self.assertTrue(valid["passed"], valid)
+
     def test_nonfinite_filter_timestamps_do_not_enter_qa_report(self):
         huge = "9" * 400
         self.assertEqual(qa._signal_ranges(
