@@ -222,7 +222,9 @@ def _audio_overall_silent(log):
             line, "astats", ("Channel", "Overall", "Peak level dB")).strip()
         if payload == "Overall":
             in_overall = True
-        elif payload.startswith("Channel:"):
+        elif re.match(r"^Channel(?:\s|:|$)", payload):
+            # A malformed channel header is still a section boundary.
+            # Never attribute its following peak to the preceding Overall.
             in_overall = False
         elif in_overall and payload.startswith("Peak level dB:"):
             # Overall summaries can repeat. A later silent summary must
