@@ -23,11 +23,21 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("group: ymm4mcp-release", self.release)
         self.assertIn("cancel-in-progress: false", self.release)
 
-    def test_manual_release_rejects_stale_main_and_existing_tags(self):
+    def test_manual_release_requires_latest_main_and_never_overwrites_release(self):
         self.assertIn("$env:GITHUB_REF -ne 'refs/heads/main'", self.release)
         self.assertIn("$current -ne $latest", self.release)
         self.assertIn("gh release view $tag --json tagName", self.release)
+        self.assertIn("Release $tag already exists; bump Version", self.release)
+
+    def test_manual_release_recovers_only_tag_on_same_tested_commit(self):
         self.assertIn('gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag"', self.release)
+        self.assertIn('git fetch --no-tags origin "refs/tags/$tag"', self.release)
+        self.assertIn("git rev-list -n 1 FETCH_HEAD", self.release)
+        self.assertIn("$tagCommit -ne $env:GITHUB_SHA", self.release)
+        self.assertIn("Tag $tag points to a different commit", self.release)
+        self.assertIn("gh release create $tag $packagePath $serverPackage[0].FullName --verify-tag", self.release)
+        self.assertIn("gh release create $tag $packagePath $serverPackage[0].FullName --target $env:GITHUB_SHA", self.release)
+        self.assertIn("$createdRelease = $true", self.release)
 
     def test_tag_rerun_verifies_existing_release_without_overwrite(self):
         self.assertIn("Release $tag already exists; verifying without modifying it",
