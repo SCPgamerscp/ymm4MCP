@@ -62,10 +62,11 @@ class FailClosedExportInputsTests(unittest.TestCase):
             {"expected_fps": huge},
             {"fps_tolerance": huge},
         ):
-            with self.subTest(options=list(options)), patch.object(
-                    qa, "run") as run, self.assertRaises(ValueError):
-                qa.inspect(str(self.video), **options)
-                run.assert_not_called()
+            with self.subTest(options=list(options)):
+                with patch.object(qa, "run") as run:
+                    with self.assertRaises(ValueError):
+                        qa.inspect(str(self.video), **options)
+                    run.assert_not_called()
 
     def test_zero_audio_count_cannot_request_audio_format(self):
         for options in (
@@ -74,11 +75,12 @@ class FailClosedExportInputsTests(unittest.TestCase):
             {"expected_audio_sample_rate": 48000,
              "expected_audio_channels": 2},
         ):
-            with self.subTest(options=options), patch.object(
-                    qa, "run") as run, self.assertRaises(ValueError):
-                qa.inspect(str(self.video), require_audio=False,
-                           expected_audio_streams=0, **options)
-                run.assert_not_called()
+            with self.subTest(options=options):
+                with patch.object(qa, "run") as run:
+                    with self.assertRaises(ValueError):
+                        qa.inspect(str(self.video), require_audio=False,
+                                   expected_audio_streams=0, **options)
+                    run.assert_not_called()
 
     def test_zero_audio_count_without_audio_format_is_valid(self):
         report = self.check_probe({
