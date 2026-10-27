@@ -58,7 +58,7 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'YukkuriMovieMaker_v4_Lite.zip'
           $directory = Join-Path $env:RUNNER_TEMP 'ymm4-lite'
-          Invoke-WebRequest -Uri 'https://object-storage.tyo1.conoha.io/v1/nc_4fac3ef0e6d843249e0ab2f1fc3e8f85/public/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
+          Invoke-WebRequest -Uri 'https://files.manjubox.net/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $directory
           $pluginDlls = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter 'YukkuriMovieMaker.Plugin.dll' -File)
           if ($pluginDlls.Count -ne 1) { throw "Expected one YMM4 Plugin DLL; found $($pluginDlls.Count)" }
