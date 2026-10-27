@@ -227,7 +227,7 @@ TOOLS = [
                 "hash": {"type": "boolean", "description": "get_info/assets: 64 MiB 以下の素材の SHA-256 と重複候補を取得"},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "description": "get_info/assets: 返却件数。既定100"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
-                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 604800, "description": "get_info/export_qa/decoded_export_qa: 期待する動画の長さ"},
+                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa/decoded_export_qa: 期待する動画の長さ"},
                 "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa/decoded_export_qa: 尺の許容誤差。既定1秒"},
                 "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
                 "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
