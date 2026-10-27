@@ -456,6 +456,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     # absolute ranges. Coalesce overlapping intervals per signal type/track
     # and keep the public event and its separate QA issue in sync.
     signal_records = {"video": [], "audio": [], "freeze": []}
+    # A track outside all chosen windows must not be silently certified.
+    sampled_tracks = set()
 
     def record_signal(kind, event, code, destination):
         records = signal_records[kind]
@@ -509,6 +511,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         for kind, ordinal, stream in (
                 [("video", i, track) for i, track in enumerate(videos)]
                 + [("audio", i, track) for i, track in enumerate(audios)]):
+            # A late-starting or early-ending track can have no frames in
+            # a sample window. Skip only with validated ffprobe timestamps;
+            # absence of a track in this window is not a decode failure.
+            track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+            track_duration = _optional_stream_time(stream.get("duration"))
+            if track_start is not None:
+                relative_start = track_start - container_start
+                if start + length <= relative_start or (
+                        track_duration is not None
+                        and start >= relative_start + track_duration):
+                    continue
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
             signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
@@ -537,6 +550,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                "start_seconds": round(start, 6),
                                "details": (decoded.stderr or "")[-500:]})
                 continue
+            sampled_tracks.add((kind, ordinal))
             if kind == "audio":
                 peak = _audio_peak_db(decoded.stderr or "")
                 if peak is not None:
@@ -580,6 +594,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                              "duration_seconds": round(freeze_end - freeze_start, 3)}
                     record_signal("freeze", event, "EXPORT_SAMPLE_FROZEN_FRAMES",
                                   frozen_frames)
+    # A short track may lie entirely between sample windows. Do not claim
+    # that QA passed when that track was never actually decoded.
+    for kind, tracks in (("video", videos), ("audio", audios)):
+        for ordinal in range(len(tracks)):
+            if (kind, ordinal) not in sampled_tracks:
+                issues.append({"code": "EXPORT_STREAM_NOT_SAMPLED",
+                               "severity": "error", "stream_type": kind,
+                               "stream_ordinal": ordinal})
     full_decode_ok = False
     if full_decode and videos:
         full_decode_ok = True
