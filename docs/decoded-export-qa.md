@@ -42,7 +42,7 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 
 `min_audio_peak_dbfs` / `max_audio_peak_dbfs`（各 -120〜12dBFS）を指定すると、**各サンプル**の最大サンプルピークが下限未満・上限超過の場合に `EXPORT_SAMPLE_AUDIO_PEAK_TOO_LOW` / `EXPORT_SAMPLE_AUDIO_PEAK_TOO_HIGH`（error）にします。ピークが測定不能な場合は `EXPORT_SAMPLE_AUDIO_PEAK_UNVERIFIABLE`（error）で、完全無音の `-inf` は下限を下回るものとして扱います。ピーク値はLUFS/True Peakではなく、音量感や歪みの確定診断ではありません。
 
-`max_stereo_imbalance_db`（0〜120dB）は、ステレオ音声の左右サンプルピーク差が上限を超えた場合に `EXPORT_SAMPLE_STEREO_IMBALANCE_EXCEEDED`（error）にします。左右の測定値が揃わない場合は `EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE`（error）です。片側が完全無音で他方に音がある場合も不合格になります。
+`max_stereo_imbalance_db`（0〜120dB）は、ステレオ音声の左右サンプルピーク差が上限を超えた場合に `EXPORT_SAMPLE_STEREO_IMBALANCE_EXCEEDED`（error）にします。左右の測定値が揃わない場合は `EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE`（error）です。チャンネル数が不明・ステレオ以外の場合は `EXPORT_SAMPLE_STEREO_CHANNELS_UNVERIFIABLE`（error）です。音声品質ゲートを指定すると `require_audio:false` でも音声ストリームが必須になります。片側が完全無音で他方に音がある場合も不合格になります。
 
 `require_audio_peak_metrics:true` は、デコードに成功した音声サンプルでもFFmpeg `astats` の有効なピーク測定が存在しない場合に `EXPORT_SAMPLE_AUDIO_METRICS_UNAVAILABLE`（error）を返します。完全無音を示す `-inf` は有効な測定値です。既定は `false` で互換性を維持します。すべて `qa_gate.decoded_export_check` でも指定できます。
 
