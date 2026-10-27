@@ -1426,5 +1426,83 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             "lavfi.freezedetect.freeze_end: 3",
             "freeze_start", "freeze_end", 8), [(1.0, 3.0)])
 
+
+    def inspect_with_channel_astats(self, astats, *, channels=2):
+        metadata = json.dumps({
+            "format": {"duration": "1.5"},
+            "streams": [{"codec_type": "video"},
+                        {"codec_type": "audio", "channels": channels}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            audio = "-map" in command and command[command.index("-map") + 1] == "0:a:0"
+            return subprocess.CompletedProcess(command, 0, "", astats if audio else "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            return qa.inspect(str(self.video))
+
+    def test_channel_astats_parser_ignores_metadata_and_overall_peak(self):
+        log = ("title: Channel: 1\n"
+               "[other @ 0x123] Peak level dB: 0\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -4.5\n"
+               "[Parsed_astats_0 @ 0x123] Overall\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: 0\n")
+        self.assertEqual(qa._audio_channel_peaks(log), {1: -4.5})
+
+    def test_stereo_peak_imbalance_is_reported_as_warning(self):
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -3\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -25\n"
+               "[Parsed_astats_0 @ 0x123] Overall\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -3\n")
+        report = self.inspect_with_channel_astats(log)
+        self.assertTrue(report["passed"], report)
+        warnings = [issue for issue in report["issues"]
+                    if issue["code"] == "EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE"]
+        self.assertEqual(len(warnings), 1, report)
+        self.assertEqual(warnings[0]["left_peak_dbfs"], -3)
+        self.assertEqual(warnings[0]["right_peak_dbfs"], -25)
+
+    def test_short_all_silent_audio_sample_is_reported(self):
+        # silencedetect=d=2 cannot detect a 1.5-second silent export.
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n")
+        report = self.inspect_with_channel_astats(log)
+        self.assertTrue(report["passed"], report)
+        codes = [issue["code"] for issue in report["issues"]]
+        self.assertIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT", codes)
+        self.assertNotIn("EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE", codes)
+
+    def test_astats_channel_count_disagreement_is_reported(self):
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -3\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 3\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -4\n")
+        report = self.inspect_with_channel_astats(log)
+        self.assertTrue(report["passed"], report)
+        warnings = [issue for issue in report["issues"]
+                    if issue["code"] == "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH"]
+        self.assertEqual(len(warnings), 1, report)
+        self.assertEqual(warnings[0]["declared_channels"], 2)
+        self.assertEqual(warnings[0]["observed_channels"], [1, 3])
+
+    def test_balanced_stereo_audio_does_not_trigger_channel_warnings(self):
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -6\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -7\n")
+        report = self.inspect_with_channel_astats(log)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any(issue["code"] in (
+            "EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE",
+            "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
+            "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH")
+            for issue in report["issues"]), report)
+
 if __name__ == "__main__":
     unittest.main()
