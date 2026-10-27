@@ -27,6 +27,10 @@ class FakeYmm4:
         self.item_length = 100
         self.item_type = "ImageItem"
         self.item_count = 1
+        self.inventory_complete = True
+        self.force_revision_conflict = False
+        self.external_change_before_cleanup = None
+        self.property_get_count = {}
 
     def __call__(self, request):
         assert request.headers.get("X-Ymm4-Token") == "fake-test-token"
@@ -39,10 +43,20 @@ class FakeYmm4:
                     for _ in range(self.item_count)]})
             prop = request.url.params.get("prop")
             if prop is None:
-                return httpx.Response(200, json={"success": True, "animations": [
+                assert request.url.params.get("strict_inventory") == "1"
+                return httpx.Response(200, json={"success": True,
+                                                 "inventory_complete": self.inventory_complete,
+                                                 "animations": [
                     {"prop": name, "keyframes": [dict(f) for f in frames]}
                     for name, frames in self.frames.items()],
                     "revision": f"r{self.revision}"})
+            self.property_get_count[prop] = self.property_get_count.get(prop, 0) + 1
+            if (prop == self.external_change_before_cleanup
+                    and self.property_get_count[prop] == 4):
+                # Simulate a second editor replacing the just-inserted frame
+                # between probe readback and the cleanup GET.
+                self.frames[prop][-1]["value"] += 50
+                self.revision += 1
             if prop not in self.frames:
                 return httpx.Response(200, json={"success": True, "animations": [],
                                                   "revision": f"r{self.revision}"})
@@ -56,6 +70,9 @@ class FakeYmm4:
             return httpx.Response(200, json={"success": False,
                                               "error_code": "REVISION_CONFLICT"})
         if action == "set":
+            if self.force_revision_conflict:
+                return httpx.Response(200, json={"success": False,
+                                                  "error_code": "REVISION_CONFLICT"})
             value = body["value"]
             if prop == self.bad_value:
                 value += 10
@@ -75,7 +92,8 @@ class FakeYmm4:
             if prop == self.corrupt_unrelated_on_remove:
                 self.frames["Opacity"][0]["value"] += 1
             self.revision += 1
-        return httpx.Response(200, json={"success": True})
+        return httpx.Response(200, json={"success": True,
+                                          "revision": f"r{self.revision}"})
 
 
 def probe(fake):
@@ -109,6 +127,29 @@ class LiveProbeProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "unavailable"):
             probe(fake)
         self.assertEqual(fake.posts, [])
+
+    def test_incomplete_animation_inventory_rejected_before_write(self):
+        fake = FakeYmm4()
+        fake.inventory_complete = False
+        with self.assertRaisesRegex(ProbeError, "Incomplete animation inventory"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+
+    def test_revision_conflict_does_not_remove_another_editors_frame(self):
+        fake = FakeYmm4()
+        fake.force_revision_conflict = True
+        with self.assertRaisesRegex(ProbeError, "REVISION_CONFLICT"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
+
+    def test_concurrent_change_after_readback_refuses_cleanup(self):
+        fake = FakeYmm4()
+        fake.external_change_before_cleanup = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*changed after readback"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.25})
 
     def test_out_of_bounds_frame_rejected_before_write(self):
         fake = FakeYmm4()
