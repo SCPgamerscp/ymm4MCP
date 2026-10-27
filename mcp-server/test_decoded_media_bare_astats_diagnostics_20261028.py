@@ -81,6 +81,12 @@ class BareAstatsDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
                          [issue["code"] for issue in report["issues"]])
 
+    def test_generic_channel_layout_metadata_is_not_an_astats_header(self):
+        report = self.inspect_audio("Channel layout: stereo\n")
+        self.assertTrue(report["passed"], report)
+        self.assertNotIn("EXPORT_SAMPLE_AUDIO_CHANNEL_HEADER_INVALID",
+                         [issue["code"] for issue in report["issues"]])
+
     def test_unrelated_prefixed_filter_lines_are_not_trusted(self):
         log = ("[Parsed_other_0 @ 0x123] Peak level dBFS: -1\n"
                "[Parsed_other_0 @ 0x123] Channel 0\n"
