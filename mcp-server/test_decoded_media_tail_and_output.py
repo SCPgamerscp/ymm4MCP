@@ -642,13 +642,16 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(report["fps"], 29.97)
         self.assertEqual(report["video_details"], [
             {"stream_ordinal": 0, "stream_index": None,
+             "start_seconds": None, "duration_seconds": None, "end_seconds": None,
              "width": 1920, "height": 1080, "fps": 29.97,
              "fps_ratio": "30000/1001", "reported_frames": None},
             {"stream_ordinal": 1, "stream_index": None,
+             "start_seconds": None, "duration_seconds": None, "end_seconds": None,
              "width": 1280, "height": 720, "fps": 25.0,
              "fps_ratio": "25/1", "reported_frames": None}])
         self.assertEqual(report["audio_details"], [
             {"stream_ordinal": 0, "stream_index": None,
+             "start_seconds": None, "duration_seconds": None, "end_seconds": None,
              "sample_rate": 48000, "channels": 2}])
 
     def test_rejects_malformed_or_impossible_video_frame_rates(self):
