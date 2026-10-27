@@ -121,6 +121,27 @@ def _audio_channel_peaks(log):
     return peaks
 
 
+
+def _audio_overall_silent(log):
+    """Detect an all-silent astats Overall peak even without channel sections.
+
+    Some FFmpeg builds emit only the Overall summary. Trust only astats
+    diagnostics, and use the last reported Overall peak if repeated.
+    """
+    in_overall = False
+    silent = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, "astats", ("Channel", "Overall", "Peak level dB")).strip()
+        if payload == "Overall":
+            in_overall = True
+        elif payload.startswith("Channel:"):
+            in_overall = False
+        elif in_overall and payload.startswith("Peak level dB:"):
+            silent = payload == "Peak level dB: -inf"
+    return silent is True
+
+
 def _optional_stream_time(value, *, signed=False):
     """Parse optional ffprobe stream times without accepting ambiguous values."""
     if value is None or value == "N/A":
@@ -751,6 +772,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                 "sample_start_seconds": round(start, 6),
                                 "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
+                # Some FFmpeg versions omit channel sections but still emit
+                # a valid Overall -inf peak. Without this fallback a short
+                # entirely silent clip passes without any silence finding.
+                if (not channel_peaks
+                        and _audio_overall_silent(decoded.stderr or "")):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
+                        "severity": "warning", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
                 peak = _audio_peak_db(decoded.stderr or "")
                 if peak is not None:
                     peak_event = {"sample_start_seconds": round(start, 6),
