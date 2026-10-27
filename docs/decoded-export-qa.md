@@ -60,4 +60,16 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 
 処理が長時間化するため、**15分（900秒）を超える動画では全尺デコードを実行せず** `EXPORT_FULL_DECODE_DURATION_LIMIT` を返します。各ストリームの実行時間には60〜900秒の上限を設けています。動画尺が15分以下でも遅いPCや重いコーデックでは時間切れになることがあります。全尺デコードはCPU負荷が高く、バックグラウンドジョブではありません。
 
-**重要な制約:** 全尺デコードはコーデックの破損を調べる機能であり、映像・音声の主観的品質や全区間の黒画面・無音・音割れを保証しません。`black_frames` / `long_silences` / `audio_peaks` の検査範囲は引き続き**冒頭・中間（長尺の場合）・末尾のサンプルのみ**（`signal_scope:"sampled_only"`）です。意図的な暗転や無音は警告です。YMM4実機での再生確認と併用してください。
+## オプション：全尺の黒画面・フリーズ・無音検出
+
+`full_decode:true` と `full_signal_scan:true` を**同時に指定**すると、通常の全尺デコードに加えて全映像・音声ストリームをフィルタで走査し、サンプル窓の間にある黒画面・フリーズ・長時間無音も検出します。
+
+```json
+{"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","full_decode":true,"full_signal_scan":true}
+```
+
+`qa_gate.decoded_export_check` にも同じ2フラグを指定できます。成功時は `signal_scope:"full"` となり、`black_frames` / `frozen_frames` / `long_silences` に動画全尺の検出候補を返します。これらは演出として意図的な場合があるため**警告**であり、自動的に不合格にはしません。ストリームの開始時刻がずれる場合も動画時刻へ補正します。サンプル由来の重複検出区間は統合します。
+
+全尺信号走査も15分の全尺デコード予算を共有し、フィルタ失敗・タイムアウト・不正な診断は `EXPORT_FULL_SIGNAL_FAILED` / `EXPORT_FULL_SIGNAL_TIMEOUT` / `EXPORT_FULL_SIGNAL_TIMESTAMP_INVALID` で不合格になります。`full_signal_scan` 単独指定は拒否します。処理時間とCPU負荷が増えるため、既定値は `false` です。音量ピーク・左右チャンネルの `astats` は引き続きサンプル区間のみです。
+
+**重要な制約:** 通常の `full_decode:true` だけでは黒画面・無音・フリーズの検出はサンプル範囲のみ（`signal_scope:"sampled_only"`）です。全尺信号走査を指定しても、字幕の見切れ・意図的な演出かどうか・True Peak / LUFS・主観的品質は判定できません。YMM4実機での再生確認と併用してください。
