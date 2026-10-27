@@ -205,7 +205,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         valid = json.dumps({
             "format": {"duration": "8"},
             "streams": [{"codec_type": "video",
-                         "width": 7680, "height": 4320}]})
+                         "width": 7680, "height": 4320},
+                        {"codec_type": "audio"}]})
         self.assertTrue(self.inspect_with_probe(valid)["passed"])
 
     def test_rejects_unusable_audio_sample_rate_and_channels(self):
