@@ -1539,10 +1539,10 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             sample_start = float(command[command.index("-ss") + 1])
             end = 4 - sample_start
             if "0:v:0" in command:
-                log = (f"black_start: 0 black_end: {end}\\n"
-                       f"freeze_start: 0 freeze_end: {end}\\n")
+                log = (f"black_start: 0 black_end: {end}\n"
+                       f"freeze_start: 0 freeze_end: {end}\n")
             else:
-                log = f"silence_start: 0 silence_end: {end}\\n"
+                log = f"silence_start: 0 silence_end: {end}\n"
             return subprocess.CompletedProcess(command, 0, "", log)
 
         with patch.object(qa, "run", side_effect=fake):
@@ -1565,10 +1565,10 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         def fake(command, timeout):
             if command[0] == "ffprobe":
                 return subprocess.CompletedProcess(command, 0, metadata, "")
-            log = ("black_start: 0 black_end: 0.5\\n"
-                   "freeze_start: 0 freeze_end: 0.5\\n"
+            log = ("black_start: 0 black_end: 0.5\n"
+                   "freeze_start: 0 freeze_end: 0.5\n"
                    if "0:v:0" in command else
-                   "silence_start: 0 silence_end: 0.5\\n")
+                   "silence_start: 0 silence_end: 0.5\n")
             return subprocess.CompletedProcess(command, 0, "", log)
 
         with patch.object(qa, "run", side_effect=fake):
@@ -1580,10 +1580,10 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
     def test_inaudible_stereo_peaks_do_not_trigger_imbalance(self):
         # A large dB difference below the audible QA threshold is not a
         # meaningful left/right imbalance; active speech must still warn.
-        quiet = ("[Parsed_astats_0 @ 0x123] Channel: 1\\n"
-                 "[Parsed_astats_0 @ 0x123] Peak level dB: -100\\n"
-                 "[Parsed_astats_0 @ 0x123] Channel: 2\\n"
-                 "[Parsed_astats_0 @ 0x123] Peak level dB: -80\\n")
+        quiet = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+                 "[Parsed_astats_0 @ 0x123] Peak level dB: -100\n"
+                 "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+                 "[Parsed_astats_0 @ 0x123] Peak level dB: -80\n")
         report = self.inspect_with_channel_astats(quiet)
         self.assertTrue(report["passed"], report)
         self.assertFalse(any(issue["code"] ==
@@ -1596,8 +1596,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
     def test_overall_only_astats_detects_short_all_silent_audio(self):
         # Some FFmpeg builds omit Channel sections. The Overall peak is
         # still enough to identify an entirely silent 1.5-second sample.
-        silent = ("[Parsed_astats_0 @ 0x123] Overall\\n"
-                  "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\\n")
+        silent = ("[Parsed_astats_0 @ 0x123] Overall\n"
+                  "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n")
         report = self.inspect_with_channel_astats(silent)
         self.assertTrue(report["passed"], report)
         self.assertEqual(sum(issue["code"] ==
@@ -1607,10 +1607,10 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
 
     def test_overall_astats_ignores_metadata_and_non_silent_peak(self):
         for log in (
-                "title: Overall\\ntitle: Peak level dB: -inf\\n",
-                "[other @ 0x123] Overall\\n[other @ 0x123] Peak level dB: -inf\\n",
-                "[Parsed_astats_0 @ 0x123] Overall\\n"
-                "[Parsed_astats_0 @ 0x123] Peak level dB: -24\\n"):
+                "title: Overall\ntitle: Peak level dB: -inf\n",
+                "[other @ 0x123] Overall\n[other @ 0x123] Peak level dB: -inf\n",
+                "[Parsed_astats_0 @ 0x123] Overall\n"
+                "[Parsed_astats_0 @ 0x123] Peak level dB: -24\n"):
             with self.subTest(log=log):
                 report = self.inspect_with_channel_astats(log)
                 self.assertTrue(report["passed"], report)
