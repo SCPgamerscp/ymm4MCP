@@ -94,7 +94,9 @@ def _audio_channel_peaks(log):
     """
     peaks = {}
     channel = None
-    channel_pattern = re.compile(r"Channel:\s*([1-9][0-9]*)")
+    # FFmpeg channel counts are capped at 64. Never convert arbitrarily
+    # long untrusted decimal fields to Python integers.
+    channel_pattern = re.compile(r"Channel:\s*([1-9][0-9]{0,2})")
     peak_pattern = re.compile(
         r"Peak level dB:\s*(-inf|[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)",
         re.IGNORECASE)
@@ -104,11 +106,15 @@ def _audio_channel_peaks(log):
         if payload == "Overall":
             channel = None
             continue
-        match = channel_pattern.fullmatch(payload)
-        if match:
-            channel = int(match.group(1))
-            if channel > 64:
-                channel = None
+        if payload.startswith("Channel:"):
+            # Invalid channel headers must also clear the previous channel,
+            # otherwise the following peak can be attributed to the wrong one.
+            channel = None
+            match = channel_pattern.fullmatch(payload)
+            if match:
+                value = int(match.group(1))
+                if value <= 64:
+                    channel = value
             continue
         if channel is None:
             continue
