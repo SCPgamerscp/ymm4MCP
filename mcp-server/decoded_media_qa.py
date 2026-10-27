@@ -779,7 +779,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                 else f"0:v:{ordinal}" if kind == "video"
                                 else f"0:a:{ordinal}"),
                        "-vf" if kind == "video" else "-af", signal_filter,
-                       "-abort_on", "empty_output", "-f", "null", "-"]
+                       "-abort_on", "empty_output+empty_output_stream", "-f", "null", "-"]
             remaining = sample_deadline - time.monotonic()
             if remaining <= 0:
                 return failure("EXPORT_DECODE_TIMEOUT", "動画サンプルの総検証時間を超えました")
