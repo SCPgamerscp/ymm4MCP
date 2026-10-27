@@ -100,8 +100,8 @@ class SignalConsistencyTests(unittest.TestCase):
 
 
     def test_cross_filter_bare_log_does_not_spoof_black_events(self):
-        log = ("silence_start: 0 black_start: 1\\n"
-               "silence_end: 2 black_end: 3\\n")
+        log = ("silence_start: 0 black_start: 1\n"
+               "silence_end: 2 black_end: 3\n")
         self.assertEqual(qa._signal_ranges(log, "black_start", "black_end", 4), [])
         self.assertEqual(qa._signal_ranges(log, "silence_start", "silence_end", 4),
                          [(0.0, 2.0)])
@@ -119,7 +119,7 @@ class SignalConsistencyTests(unittest.TestCase):
                 peak = -8 if start == 0 else -3 if start == 11 else -12
                 return subprocess.CompletedProcess(
                     command, 0, "",
-                    f"[Parsed_astats_0 @ 0x123] Peak level dB: {peak}\\n")
+                    f"[Parsed_astats_0 @ 0x123] Peak level dB: {peak}\n")
             return subprocess.CompletedProcess(command, 0, "", "")
         with patch.object(qa, "run", side_effect=fake_run):
             report = qa.inspect(str(self.video))
