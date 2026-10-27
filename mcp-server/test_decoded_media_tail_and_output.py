@@ -1017,5 +1017,50 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         report = self.inspect_with_probe(metadata)
         self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
 
+
+    def test_distinct_frame_rate_ratios_do_not_collapse_after_rounding(self):
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video", "avg_frame_rate": "30000/1001"},
+                        {"codec_type": "video", "avg_frame_rate": "2997/100"},
+                        {"codec_type": "audio"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        mismatches = [issue for issue in report["issues"]
+                      if issue["code"] == "EXPORT_VIDEO_TRACK_FPS_MISMATCH"]
+        self.assertEqual(len(mismatches), 1, report)
+        self.assertEqual(mismatches[0]["frame_rates"], [29.97])
+        self.assertEqual(mismatches[0]["frame_rate_ratios"],
+                         ["2997/100", "30000/1001"])
+        # Equivalent fractions must not trigger a spurious mismatch.
+        equivalent = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video", "avg_frame_rate": "30000/1001"},
+                        {"codec_type": "video", "avg_frame_rate": "60000/2002"}]})
+        report = self.inspect_with_probe(equivalent)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(any(issue["code"] == "EXPORT_VIDEO_TRACK_FPS_MISMATCH"
+                             for issue in report["issues"]))
+
+    def test_video_only_full_decode_does_not_claim_audio_was_decoded(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video", "avg_frame_rate": "30/1"}]})
+        commands = []
+
+        def fake(command, timeout):
+            commands.append(command)
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False,
+                                full_decode=True)
+        self.assertTrue(report["passed"], report)
+        self.assertTrue(report["fully_decoded"])
+        self.assertEqual(report["verification_scope"], "full_video_decode")
+        self.assertFalse(any("0:a" in " ".join(command)
+                             for command in commands if command[0] == "ffmpeg"))
+
 if __name__ == "__main__":
     unittest.main()
