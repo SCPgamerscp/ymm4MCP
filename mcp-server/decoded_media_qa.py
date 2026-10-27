@@ -603,8 +603,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         right = min(duration, track_start - container_start + track_duration)
         if right <= left:
             continue
-        if any(window < right and left < min(duration, window + sample_seconds)
-               for window in starts):
+        # A few milliseconds of overlap at a window boundary do not
+        # meaningfully sample a short track. Require at least 100 ms of
+        # overlap, or half the track for tracks shorter than 200 ms.
+        required_overlap = min(0.1, (right - left) / 2)
+        if any(min(right, window + sample_seconds) - max(left, window)
+               >= required_overlap for window in starts):
             continue
         # Place the target within the actual track; leave enough room for
         # FFmpeg's microsecond timestamp rounding and short preroll.
@@ -780,17 +784,18 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                                 "sample_start_seconds": round(start, 6),
                                 "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
-                # A complete channel inventory can establish silence on its
-                # own. An Overall -inf peak covers every channel even when
-                # ffprobe omitted the channel count or astats omitted some
-                # channel sections. Emit this finding only once per sample.
-                if (overall_silent or (complete_channels and all(
-                        value == -math.inf for value in channel_peaks.values()))):
+                # A complete channel inventory or an Overall -inf peak
+                # suggests silence, but neither can override a finite peak
+                # measured elsewhere in this same sample. Inconsistent or
+                # repeated astats sections must not produce a false all-silent
+                # finding when any channel/Overall actually contained sound.
+                peak = _audio_peak_db(decoded.stderr or "")
+                if (peak is None and (overall_silent or (complete_channels and all(
+                        value == -math.inf for value in channel_peaks.values())))):
                     issues.append({
                         "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
                         "severity": "warning", "stream_ordinal": ordinal,
                         "sample_start_seconds": round(start, 6)})
-                peak = _audio_peak_db(decoded.stderr or "")
                 if peak is not None:
                     peak_event = {"sample_start_seconds": round(start, 6),
                                   "stream_ordinal": ordinal,
