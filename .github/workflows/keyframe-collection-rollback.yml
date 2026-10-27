@@ -28,8 +28,9 @@ jobs:
   # any of them. No push permission or credentials are available to this job.
   keyframe-cross-pr-integration:
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 219
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Run the composed source against the same Windows host ABI as packaging.
+    runs-on: windows-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,3 +83,35 @@ jobs:
         run: python -m pip install 'httpx>=0.27.0'
       - name: Verify live-smoke test harness regressions
         run: python -m unittest discover -s mcp-server -p 'test_check_keyframe_compat.py'
+      - name: Download official YMM4 Lite build references for composed plugin
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'YukkuriMovieMaker_v4_Lite.zip'
+          $directory = Join-Path $env:RUNNER_TEMP 'ymm4-lite'
+          Invoke-WebRequest -Uri 'https://object-storage.tyo1.conoha.io/v1/nc_4fac3ef0e6d843249e0ab2f1fc3e8f85/public/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          $pluginDlls = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter 'YukkuriMovieMaker.Plugin.dll' -File)
+          if ($pluginDlls.Count -ne 1) { throw "Expected one YMM4 Plugin DLL; found $($pluginDlls.Count)" }
+          $libPath = $pluginDlls[0].DirectoryName
+          if (-not (Test-Path -LiteralPath (Join-Path $libPath 'YukkuriMovieMaker.Controls.dll'))) {
+            throw 'YMM4 Controls DLL is missing'
+          }
+          "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
+      - name: Compile all five keyframe PRs together and inspect the .ymme
+        shell: pwsh
+        run: |
+          dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
+          if ($LASTEXITCODE -ne 0) { throw 'Composed YMM4 plugin build failed' }
+          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Could not determine plugin version' }
+          $package = "artifacts/YMM4McpPlugin-$version.ymme"
+          if (-not (Test-Path -LiteralPath $package)) { throw "Missing composed package: $package" }
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $package).Path)
+          try {
+            $actual = @($zip.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName })
+            $expected = @('YMM4McpPlugin/YMM4McpPlugin.dll', 'YMM4McpPlugin/YMM4McpPlugin.deps.json')
+            if (@(Compare-Object $expected $actual).Count -ne 0) {
+              throw "Unexpected composed .ymme contents: $($actual -join ', ')"
+            }
+          }
+          finally { $zip.Dispose() }
