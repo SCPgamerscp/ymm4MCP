@@ -873,6 +873,17 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertTrue(report["passed"], report)
         self.assertFalse(any("STARTS" in issue["code"] for issue in report["issues"]))
 
+    def test_stream_origin_subtraction_overflow_fails_closed(self):
+        for origin, stream_start in (("1e308", "-1e308"),
+                                     ("-1e308", "1e308")):
+            with self.subTest(origin=origin):
+                metadata = json.dumps({
+                    "format": {"duration": "20", "start_time": origin},
+                    "streams": [{"codec_type": "video",
+                                 "start_time": stream_start, "duration": "20"}]})
+                report = self.inspect_with_probe(metadata)
+                self.assertEqual(report["error_code"], "EXPORT_PROBE_FAILED")
+
     def test_large_negative_stream_preroll_is_reported_not_rejected(self):
         metadata = json.dumps({
             "format": {"duration": "20", "start_time": "10"},
