@@ -268,8 +268,30 @@ jobs:
               @(Get-ChildItem -LiteralPath $storeConfigDir -Filter 'claude_desktop_config.json.tmp.*').Count -ne 0) {
             throw 'Failed setup left staged config files behind'
           }
+          # The packaged default must be installed the first time, but a
+          # later upgrade must preserve the user's local MCP model/credentials.
+          $installedConfig = Join-Path $installedDir 'config.json'
+          if (-not (Test-Path -LiteralPath $installedConfig)) {
+            throw 'Fresh install did not copy the bundled MCP config.json'
+          }
+          $customConfig = '{"default_model":"gemini-3.8-flash","user_custom":"preserve-me"}'
+          $customLocal = '{"secret":"test-placeholder"}'
+          [IO.File]::WriteAllText($installedConfig, $customConfig)
+          $localSettings = Join-Path $installedDir 'settings.local.json'
+          [IO.File]::WriteAllText($localSettings, $customLocal)
+          # A stale ZIP connection descriptor must not replace the plugin's
+          # actual connection state in the persistent MCP installation.
+          [IO.File]::WriteAllText((Join-Path 'mcp-server' 'connection.json'),
+                                  '{"token":"zip-must-not-be-installed"}')
           # Re-running from another extraction must preserve the same stable path.
           & cmd.exe /c "mcp-server\install.cmd"
+          if ([IO.File]::ReadAllText($installedConfig) -cne $customConfig -or
+              [IO.File]::ReadAllText($localSettings) -cne $customLocal) {
+            throw 'Installer upgrade overwrote local MCP server configuration'
+          }
+          if (Test-Path -LiteralPath (Join-Path $installedDir 'connection.json')) {
+            throw 'Installer copied an extracted ZIP connection descriptor'
+          }
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
           $again = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($again.theme -ne 'rollback-classic' -or $again.mcpServers.other.command -ne 'classic.exe' -or
