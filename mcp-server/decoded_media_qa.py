@@ -340,8 +340,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             # ffprobe may expose video dimensions even when the codec cannot
             # actually be decoded. Incomplete or impossible dimensions must
             # not be reported as a verified video stream.
-            if stream["codec_type"] == "video" and (
-                    "width" in stream or "height" in stream):
+            if (stream["codec_type"] == "video" and not attached_pic and (
+                    "width" in stream or "height" in stream)):
                 width, height = stream.get("width"), stream.get("height")
                 if (type(width) is not int or type(height) is not int
                         or not 1 <= width <= 16_384 or not 1 <= height <= 16_384
@@ -349,11 +349,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                         # Keep decoded pixel buffers within a bounded 64 Mi-pixel budget.
                         or width * height > 67_108_864):
                     raise ValueError("invalid video dimensions")
-            if stream["codec_type"] == "video" and "avg_frame_rate" in stream:
+            if (stream["codec_type"] == "video" and not attached_pic
+                    and "avg_frame_rate" in stream):
                 _frame_rate(stream["avg_frame_rate"])
             # The presence of an audio stream is not evidence of a usable
             # audio format when ffprobe reports zero or malformed parameters.
-            if stream["codec_type"] in ("video", "audio"):
+            if stream["codec_type"] in ("video", "audio") and not attached_pic:
                 if "duration" in stream:
                     stream_duration = _optional_stream_time(stream["duration"])
                     # An explicitly empty A/V track cannot be certified by
@@ -386,14 +387,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         if container_start is None:
             known_starts = [
                 _optional_stream_time(stream.get("start_time"), signed=True)
-                for stream in streams if stream["codec_type"] in ("video", "audio")]
+                for stream in streams if stream["codec_type"] in ("video", "audio")
+                and stream.get("disposition", {}).get("attached_pic") != 1]
             # A missing timestamp on any A/V track makes the origin ambiguous.
             # Do not shift the timeline using only a late-starting audio track.
             container_start = (min(known_starts) if known_starts
                                and all(value is not None for value in known_starts)
                                else 0.0)
         for stream in streams:
-            if stream["codec_type"] in ("video", "audio"):
+            if (stream["codec_type"] in ("video", "audio")
+                    and stream.get("disposition", {}).get("attached_pic") != 1):
                 stream_start = _optional_stream_time(stream.get("start_time"), signed=True)
                 if stream_start is not None:
                     relative_start = stream_start - container_start
