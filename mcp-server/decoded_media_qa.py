@@ -353,12 +353,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         raise ValueError("full_decode must be boolean")
     if (expected_duration_seconds is not None and
             (type(expected_duration_seconds) not in (int, float) or
-             not math.isfinite(expected_duration_seconds) or
-             not 0 < expected_duration_seconds <= 7 * 24 * 60 * 60)):
+             not 0 < expected_duration_seconds <= 7 * 24 * 60 * 60 or
+             not math.isfinite(expected_duration_seconds))):
         raise ValueError("expected_duration_seconds must be finite and in (0, 604800]")
     if (type(duration_tolerance_seconds) not in (int, float) or
-            not math.isfinite(duration_tolerance_seconds) or
-            not 0 <= duration_tolerance_seconds <= 60):
+            not 0 <= duration_tolerance_seconds <= 60 or
+            not math.isfinite(duration_tolerance_seconds)):
         raise ValueError("duration_tolerance_seconds must be finite and in [0, 60]")
     for name, value, lower, upper in (
             ("expected_width", expected_width, 1, 16384),
@@ -372,14 +372,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             ("expected_audio_streams", expected_audio_streams, 0)):
         if value is not None and (type(value) is not int or not lower <= value <= 16):
             raise ValueError(f"{name} must be an integer in [{lower}, 16]")
-    if expected_audio_streams == 0 and require_audio:
-        raise ValueError("expected_audio_streams=0 requires require_audio=False")
+    if expected_audio_streams == 0:
+        if require_audio:
+            raise ValueError("expected_audio_streams=0 requires require_audio=False")
+        if expected_audio_sample_rate is not None or expected_audio_channels is not None:
+            raise ValueError("expected_audio_streams=0 conflicts with expected audio format")
     if (expected_fps is not None and
             (type(expected_fps) not in (int, float) or
-             not math.isfinite(expected_fps) or not 0 < expected_fps <= 240)):
+             not 0 < expected_fps <= 240 or not math.isfinite(expected_fps))):
         raise ValueError("expected_fps must be finite and in (0, 240]")
     if (type(fps_tolerance) not in (int, float) or
-            not math.isfinite(fps_tolerance) or not 0 <= fps_tolerance <= 10):
+            not 0 <= fps_tolerance <= 10 or not math.isfinite(fps_tolerance)):
         raise ValueError("fps_tolerance must be finite and in [0, 10]")
     target = Path(path)
     try:
@@ -414,6 +417,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                           parse_constant=_reject_nonfinite_json,
                           parse_float=_finite_json_float)
         _check_probe_depth(info)
+        if not isinstance(info, dict) or not isinstance(info.get("format"), dict):
+            raise ValueError("ffprobe format must be an object")
         streams = info["streams"]
         # An independent ffprobe size claim must match the file we inspected.
         # A contradictory or malformed claim is not a trustworthy export.
