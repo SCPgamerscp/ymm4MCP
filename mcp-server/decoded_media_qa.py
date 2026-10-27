@@ -23,14 +23,31 @@ def _unique_object_pairs(pairs):
     return result
 
 
+def _trusted_filter_payload(line, filter_name, bare_names):
+    """Ignore media metadata and unrelated FFmpeg logs masquerading as QA."""
+    line = line.lstrip()
+    # Tests and callers may provide the filter's unprefixed diagnostic text.
+    if any(line.startswith(name + ":") for name in bare_names):
+        return line
+    match = re.match(
+        r"^\\[(?:Parsed_)?" + re.escape(filter_name)
+        + r"(?:_[0-9]+)?\\s+@\\s+[^\\]]+\\]\\s*(.*)$", line)
+    return match.group(1) if match else ""
+
+
 def _signal_ranges(log, start_name, end_name, window_duration=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
                          + r"):\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])")
     start = None
     ranges = []
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    bare_names = ("black_start", "black_end", "silence_start",
+                  "silence_end", "freeze_start", "freeze_end")
     for line in log.splitlines():
-        for name, timestamp in pattern.findall(line):
+        payload = _trusted_filter_payload(line, filter_name, bare_names)
+        for name, timestamp in pattern.findall(payload):
             value = float(timestamp)
             if not math.isfinite(value):
                 # Do not serialize Infinity or create an invented signal span.
@@ -57,10 +74,13 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
 def _audio_peak_db(log):
     """Highest finite sample peak from FFmpeg astats (dBFS); not true-peak."""
     peaks = []
-    for value in re.findall(r"\bPeak level dB:\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])", log):
-        peak = float(value)
-        if math.isfinite(peak):
-            peaks.append(peak)
+    pattern = re.compile(r"\\bPeak level dB:\\s*([+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\\s,;])")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "astats", ("Peak level dB",))
+        for value in pattern.findall(payload):
+            peak = float(value)
+            if math.isfinite(peak):
+                peaks.append(peak)
     return max(peaks) if peaks else None
 
 
