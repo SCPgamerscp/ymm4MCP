@@ -320,7 +320,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration,start_time,nb_streams:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames:stream_disposition=attached_pic",
+                     "format=duration,start_time,nb_streams,size:stream=index,codec_type,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames,time_base:stream_disposition=attached_pic",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -338,6 +338,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                           parse_float=_finite_json_float)
         _check_probe_depth(info)
         streams = info["streams"]
+        # An independent ffprobe size claim must match the file we inspected.
+        # A contradictory or malformed claim is not a trustworthy export.
+        reported_size = info["format"].get("size")
+        if reported_size is not None:
+            if (type(reported_size) is not str
+                    or not re.fullmatch(r"[0-9]{1,20}", reported_size)
+                    or int(reported_size) != initial_stat.st_size):
+                raise ValueError("ffprobe file size disagrees with disk")
         raw_duration = info["format"]["duration"]
         # Python float() accepts underscores, Unicode digits, and whitespace,
         # none of which is an unambiguous ffprobe decimal duration.
@@ -396,6 +404,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                     raise ValueError("out-of-order stream indices")
                 last_index = index
                 seen_indices.add(index)
+            if (stream["codec_type"] in ("video", "audio") and not attached_pic
+                    and "time_base" in stream):
+                # A zero or malformed timestamp unit makes all stream timing
+                # comparisons unreliable, even if duration happens to parse.
+                time_base = stream["time_base"]
+                if (type(time_base) is not str or not re.fullmatch(
+                        r"[0-9]{1,18}/[0-9]{1,18}", time_base)):
+                    raise ValueError("invalid stream time base")
+                unit, scale = map(int, time_base.split("/"))
+                if unit == 0 or scale == 0:
+                    raise ValueError("zero stream time base")
             if (stream["codec_type"] == "video" and not attached_pic
                     and "nb_frames" in stream):
                 frame_count = stream["nb_frames"]
