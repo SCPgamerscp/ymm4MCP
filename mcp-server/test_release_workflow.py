@@ -53,6 +53,20 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("gh release create $tag $packagePath $serverPackage[0].FullName --target", self.release)
         self.assertIn("$createdRelease = $true", self.release)
 
+    def test_tag_event_must_match_built_package_version_before_publish(self):
+        # A tag such as v999 pointing to main must not publish v1.2.3
+        # binaries as v999 merely because the tag is an ancestor of main.
+        self.assertIn("$env:GITHUB_REF_NAME -cne $tag", self.release)
+        self.assertIn("does not match packaged version", self.release)
+        self.assertLess(
+            self.release.index("$env:GITHUB_REF_NAME -cne $tag"),
+            self.release.index("gh release create $tag $packagePath"),
+        )
+        self.assertLess(
+            self.release.index("$env:GITHUB_REF_NAME -cne $tag"),
+            self.release.index("gh release create $env:GITHUB_REF_NAME"),
+        )
+
     def test_tag_rerun_verifies_existing_release_without_overwrite(self):
         self.assertIn("Release $tag already exists; verifying without modifying it",
                       self.release)
