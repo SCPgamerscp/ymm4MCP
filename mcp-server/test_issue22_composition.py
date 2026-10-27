@@ -80,5 +80,17 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
                       self.source)
 
 
+    def test_real_export_qa_uses_runner_ffmpeg_before_apt(self):
+        # Unconditional apt update/install can stall the cross-platform
+        # verification even when both binaries are already on the runner.
+        self.assertIn(
+            "if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then",
+            self.source,
+        )
+        self.assertIn("sudo apt-get install -y -qq ffmpeg", self.source)
+        self.assertIn("ffmpeg -version | head -n 1", self.source)
+        self.assertIn("ffprobe -version | head -n 1", self.source)
+
+
 if __name__ == "__main__":
     unittest.main()
