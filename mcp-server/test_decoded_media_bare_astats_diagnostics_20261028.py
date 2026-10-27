@@ -62,6 +62,15 @@ class BareAstatsDiagnosticsTests(unittest.TestCase):
         self.assertIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
                       [issue["code"] for issue in report["issues"]])
 
+    def test_malformed_channel_header_ends_overall_section(self):
+        log = ("Overall\\nPeak level dB: -inf\\n"
+               "Channel 2\\nPeak level dB: -inf\\n")
+        self.assertFalse(qa._audio_overall_silent(log))
+        report = self.inspect_audio(log)
+        self.assertFalse(report["passed"], report)
+        self.assertNotIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
+                         [issue["code"] for issue in report["issues"]])
+
     def test_unprefixed_overall_does_not_override_audible_peak(self):
         log = ("Overall\nPeak level dB: -6\n"
                "Overall\nPeak level dB: -inf\n")
