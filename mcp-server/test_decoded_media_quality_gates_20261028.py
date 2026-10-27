@@ -17,7 +17,8 @@ class ExportQualityGateTests(unittest.TestCase):
         self.video.write_bytes(b"test export media " * 8)
 
     def inspect(self, *, video_codec="h264", audio_codec="aac", include_audio=True,
-                video_log="", audio_log="", video_frames=None, **options):
+                video_log="", audio_log="", video_frames=None,
+                audio_channels=2, **options):
         streams = [{"codec_type": "video", "start_time": "0",
                     "duration": "4"}]
         if video_frames is not None:
@@ -26,7 +27,9 @@ class ExportQualityGateTests(unittest.TestCase):
             streams[0]["codec_name"] = video_codec
         if include_audio:
             audio = {"codec_type": "audio", "start_time": "0",
-                     "duration": "4", "channels": 2}
+                     "duration": "4"}
+            if audio_channels is not None:
+                audio["channels"] = audio_channels
             if audio_codec is not None:
                 audio["codec_name"] = audio_codec
             streams.append(audio)
@@ -179,6 +182,26 @@ class ExportQualityGateTests(unittest.TestCase):
         self.assertFalse(report["passed"], report)
         self.assertIn("EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE",
                       {i["code"] for i in report["issues"]})
+
+    def test_stereo_gate_rejects_unknown_or_mono_layout(self):
+        for channels in (None, 1):
+            with self.subTest(channels=channels):
+                report = self.inspect(max_stereo_imbalance_db=12,
+                                      audio_channels=channels)
+                self.assertFalse(report["passed"], report)
+                self.assertIn("EXPORT_SAMPLE_STEREO_CHANNELS_UNVERIFIABLE",
+                              {i["code"] for i in report["issues"]})
+
+    def test_audio_quality_options_require_audio_even_if_optional(self):
+        for option in ({"max_audio_peak_dbfs": -1},
+                       {"min_audio_peak_dbfs": -30},
+                       {"max_stereo_imbalance_db": 12},
+                       {"require_audio_peak_metrics": True}):
+            with self.subTest(option=option):
+                report = self.inspect(include_audio=False, **option)
+                self.assertFalse(report["passed"], report)
+                self.assertIn("EXPORT_AUDIO_STREAM_MISSING",
+                              {i["code"] for i in report["issues"]})
 
     def test_additional_gate_arguments_are_strict(self):
         for options in ({"expected_video_frames": True},
