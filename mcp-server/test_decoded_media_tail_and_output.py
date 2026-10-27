@@ -828,7 +828,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         def fake(command, timeout):
             if command[0] == "ffprobe":
                 return subprocess.CompletedProcess(command, 0, metadata, "")
-            log = ("black_start: 1 black_end: 3 freeze_start: 4 freeze_end: 6"
+            log = ("black_start: 1 black_end: 3\n"
+                   "freeze_start: 4 freeze_end: 6"
                    if "0:v:0" in command else "silence_start: 2 silence_end: 4")
             return subprocess.CompletedProcess(command, 0, "", log)
         with patch.object(qa, "run", side_effect=fake):
