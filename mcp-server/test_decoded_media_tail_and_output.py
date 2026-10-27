@@ -1227,5 +1227,37 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                         {"codec_type": "audio"}]})
         self.assertTrue(self.inspect_with_probe(unknown)["passed"])
 
+    def test_open_ended_signals_stop_at_known_track_end(self):
+        # The file lasts 12s but both tracks end at 6s. A filter that emits
+        # *_start at 5s without *_end must not claim the defect lasts to 8s
+        # or 12s merely because those are the requested sample boundaries.
+        metadata = json.dumps({
+            "format": {"duration": "12", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "0",
+                         "duration": "6"},
+                        {"codec_type": "audio", "start_time": "0",
+                         "duration": "6"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            start = float(command[command.index("-ss") + 1])
+            relative = 5 - start
+            if "0:v:0" in command:
+                log = (f"black_start: {relative}\n"
+                       f"freeze_start: {relative}\n")
+            else:
+                log = f"silence_start: {relative}\n"
+            return subprocess.CompletedProcess(command, 0, "", log)
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        for key in ("black_frames", "frozen_frames", "long_silences"):
+            self.assertEqual(len(report[key]), 1, report[key])
+            self.assertEqual(report[key][0]["video_start_seconds"], 5.0)
+            self.assertEqual(report[key][0]["video_end_seconds"], 6.0)
+            self.assertEqual(report[key][0]["duration_seconds"], 1.0)
+
 if __name__ == "__main__":
     unittest.main()
