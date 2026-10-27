@@ -1592,5 +1592,31 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(report["audio_channel_peaks"][0]["peak_dbfs_by_channel"],
                          {"1": -100.0, "2": -80.0})
 
+
+    def test_overall_only_astats_detects_short_all_silent_audio(self):
+        # Some FFmpeg builds omit Channel sections. The Overall peak is
+        # still enough to identify an entirely silent 1.5-second sample.
+        silent = ("[Parsed_astats_0 @ 0x123] Overall\\n"
+                  "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\\n")
+        report = self.inspect_with_channel_astats(silent)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(sum(issue["code"] ==
+                             "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT"
+                             for issue in report["issues"]), 1, report)
+        self.assertEqual(report["audio_channel_peaks"], [])
+
+    def test_overall_astats_ignores_metadata_and_non_silent_peak(self):
+        for log in (
+                "title: Overall\\ntitle: Peak level dB: -inf\\n",
+                "[other @ 0x123] Overall\\n[other @ 0x123] Peak level dB: -inf\\n",
+                "[Parsed_astats_0 @ 0x123] Overall\\n"
+                "[Parsed_astats_0 @ 0x123] Peak level dB: -24\\n"):
+            with self.subTest(log=log):
+                report = self.inspect_with_channel_astats(log)
+                self.assertTrue(report["passed"], report)
+                self.assertFalse(any(
+                    issue["code"] == "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT"
+                    for issue in report["issues"]), report)
+
 if __name__ == "__main__":
     unittest.main()
