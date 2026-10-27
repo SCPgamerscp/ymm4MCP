@@ -14,13 +14,19 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 {"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","require_audio":true,"sample_seconds":8}
 ```
 
+期待する書き出し尺が分かっている場合は `expected_duration_seconds` を指定できます。実際の動画尺と期待尺の差が `duration_tolerance_seconds`（既定1秒、0〜60秒）を超えると、デコード自体が成功しても `EXPORT_DURATION_MISMATCH`（error）として不合格になります。期待尺は有限の正数で最大7日です。省略時は従来どおり尺の期待値チェックを行いません。
+
+```json
+{"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","expected_duration_seconds":600,"duration_tolerance_seconds":0.5}
+```
+
 `qa_gate` に `decoded_export_check` として同じ設定を渡すと、構造QAと併せて合否判定に反映できます。
 
 ```json
 {"action":"qa_gate","decoded_export_check":{"path":"C:/Videos/final.mp4","require_audio":true,"sample_seconds":8}}
 ```
 
-検証は映像・音声の最初の8秒と最後の8秒（尺が短い場合は冒頭だけ）を別々にデコードし、失敗箇所・ストリーム種別を `issues` に返します。音声が不要な作品は `require_audio:false` を指定できます。サンプル長は1〜15秒です。FFmpegがない、タイムアウトした、メタデータが不正な場合は**成功扱いにしません**。
+検証は映像・音声の冒頭・中間（長尺の場合）・末尾を別々にデコードし、失敗箇所・ストリーム種別を `issues` に返します。音声が不要な作品は `require_audio:false` を指定できます。サンプル長は1〜15秒です。FFmpegがない、タイムアウトした、メタデータが不正な場合は**成功扱いにしません**。
 
 サンプル内の **1秒以上の黒画面候補**（`blackdetect`）と **2秒以上の長い無音候補**（`silencedetect`）も検出し、`black_frames` / `long_silences` と `issues` に `severity: "warning"` で返します。これらは意図的なフェードや演出の可能性があるため、警告だけでは `passed:false` にしません。各イベントの `sample_start_seconds` はサンプル位置、`filter_start_seconds` / `filter_end_seconds` はFFmpegフィルタが報告したタイムスタンプです。動画全体の時刻と混同しないでください。
 
