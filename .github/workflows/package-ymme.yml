@@ -403,6 +403,14 @@ jobs:
           $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
           if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Cannot read plugin version' }
           $tag = "v$version"
+          # Tag-triggered releases must agree with the Version compiled into
+          # the package. Otherwise a stale/mistyped v* tag could publish
+          # artifacts for one version under a different public release name.
+          # Validate before any gh release create / asset upload.
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and
+              $env:GITHUB_REF_NAME -cne $tag) {
+            throw "Release tag $env:GITHUB_REF_NAME does not match packaged version $tag"
+          }
           $notes = 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'
           $createdRelease = $false
           if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
