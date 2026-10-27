@@ -30,6 +30,9 @@ class FakeYmm4:
         self.inventory_complete = True
         self.force_revision_conflict = False
         self.external_change_before_cleanup = None
+        self.external_change_during_preflight = False
+        self.external_change_before_write = False
+        self.external_change_before_second_write = False
         self.property_get_count = {}
 
     def __call__(self, request):
@@ -51,6 +54,16 @@ class FakeYmm4:
                     for name, frames in self.frames.items()],
                     "revision": f"r{self.revision}"})
             self.property_get_count[prop] = self.property_get_count.get(prop, 0) + 1
+            # Simulate a concurrent edit to an unrelated animation between
+            # inventory snapshots and property-specific revision reads.
+            if ((prop == "Zoom" and self.property_get_count[prop] == 1
+                 and self.external_change_during_preflight)
+                or (prop == "Zoom" and self.property_get_count[prop] == 2
+                    and self.external_change_before_write)
+                or (prop == "X" and self.property_get_count[prop] == 2
+                    and self.external_change_before_second_write)):
+                self.frames["Opacity"][0]["value"] += 1
+                self.revision += 1
             if (prop == self.external_change_before_cleanup
                     and self.property_get_count[prop] == 4):
                 # Simulate a second editor replacing the just-inserted frame
@@ -134,6 +147,31 @@ class LiveProbeProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "Incomplete animation inventory"):
             probe(fake)
         self.assertEqual(fake.posts, [])
+
+    def test_unrelated_edit_during_initial_preflight_aborts_before_any_write(self):
+        fake = FakeYmm4()
+        fake.external_change_during_preflight = True
+        with self.assertRaisesRegex(ProbeError, "changed during preflight"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+        self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
+
+    def test_unrelated_edit_after_inventory_read_aborts_before_write(self):
+        fake = FakeYmm4()
+        fake.external_change_before_write = True
+        with self.assertRaisesRegex(ProbeError, "changed before write"):
+            probe(fake)
+        self.assertEqual(fake.posts, [])
+        self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
+
+    def test_second_property_rechecks_full_inventory_before_write(self):
+        fake = FakeYmm4()
+        fake.external_change_before_second_write = True
+        with self.assertRaisesRegex(ProbeError, "changed before write"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
+        self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
+        self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
 
     def test_revision_conflict_does_not_remove_another_editors_frame(self):
         fake = FakeYmm4()
