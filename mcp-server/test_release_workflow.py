@@ -30,13 +30,17 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("Release $tag already exists; bump Version", self.release)
 
     def test_manual_release_recovers_only_tag_on_same_tested_commit(self):
-        self.assertIn('gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag"', self.release)
-        self.assertIn('git fetch --no-tags origin "refs/tags/$tag"', self.release)
+        self.assertIn("git ls-remote --exit-code --refs origin $tagRef", self.release)
+        self.assertIn("$tagProbeExit -eq 2", self.release)
+        self.assertIn("$tagProbeExit -ne 0", self.release)
+        self.assertIn('gh api -X POST "repos/$env:GITHUB_REPOSITORY/git/refs"', self.release)
+        self.assertIn('-f "ref=$tagRef" -f "sha=$env:GITHUB_SHA"', self.release)
+        self.assertIn("git fetch --no-tags origin $tagRef", self.release)
         self.assertIn("git rev-list -n 1 FETCH_HEAD", self.release)
         self.assertIn("$tagCommit -ne $env:GITHUB_SHA", self.release)
         self.assertIn("Tag $tag points to a different commit", self.release)
         self.assertIn("gh release create $tag $packagePath $serverPackage[0].FullName --verify-tag", self.release)
-        self.assertIn("gh release create $tag $packagePath $serverPackage[0].FullName --target $env:GITHUB_SHA", self.release)
+        self.assertNotIn("gh release create $tag $packagePath $serverPackage[0].FullName --target", self.release)
         self.assertIn("$createdRelease = $true", self.release)
 
     def test_tag_rerun_verifies_existing_release_without_overwrite(self):
