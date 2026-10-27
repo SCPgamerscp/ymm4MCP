@@ -61,11 +61,14 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
             if window_duration is not None:
                 value = min(value, window_duration)
             if name == start_name:
-                start = value
-            elif start is not None:
-                if value > start:
-                    ranges.append((start, value))
+                # Repeated starts in concatenated/overlapping diagnostics
+                # must not discard the beginning of a real signal interval.
+                start = value if start is None else min(start, value)
+            elif start is not None and value > start:
+                ranges.append((start, value))
                 start = None
+            # An out-of-order end is not evidence that the active signal
+            # stopped; retain its start for a later valid end.
     # A black/silent interval that reaches EOF has no matching *_end line.
     # Close it at the decoded window boundary rather than silently dropping it.
     if start is not None and window_duration is not None and start < window_duration:
@@ -304,8 +307,9 @@ def run(command, timeout):
         command, returncode, stdout_head.decode("utf-8"),
         stderr_tail.decode("utf-8", errors="replace"))
 
-def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
-    """Sample both ends and optionally decode all video/audio streams end-to-end."""
+def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
+            expected_duration_seconds=None, duration_tolerance_seconds=1.0):
+    """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
     if not isinstance(require_audio, bool):
@@ -314,6 +318,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         raise ValueError("sample_seconds must be an integer in 1..15")
     if not isinstance(full_decode, bool):
         raise ValueError("full_decode must be boolean")
+    if (expected_duration_seconds is not None and
+            (type(expected_duration_seconds) not in (int, float) or
+             not math.isfinite(expected_duration_seconds) or
+             not 0 < expected_duration_seconds <= 7 * 24 * 60 * 60)):
+        raise ValueError("expected_duration_seconds must be finite and in (0, 604800]")
+    if (type(duration_tolerance_seconds) not in (int, float) or
+            not math.isfinite(duration_tolerance_seconds) or
+            not 0 <= duration_tolerance_seconds <= 60):
+        raise ValueError("duration_tolerance_seconds must be finite and in [0, 60]")
     target = Path(path)
     try:
         exists = target.is_file()
@@ -544,6 +557,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
     issues = []
+    # An exported file can decode correctly while being truncated or longer
+    # than the edit plan. This is an error only when the caller supplied an
+    # explicit expected duration, with a bounded tolerance.
+    if (expected_duration_seconds is not None and
+            abs(duration - expected_duration_seconds) > duration_tolerance_seconds):
+        issues.append({
+            "code": "EXPORT_DURATION_MISMATCH", "severity": "error",
+            "expected_duration_seconds": expected_duration_seconds,
+            "actual_duration_seconds": duration,
+            "difference_seconds": round(duration - expected_duration_seconds, 6),
+            "tolerance_seconds": duration_tolerance_seconds})
     # Multiple output tracks may intentionally differ, so surface format
     # inconsistencies as QA warnings rather than rejecting the export.
     dimensions = {f'{v["width"]}x{v["height"]}' for v in video_details
