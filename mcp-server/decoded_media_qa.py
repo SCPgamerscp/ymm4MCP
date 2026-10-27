@@ -586,9 +586,19 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     audio_quality_requested = (
         expected_audio_codec is not None or require_audio_peak_metrics or
         min_audio_peak_dbfs is not None or max_audio_peak_dbfs is not None or
-        max_stereo_imbalance_db is not None)
+        max_stereo_imbalance_db is not None or max_silence_seconds is not None)
     if expected_audio_streams == 0 and audio_quality_requested:
         raise ValueError("audio QA options conflict with expected_audio_streams=0")
+    # Detection filters must observe events shorter than the caller's
+    # requested maximum. Fixed 1s/2s filter minima silently ignored
+    # sub-threshold defects even when the quality gate was stricter.
+    # A 1ms floor bounds diagnostic volume for a zero-second tolerance.
+    black_detect_seconds = (1.0 if max_black_seconds is None else
+                            min(1.0, max(0.001, max_black_seconds)))
+    silence_detect_seconds = (2.0 if max_silence_seconds is None else
+                              min(2.0, max(0.001, max_silence_seconds)))
+    freeze_detect_seconds = (2.0 if max_freeze_seconds is None else
+                             min(2.0, max(0.001, max_freeze_seconds)))
     target = Path(path)
     try:
         exists = target.is_file()
@@ -1125,9 +1135,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    if track_start is not None else 0.0)
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
-            signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
-                              "freezedetect=n=-60dB:d=2"
-                             if kind == "video" else "silencedetect=noise=-50dB:d=2,astats=metadata=0:reset=0")
+            signal_filter = (
+                f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
+                f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}"
+                if kind == "video" else
+                f"silencedetect=noise=-50dB:d={silence_detect_seconds:.6f},"
+                "astats=metadata=0:reset=0")
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "info", "-xerror", "-ss", format(start, ".6f"),
                        "-i", str(target), "-t", format(length, ".6f"),
@@ -1212,6 +1225,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                 "sample_start_seconds": round(start, 6),
                                 "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
+                # A partial channel inventory cannot satisfy a strict peak
+                # measurement requirement even if one channel has a value.
+                if (require_audio_peak_metrics and channel_peaks
+                        and declared_channels is not None and not complete_channels):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6),
+                        "declared_channels": declared_channels,
+                        "measured_channels": sorted(channel_peaks)})
                 if max_stereo_imbalance_db is not None and declared_channels != 2:
                     issues.append({
                         "code": "EXPORT_SAMPLE_STEREO_CHANNELS_UNVERIFIABLE",
@@ -1476,9 +1499,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 # Reset presentation timestamps to zero before filtering.
                 # The original track start is restored in public video-time
                 # coordinates below (late-starting audio is not at t=0).
-                filters = ("setpts=PTS-STARTPTS,blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
-                           "freezedetect=n=-60dB:d=2" if kind == "video"
-                           else "asetpts=PTS-STARTPTS,silencedetect=noise=-50dB:d=2")
+                filters = (
+                    "setpts=PTS-STARTPTS,"
+                    f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
+                    f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}"
+                    if kind == "video" else
+                    "asetpts=PTS-STARTPTS,"
+                    f"silencedetect=noise=-50dB:d={silence_detect_seconds:.6f}")
                 selector = (f"0:{stream['index']}" if kind == "video" and has_cover_art
                             else f"0:v:{ordinal}" if kind == "video"
                             else f"0:a:{ordinal}")
