@@ -1056,7 +1056,8 @@ async def dispatch(args: dict) -> Any:
                         require_audio=args.get("require_audio", True),
                         sample_seconds=args.get("sample_seconds", 8),
                         full_decode=args.get("full_decode", False),
-                        full_signal_scan=args.get("full_signal_scan", False),
+                        **({"full_signal_scan": args["full_signal_scan"]}
+                           if "full_signal_scan" in args else {}),
                         **{key: args[key] for key in (
                             "expected_duration_seconds", "duration_tolerance_seconds",
                             "expected_width", "expected_height", "expected_fps",
