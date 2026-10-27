@@ -1259,6 +1259,56 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             self.assertEqual(report[key][0]["video_end_seconds"], 6.0)
             self.assertEqual(report[key][0]["duration_seconds"], 1.0)
 
+    def test_declared_ffprobe_stream_count_must_match_actual_inventory(self):
+        # A truncated stream table could otherwise hide a broken secondary
+        # track while the QA report claims to have verified every stream.
+        for count in (0, 1, 3, -1, True, "2"):
+            with self.subTest(count=count):
+                metadata = json.dumps({
+                    "format": {"duration": "12", "nb_streams": count},
+                    "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+                self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                                 "EXPORT_PROBE_FAILED")
+        valid = json.dumps({
+            "format": {"duration": "12", "nb_streams": 2},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+        self.assertTrue(self.inspect_with_probe(valid)["passed"])
+
+    def test_reordered_stream_indices_cannot_misattribute_track_diagnostics(self):
+        # FFmpeg maps 0:v:N / 0:a:N by ascending stream index, not arbitrary
+        # JSON array order. Sparse ascending indices remain valid.
+        for indices in ((3, 1), (2, 0)):
+            with self.subTest(indices=indices):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", "index": indices[0]},
+                                {"codec_type": "audio", "index": indices[1]}]})
+                self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                                 "EXPORT_PROBE_FAILED")
+        valid = json.dumps({
+            "format": {"duration": "12"},
+            "streams": [{"codec_type": "video", "index": 2},
+                        {"codec_type": "audio", "index": 7}]})
+        self.assertTrue(self.inspect_with_probe(valid)["passed"])
+
+    def test_declared_zero_or_malformed_video_frame_count_fails_closed(self):
+        # An explicitly empty video track must not pass merely because a
+        # mocked or permissive FFmpeg decode returns success.
+        for count in ("0", "000", "-1", "1.5", "abc", 1, True,
+                      "9223372036854775808"):
+            with self.subTest(count=count):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", "nb_frames": count}]})
+                self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                                 "EXPORT_PROBE_FAILED")
+        for count in ("120", "N/A", None):
+            with self.subTest(count=count):
+                metadata = json.dumps({
+                    "format": {"duration": "12"},
+                    "streams": [{"codec_type": "video", "nb_frames": count}]})
+                self.assertTrue(self.inspect_with_probe(metadata)["passed"])
+
     def test_signal_parser_ignores_metadata_and_unrelated_logs(self):
         # FFmpeg -v info prints attacker-controlled container metadata. It
         # must not be interpreted as a black/silence/freeze filter finding.
