@@ -37,7 +37,8 @@ def _trusted_filter_payload(line, filter_name, bare_names):
         return line
     if "Peak level dB" in bare_names and line.startswith("Peak level dB"):
         return line
-    if "Channel" in bare_names and re.match(r"^Channel(?:\s|:|$)", line):
+    if "Channel" in bare_names and re.match(r"^Channel(?::|\s+[+-]?[0-9]|$)", line):
+        # Ignore unrelated unprefixed metadata such as "Channel layout".
         return line
     match = re.match(
         r"^\[(?:Parsed_)?" + re.escape(filter_name)
