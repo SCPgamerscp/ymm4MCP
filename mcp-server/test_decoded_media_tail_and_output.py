@@ -1655,5 +1655,19 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             and issue["stream_type"] == "audio"
             for issue in report["issues"]), report)
 
+
+    def test_overall_negative_infinity_is_case_insensitive(self):
+        # FFmpeg astats channel parsing already accepts -inf case-insensitively.
+        # The Overall-only fallback must recognize the same valid spelling.
+        for value in ("-inf", "-Inf", "-INF"):
+            with self.subTest(value=value):
+                log = ("[Parsed_astats_0 @ 0x123] Overall\\n"
+                       "[Parsed_astats_0 @ 0x123] Peak level dB: " + value + "\\n")
+                report = self.inspect_with_channel_astats(log)
+                self.assertTrue(report["passed"], report)
+                self.assertEqual(sum(
+                    issue["code"] == "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT"
+                    for issue in report["issues"]), 1, report)
+
 if __name__ == "__main__":
     unittest.main()
