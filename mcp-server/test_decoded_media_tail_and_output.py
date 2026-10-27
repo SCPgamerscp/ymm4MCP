@@ -675,7 +675,9 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
 
     def test_rejects_stream_start_beyond_container_end(self):
         metadata = json.dumps({
-            "format": {"duration": "20"},
+            # Explicit zero origin proves this is a late track, not a
+            # container with nonzero presentation timestamps.
+            "format": {"duration": "20", "start_time": "0"},
             "streams": [{"codec_type": "video", "start_time": "23"}]})
         self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
                          "EXPORT_PROBE_FAILED")
@@ -839,6 +841,18 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertFalse(any(issue["code"] in (
             "EXPORT_STREAM_ENDS_EARLY", "EXPORT_STREAM_EXCEEDS_CONTAINER")
             for issue in report["issues"]))
+
+    def test_incomplete_track_timestamps_do_not_shift_container_origin(self):
+        metadata = json.dumps({
+            "format": {"duration": "20"},
+            "streams": [{"codec_type": "video", "duration": "20"},
+                        {"codec_type": "audio", "start_time": "0.5",
+                         "duration": "12"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertTrue(report["passed"], report)
+        warning = next(issue for issue in report["issues"]
+                       if issue["code"] == "EXPORT_STREAM_ENDS_EARLY")
+        self.assertEqual(warning["missing_tail_seconds"], 7.5)
 
     def test_missing_format_origin_without_track_timestamps_defaults_to_zero(self):
         metadata = json.dumps({
