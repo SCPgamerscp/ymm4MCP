@@ -98,6 +98,38 @@ def _audio_peak_db(log):
 
 
 
+def _invalid_audio_peak_metrics(log):
+    """A malformed astats peak must not silently disappear from audio QA."""
+    number = re.compile(
+        r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "astats", ("Peak level dB",)).strip()
+        if not payload.startswith("Peak level dB:"):
+            continue
+        raw = payload.split(":", 1)[1].strip()
+        if raw.lower() == "-inf":
+            continue  # Valid FFmpeg representation of complete silence.
+        if not number.fullmatch(raw) or not math.isfinite(float(raw)):
+            return True
+    return False
+
+
+def _invalid_signal_timestamps(log, start_name, end_name):
+    """Detect invalid filter event timestamps instead of ignoring bad events."""
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    pattern = re.compile(r"\b(?:" + re.escape(start_name) + r"|"
+                         + re.escape(end_name) + r"):\s*([^\s,;]*)")
+    number = re.compile(
+        r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
+        for raw in pattern.findall(payload):
+            if not number.fullmatch(raw) or not math.isfinite(float(raw)):
+                return True
+    return False
+
+
 def _audio_channel_peaks(log):
     """Read channel-specific FFmpeg astats peaks, including -inf for silence.
 
@@ -917,6 +949,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 continue
             sampled_tracks.add((kind, ordinal))
             if kind == "audio":
+                if _invalid_audio_peak_metrics(decoded.stderr or ""):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_PEAK_INVALID",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
                 channel_peaks = _audio_channel_peaks(decoded.stderr or "")
                 declared_channels = audio_details[ordinal]["channels"]
                 if channel_peaks:
@@ -938,6 +975,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                      set(range(1, declared_channels + 1)))
                 observed_headers, invalid_headers = _audio_channel_headers(
                     decoded.stderr or "")
+                if invalid_headers:
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_HEADER_INVALID",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
                 if declared_channels is not None and (
                         channel_peaks or observed_headers or invalid_headers):
                     expected = set(range(1, declared_channels + 1))
@@ -989,6 +1031,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             # them as warnings, not as proof of an invalid export.
             start_name, end_name = (("black_start", "black_end") if kind == "video"
                                     else ("silence_start", "silence_end"))
+            if _invalid_signal_timestamps(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
             for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, signal_window_length):
                 signal_start = max(signal_start, signal_active_start)
@@ -1012,6 +1060,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         return failure("EXPORT_SIGNAL_LIMIT",
                                        "無音検出イベント数が上限を超えました")
             if kind == "video":
+                if _invalid_signal_timestamps(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
                 for freeze_start, freeze_end in _signal_ranges(
                         decoded.stderr or "", "freeze_start", "freeze_end",
                         signal_window_length):
