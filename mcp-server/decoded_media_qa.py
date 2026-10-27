@@ -38,8 +38,11 @@ def _trusted_filter_payload(line, filter_name, bare_names):
 
 def _signal_ranges(log, start_name, end_name, window_duration=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
+    # Capture complete tokens, including malformed ones. Ignoring a broken
+    # *_end token would otherwise extend a prior start to sample EOF.
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\s*([+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|nan|inf(?:inity)?))(?=$|[\s,;])", re.IGNORECASE)
+                         + r"):\s*([^\s,;]+)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     start = None
     ranges = []
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
@@ -53,6 +56,9 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
             # A malformed non-finite end invalidates the active interval.
             # Otherwise an unmatched start would be extended to sample EOF
             # and invent a black/silent/frozen span.
+            if not number.fullmatch(timestamp):
+                start = None
+                continue
             value = float(timestamp)
             if not math.isfinite(value):
                 start = None
