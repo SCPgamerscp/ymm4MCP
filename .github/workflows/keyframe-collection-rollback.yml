@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'YMM4McpPlugin/KeyframeCollectionMutation.cs'
+      - 'YMM4McpPlugin/KeyframeCollectionRemoval.cs'
+      - 'YMM4McpPlugin/McpKeyframes.cs'
       - 'tests/KeyframeCollectionRollback.Tests/**'
       - '.github/workflows/keyframe-collection-rollback.yml'
   workflow_dispatch:
