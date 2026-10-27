@@ -102,7 +102,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 
 **メンテナー向け Release 公開手順（Issue #22）:**
 
-1. `main` の `YMM4McpPlugin/YMM4McpPlugin.csproj` にある `Version` を確認します。既に同じバージョンのタグまたはReleaseが存在する場合は、先にバージョンを更新してください。
+1. `main` の `YMM4McpPlugin/YMM4McpPlugin.csproj` にある `Version` を確認します。既に同じバージョンの**Release**が存在する場合、上書きせず次のバージョンに更新してください。Release公開が途中で失敗して**タグだけが残った場合**は、タグが現在の`main`と同一コミットを指すときに限り、同じワークフローを再実行して安全に再開できます。タグが異なるコミットを指す場合は、タグを移動せずバージョンを更新してください。
 2. GitHubの **Actions → Package YMM4 plugin → Run workflow** からブランチ `main` を選んで実行します。手動公開は最新の `main` コミットに限定されます。
 3. Windowsのテスト、プラグインのビルド、`.ymme` とPython MCPサーバーZIPの内容検証がすべて成功した場合に限り、`v<Version>` タグとGitHub Releaseを作成します。既存のタグやReleaseは上書きしません。
 4. `Releases` で `YMM4McpPlugin-<Version>.ymme` と `YMM4McpServer-<Version>.zip` の**両方**が公開されたことを確認します。ワークフローも公開後に2ファイルの存在を検査します。
