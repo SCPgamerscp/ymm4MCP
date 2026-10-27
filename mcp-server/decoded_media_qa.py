@@ -188,6 +188,15 @@ def _frame_rate(value):
     return round(fps, 3)
 
 
+def _frame_rate_ratio(value):
+    """Expose exact normalized FPS alongside the rounded display number."""
+    if _frame_rate(value) is None:
+        return None
+    numerator, denominator = map(int, value.split("/"))
+    ratio = Fraction(numerator, denominator)
+    return f"{ratio.numerator}/{ratio.denominator}"
+
+
 def _reject_nonfinite_json(value):
     """Strict JSON does not permit NaN or Infinity tokens."""
     raise ValueError("non-standard JSON number: " + value)
@@ -521,12 +530,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     if len(videos) + len(audios) > 16:
         return failure("EXPORT_STREAM_LIMIT", "映像・音声ストリームが多すぎます（最大16）")
     video_details = [
-        {"stream_ordinal": i, "width": stream.get("width"),
-         "height": stream.get("height"),
-         "fps": _frame_rate(stream.get("avg_frame_rate"))}
+        {"stream_ordinal": i, "stream_index": stream.get("index"),
+         "width": stream.get("width"), "height": stream.get("height"),
+         "fps": _frame_rate(stream.get("avg_frame_rate")),
+         "fps_ratio": _frame_rate_ratio(stream.get("avg_frame_rate")),
+         "reported_frames": (int(stream["nb_frames"])
+                             if stream.get("nb_frames") not in (None, "N/A")
+                             else None)}
         for i, stream in enumerate(videos)]
     audio_details = [
-        {"stream_ordinal": i,
+        {"stream_ordinal": i, "stream_index": stream.get("index"),
          "sample_rate": int(stream["sample_rate"]) if "sample_rate" in stream else None,
          "channels": stream.get("channels")}
         for i, stream in enumerate(audios)]
