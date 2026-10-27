@@ -1,0 +1,37 @@
+name: Real FFmpeg completed-export QA
+
+on:
+  pull_request:
+    paths:
+      - 'mcp-server/decoded_media_qa.py'
+      - 'mcp-server/test_decoded_media_real_ffmpeg.py'
+      - '.github/workflows/decoded-export-real-ffmpeg.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-media-decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install FFmpeg and ffprobe for non-mocked integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+      - name: Install Python MCP dependencies
+        run: python -m pip install -r mcp-server/requirements.txt
+      - name: Decode a real generated MP4 and verify black/silence and format gates
+        working-directory: mcp-server
+        run: python -m unittest -v test_decoded_media_real_ffmpeg
