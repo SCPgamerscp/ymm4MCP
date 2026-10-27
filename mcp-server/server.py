@@ -227,8 +227,8 @@ TOOLS = [
                 "hash": {"type": "boolean", "description": "get_info/assets: 64 MiB 以下の素材の SHA-256 と重複候補を取得"},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "description": "get_info/assets: 返却件数。既定100"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
-                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa: 期待する動画の長さ"},
-                "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa: 尺の許容誤差。既定1秒"},
+                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 604800, "description": "get_info/export_qa/decoded_export_qa: 期待する動画の長さ"},
+                "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa/decoded_export_qa: 尺の許容誤差。既定1秒"},
                 "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
                 "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
                 "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa: 期待する平均FPS"},
@@ -1051,7 +1051,10 @@ async def dispatch(args: dict) -> Any:
                         decoded_media_qa.inspect, args.get("path"),
                         require_audio=args.get("require_audio", True),
                         sample_seconds=args.get("sample_seconds", 8),
-                        full_decode=args.get("full_decode", False))
+                        full_decode=args.get("full_decode", False),
+                        **{key: args[key] for key in (
+                            "expected_duration_seconds", "duration_tolerance_seconds")
+                           if key in args})
                 case "export_qa":
                     path = args.get("path")
                     if not is_absolute_media_path(path) or not path.strip().lower().endswith(".mp4"):
@@ -1333,7 +1336,8 @@ async def dispatch(args: dict) -> Any:
             if "decoded_export_check" in args:
                 config = args["decoded_export_check"]
                 if not isinstance(config, dict) or "path" not in config or \
-                        set(config) - {"path", "require_audio", "sample_seconds", "full_decode"}:
+                        set(config) - {"path", "require_audio", "sample_seconds", "full_decode",
+                                       "expected_duration_seconds", "duration_tolerance_seconds"}:
                     raise ValueError("decoded_export_check requires path and supported options")
                 criteria["decoded_export"] = config
                 report = await dispatch({"action": "get_info", "sub_action": "decoded_export_qa", **config})
