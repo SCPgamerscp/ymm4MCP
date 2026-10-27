@@ -341,7 +341,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             expected_width=None, expected_height=None, expected_fps=None,
             fps_tolerance=0.1, expected_audio_sample_rate=None,
             expected_audio_channels=None, expected_video_streams=None,
-            expected_audio_streams=None):
+            expected_audio_streams=None, require_tracks_to_end=False):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -351,6 +351,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         raise ValueError("sample_seconds must be an integer in 1..15")
     if not isinstance(full_decode, bool):
         raise ValueError("full_decode must be boolean")
+    if not isinstance(require_tracks_to_end, bool):
+        raise ValueError("require_tracks_to_end must be boolean")
     if (expected_duration_seconds is not None and
             (type(expected_duration_seconds) not in (int, float) or
              not 0 < expected_duration_seconds <= 7 * 24 * 60 * 60 or
@@ -736,18 +738,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                        track_start + track_duration - duration, 3)})
                 missing = duration - (track_start + track_duration)
                 if missing > 1.0:
-                    # A truncated *required primary* track makes a finished
-                    # export incomplete even if FFmpeg successfully decodes
-                    # the remaining samples. Optional/secondary tracks can
-                    # legitimately end earlier and remain advisory.
-                    required_primary = ordinal == 0 and (
-                        kind == "video" or require_audio
-                        or expected_audio_sample_rate is not None
-                        or expected_audio_channels is not None
-                        or (expected_audio_streams is not None
-                            and expected_audio_streams > 0))
+                    # Track timing alone cannot distinguish a truncated
+                    # export from an intentionally shorter BGM/overlay track.
+                    # Keep the default advisory, and let callers explicitly
+                    # require every declared A/V track to reach the end.
                     issues.append({"code": "EXPORT_STREAM_ENDS_EARLY",
-                                   "severity": "error" if required_primary else "warning",
+                                   "severity": "error" if require_tracks_to_end else "warning",
                                    "stream_type": kind,
                                    "stream_ordinal": ordinal,
                                    "missing_tail_seconds": round(missing, 3)})
