@@ -32,6 +32,16 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 {"action":"qa_gate","decoded_export_check":{"path":"C:/Videos/final.mp4","require_audio":true,"sample_seconds":8}}
 ```
 
+## オプション：全トラックの末尾までの継続確認
+
+音声トラックはBGMなどの演出で動画より早く終了することがあるため、`EXPORT_STREAM_ENDS_EARLY` は既定で**警告**です。音声を含めた全ストリームが動画の末尾まで続くことを完成条件とする場合、`require_tracks_to_end:true` を指定してください。映像・音声の各トラックがコンテナ尺より**1秒超**短いと `EXPORT_STREAM_ENDS_EARLY`（error）になり、必要なストリーム時刻メタデータを取得できない場合は `EXPORT_STREAM_TAIL_UNVERIFIABLE`（error）になります。短いBGM・SEなどを別トラックとして含む作品では指定しないでください。
+
+```json
+{"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","require_audio":true,"require_tracks_to_end":true}
+```
+
+`qa_gate` の `decoded_export_check` でも同じフラグを使えます。これはFFprobeの各トラック時刻に基づく検証で、映像・音声の内容そのものが意図どおりかは判定しません。
+
 検証は映像・音声の冒頭・中間（長尺の場合）・末尾を別々にデコードし、失敗箇所・ストリーム種別を `issues` に返します。音声が不要な作品は `require_audio:false` を指定できます。サンプル長は1〜15秒です。FFmpegがない、タイムアウトした、メタデータが不正な場合は**成功扱いにしません**。
 
 サンプル内の **1秒以上の黒画面候補**（`blackdetect`）と **2秒以上の長い無音候補**（`silencedetect`）も検出し、`black_frames` / `long_silences` と `issues` に `severity: "warning"` で返します。これらは意図的なフェードや演出の可能性があるため、警告だけでは `passed:false` にしません。各イベントの `sample_start_seconds` はサンプル位置、`filter_start_seconds` / `filter_end_seconds` はFFmpegフィルタが報告したタイムスタンプです。動画全体の時刻と混同しないでください。
