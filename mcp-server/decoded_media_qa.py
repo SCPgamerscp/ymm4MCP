@@ -378,7 +378,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             expected_width=None, expected_height=None, expected_fps=None,
             fps_tolerance=0.1, expected_audio_sample_rate=None,
             expected_audio_channels=None, expected_video_streams=None,
-            expected_audio_streams=None, require_tracks_to_end=False):
+            expected_audio_streams=None, require_tracks_to_end=False,
+            full_signal_scan=False):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -388,6 +389,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         raise ValueError("sample_seconds must be an integer in 1..15")
     if not isinstance(full_decode, bool):
         raise ValueError("full_decode must be boolean")
+    if not isinstance(full_signal_scan, bool):
+        raise ValueError("full_signal_scan must be boolean")
+    if full_signal_scan and not full_decode:
+        raise ValueError("full_signal_scan requires full_decode=True")
     if not isinstance(require_tracks_to_end, bool):
         raise ValueError("require_tracks_to_end must be boolean")
     if (expected_duration_seconds is not None and
@@ -1098,6 +1103,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                "severity": "error", "stream_type": kind,
                                "stream_ordinal": ordinal})
     full_decode_ok = False
+    full_signal_scan_ok = False
     if full_decode and videos:
         full_decode_ok = True
         # -map 0:v / 0:a checks every video/audio stream, not only stream 0.
@@ -1145,6 +1151,99 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
                                "severity": "error", "stream_type": kind,
                                "details": (decoded.stderr or "")[-500:]})
+    # Full decode proves stream decodability, but sample-only black/silence
+    # filters cannot find a defect entirely between the sample windows.
+    # Opt-in full signal scanning runs one bounded filter pass per stream,
+    # sharing the full-decode deadline. It never claims full signal coverage
+    # when a filter fails, times out, or emits untrustworthy diagnostics.
+    if full_signal_scan and videos and full_decode_ok:
+        full_signal_scan_ok = True
+        for kind, tracks in (("video", videos), ("audio", audios)):
+            for ordinal, stream in enumerate(tracks):
+                remaining = full_deadline - time.monotonic()
+                if remaining <= 0:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_TIMEOUT",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    break
+                # Reset presentation timestamps to zero before filtering.
+                # The original track start is restored in public video-time
+                # coordinates below (late-starting audio is not at t=0).
+                filters = ("setpts=PTS-STARTPTS,blackdetect=d=1:pix_th=0.10:pic_th=0.98,"
+                           "freezedetect=n=-60dB:d=2" if kind == "video"
+                           else "asetpts=PTS-STARTPTS,silencedetect=noise=-50dB:d=2")
+                selector = (f"0:{stream['index']}" if kind == "video" and has_cover_art
+                            else f"0:v:{ordinal}" if kind == "video"
+                            else f"0:a:{ordinal}")
+                command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
+                           "-v", "info", "-xerror", "-i", str(target),
+                           "-map", selector, "-vf" if kind == "video" else "-af",
+                           filters, "-abort_on", "empty_output+empty_output_stream",
+                           "-f", "null", "-"]
+                try:
+                    scanned = run(command, min(timeout, remaining))
+                except FileNotFoundError:
+                    return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
+                except subprocess.TimeoutExpired:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_TIMEOUT",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    continue
+                except (OSError, UnicodeDecodeError):
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_FAILED",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    continue
+                if scanned.returncode:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_FAILED",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal,
+                                   "details": (scanned.stderr or "")[-500:]})
+                    continue
+                track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+                track_duration = _optional_stream_time(stream.get("duration"))
+                offset = (track_start - container_start
+                          if track_start is not None else 0.0)
+                active_duration = track_duration if track_duration is not None else duration
+                diagnostics = (scanned.stderr or "")
+                definitions = ([("black_start", "black_end", "video",
+                                 "EXPORT_SAMPLE_BLACK_FRAMES", black_frames),
+                                ("freeze_start", "freeze_end", "freeze",
+                                 "EXPORT_SAMPLE_FROZEN_FRAMES", frozen_frames)]
+                               if kind == "video" else
+                               [("silence_start", "silence_end", "audio",
+                                 "EXPORT_SAMPLE_LONG_SILENCE", long_silences)])
+                for start_name, end_name, signal_kind, issue_code, destination in definitions:
+                    if _invalid_signal_timestamps(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_TIMESTAMP_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    for signal_start, signal_end in _signal_ranges(
+                            diagnostics, start_name, end_name, active_duration):
+                        if signal_start >= signal_end:
+                            continue
+                        absolute_start = max(0.0, offset + signal_start)
+                        absolute_end = min(duration, offset + signal_end)
+                        if absolute_start >= absolute_end:
+                            continue
+                        event = {"sample_start_seconds": 0.0,
+                                 "stream_ordinal": ordinal,
+                                 "filter_start_seconds": round(signal_start, 3),
+                                 "filter_end_seconds": round(signal_end, 3),
+                                 "video_start_seconds": round(absolute_start, 6),
+                                 "video_end_seconds": round(absolute_end, 6),
+                                 "duration_seconds": round(absolute_end - absolute_start, 3)}
+                        if not record_signal(signal_kind, event, issue_code, destination):
+                            return failure("EXPORT_SIGNAL_LIMIT",
+                                           "全尺信号検出イベント数が上限を超えました")
+            if full_deadline - time.monotonic() <= 0:
+                break
     # A video replaced or modified during ffprobe/ffmpeg cannot be certified
     # using observations from different file versions.
     try:
@@ -1167,7 +1266,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             "issues": issues,
             "verification_scope": scope,
             "fully_decoded": fully_decoded,
-            "signal_scope": "sampled_only", "black_frames": black_frames,
+            "signal_scope": ("full" if full_signal_scan_ok and passed else "sampled_only"),
+            "black_frames": black_frames,
             "frozen_frames": frozen_frames,
             "video_details": video_details, "audio_details": audio_details,
             "resolution": (f'{video_details[0]["width"]}x{video_details[0]["height"]}'
