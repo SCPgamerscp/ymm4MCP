@@ -1116,5 +1116,40 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                       report["issues"])
         self.assertEqual(report["verification_scope"], "incomplete")
 
+    def test_invalid_ffmpeg_sample_stdout_is_structured_failure(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            raise UnicodeDecodeError("utf-8", b"\\xff", 0, 1, "invalid start byte")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["error_code"], "EXPORT_DECODE_FAILED")
+
+    def test_invalid_ffmpeg_full_decode_stdout_is_reported_not_raised(self):
+        metadata = json.dumps({
+            "format": {"duration": "4"},
+            "streams": [{"codec_type": "video"}]})
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            if "-ss" not in command:
+                raise UnicodeDecodeError("utf-8", b"\\xff", 0, 1, "invalid start byte")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False, full_decode=True)
+        self.assertFalse(report["passed"], report)
+        self.assertFalse(report["fully_decoded"])
+        self.assertEqual(report["verification_scope"], "incomplete")
+        self.assertIn("EXPORT_FULL_DECODE_FAILED",
+                      [issue["code"] for issue in report["issues"]])
+
 if __name__ == "__main__":
     unittest.main()
