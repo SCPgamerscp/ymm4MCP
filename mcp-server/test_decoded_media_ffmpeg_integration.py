@@ -67,17 +67,23 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                 timeout=30)
             result = decoded_media_qa.inspect(str(video), sample_seconds=1)
             self.assertTrue(result["success"], result)
-            self.assertFalse(result["passed"], result)
-            # ffprobe knows this audio track ends three seconds before the
-            # video. A skipped empty tail window must not turn that into a
-            # successful final-export QA report; the metadata finding is the
-            # accurate error, rather than inventing an FFmpeg decode failure.
-            failures = [issue for issue in result["issues"]
+            # An audio track may intentionally end before the video (e.g. BGM).
+            # The default is advisory; strict export contracts must opt in.
+            self.assertTrue(result["passed"], result)
+            warnings = [issue for issue in result["issues"]
                         if issue["code"] == "EXPORT_STREAM_ENDS_EARLY"
-                        and issue["severity"] == "error"]
+                        and issue["severity"] == "warning"]
             self.assertTrue(any(issue["stream_type"] == "audio"
                                 and issue["missing_tail_seconds"] >= 2.9
-                                for issue in failures), result)
+                                for issue in warnings), result)
+            strict = decoded_media_qa.inspect(
+                str(video), sample_seconds=1, require_tracks_to_end=True)
+            self.assertTrue(strict["success"], strict)
+            self.assertFalse(strict["passed"], strict)
+            self.assertTrue(any(issue["code"] == "EXPORT_STREAM_ENDS_EARLY"
+                                and issue["stream_type"] == "audio"
+                                and issue["severity"] == "error"
+                                for issue in strict["issues"]), strict)
 
 
     def test_full_decode_rejects_empty_secondary_audio_stream(self):
