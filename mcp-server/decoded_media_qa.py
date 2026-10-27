@@ -542,8 +542,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
             except subprocess.TimeoutExpired:
                 return failure("EXPORT_DECODE_TIMEOUT", "動画サンプルのデコードが時間切れです")
-            except OSError:
-                return failure("EXPORT_DECODE_FAILED", "ffmpegを実行できません")
+            except (OSError, UnicodeDecodeError):
+                return failure("EXPORT_DECODE_FAILED", "ffmpegの出力を読み取れません")
             if decoded.returncode:
                 issues.append({"code": "EXPORT_DECODE_FAILED", "severity": "error",
                                "stream_type": kind, "stream_ordinal": ordinal,
@@ -636,7 +636,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 issues.append({"code": "EXPORT_FULL_DECODE_TIMEOUT",
                                "severity": "error", "stream_type": kind})
                 continue
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 full_decode_ok = False
                 issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
                                "severity": "error", "stream_type": kind})
