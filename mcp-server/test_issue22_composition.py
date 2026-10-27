@@ -42,5 +42,28 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertIn('git merge --no-ff --no-edit "refs/remotes/pr/${number}"', self.source)
 
 
+    def test_composition_includes_export_qa_pr(self):
+        # The export QA branch modifies the same packaging workflow as #228;
+        # composing it is required before claiming release integration passed.
+        self.assertIn(
+            "for number in 221 228 229 234 241 243 244 248 257 259 218 219 251 254 255;",
+            self.source,
+        )
+
+    def test_export_qa_discovers_new_regression_modules(self):
+        # Hard-coded unittest module lists missed newly added tests on PR #229,
+        # giving a green cross-PR build without testing the newest QA changes.
+        self.assertIn("Get-ChildItem -LiteralPath . -Filter 'test_decoded_media_*.py' -File", self.source)
+        self.assertIn("if ($qaTests.Count -lt 8)", self.source)
+        self.assertIn(
+            "python -m unittest discover -s . -p 'test_decoded_media_*.py' -q",
+            self.source,
+        )
+        self.assertNotIn(
+            "python -m unittest -q test_decoded_media_qa test_decoded_media_tail_and_output",
+            self.source,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
