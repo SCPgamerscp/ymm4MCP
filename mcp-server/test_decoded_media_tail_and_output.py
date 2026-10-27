@@ -192,6 +192,22 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                         {"codec_type": "audio"}]}))
         self.assertTrue(valid["passed"], valid)
 
+    def test_rejects_pathological_frame_area_before_decoding(self):
+        # Both dimensions individually pass the old 16K limit, but their
+        # product would require enormous decoded frame allocations.
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video",
+                         "width": 16384, "height": 16384}]})
+        self.assertEqual(self.inspect_with_probe(metadata)["error_code"],
+                         "EXPORT_PROBE_FAILED")
+        # Ordinary 8K UHD remains supported.
+        valid = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video",
+                         "width": 7680, "height": 4320}]})
+        self.assertTrue(self.inspect_with_probe(valid)["passed"])
+
     def test_rejects_unusable_audio_sample_rate_and_channels(self):
         for fields in (
             {"sample_rate": "0", "channels": 2},
@@ -1094,27 +1110,49 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertIn("EXPORT_STREAM_STARTS_LATE",
                       [issue["code"] for issue in report["issues"]])
 
-    def test_track_between_sample_windows_is_not_certified(self):
+    def test_short_track_between_regular_windows_gets_targeted_sample(self):
+        # Default windows for 30 seconds are 0-8, 11-19 and 22-30.
+        # The one-second audio track at 9-10 seconds needs its own sample.
         metadata = json.dumps({
             "format": {"duration": "30", "start_time": "0"},
-            "streams": [{"codec_type": "video", "start_time": "0", "duration": "30"},
-                        {"codec_type": "audio", "start_time": "9", "duration": "1"}]})
-        decoded_streams = []
+            "streams": [{"codec_type": "video", "start_time": "0",
+                         "duration": "30"},
+                        {"codec_type": "audio", "start_time": "9",
+                         "duration": "1"}]})
+        decoded = []
 
         def fake(command, timeout):
             if command[0] == "ffprobe":
                 return subprocess.CompletedProcess(command, 0, metadata, "")
-            decoded_streams.append(command[command.index("-map") + 1])
+            if "-ss" in command:
+                decoded.append((command[command.index("-map") + 1],
+                                float(command[command.index("-ss") + 1])))
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with patch.object(qa, "run", side_effect=fake):
             report = qa.inspect(str(self.video))
-        self.assertFalse(report["passed"], report)
-        self.assertNotIn("0:a:0", decoded_streams)
-        self.assertIn({"code": "EXPORT_STREAM_NOT_SAMPLED", "severity": "error",
-                       "stream_type": "audio", "stream_ordinal": 0},
-                      report["issues"])
-        self.assertEqual(report["verification_scope"], "incomplete")
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(len(report["samples"]), 4)
+        audio_windows = [start for kind, start in decoded if kind == "0:a:0"]
+        self.assertEqual(len(audio_windows), 1)
+        self.assertLessEqual(audio_windows[0], 9)
+        self.assertGreater(audio_windows[0] + 8, 10)
+        self.assertFalse(any(issue["code"] == "EXPORT_STREAM_NOT_SAMPLED"
+                             for issue in report["issues"]))
+
+    def test_track_outside_container_remains_uncertified(self):
+        # A track whose entire timestamp range is outside the container
+        # cannot be made valid by inventing an extra sample window.
+        metadata = json.dumps({
+            "format": {"duration": "30", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "0",
+                         "duration": "30"},
+                        {"codec_type": "audio", "start_time": "30.2",
+                         "duration": "0.2"}]})
+        report = self.inspect_with_probe(metadata)
+        self.assertFalse(report["passed"])
+        self.assertIn("EXPORT_STREAM_NOT_SAMPLED",
+                      [issue["code"] for issue in report["issues"]])
 
     def test_invalid_ffmpeg_sample_stdout_is_structured_failure(self):
         metadata = json.dumps({
