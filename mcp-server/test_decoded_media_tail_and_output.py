@@ -1315,11 +1315,15 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             "format": {"duration": "12", "nb_streams": 3},
             "streams": [
                 {"codec_type": "video", "index": 0, "nb_frames": "0",
+                 "start_time": "-100", "duration": "0",
+                 "width": 16384, "height": 16384,
                  "disposition": {"attached_pic": 1}},
                 {"codec_type": "video", "index": 1, "nb_frames": "300",
+                 "start_time": "0", "duration": "12",
                  "width": 1920, "height": 1080,
                  "disposition": {"attached_pic": 0}},
-                {"codec_type": "audio", "index": 2}]})
+                {"codec_type": "audio", "index": 2,
+                 "start_time": "0", "duration": "12"}]})
         commands = []
 
         def fake(command, timeout):
@@ -1332,6 +1336,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertTrue(report["passed"], report)
         self.assertEqual(report["video_streams"], 1)
         self.assertEqual(report["video_details"][0]["width"], 1920)
+        self.assertNotIn("EXPORT_STREAM_STARTS_LATE",
+                         [issue["code"] for issue in report["issues"]])
         samples = [command for command in commands
                    if command[0] == "ffmpeg" and "-ss" in command]
         self.assertEqual({command[command.index("-map") + 1]
