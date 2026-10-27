@@ -373,8 +373,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(invalid["error_code"], "EXPORT_PROBE_FAILED")
         valid = self.inspect_with_probe(json.dumps({
             "format": {"duration": "12"},
-            "streams": [{"codec_type": "video", "index": 2147483647},
-                        {"codec_type": "audio", "index": 1}]}))
+            "streams": [{"codec_type": "video", "index": 0},
+                        {"codec_type": "audio", "index": 2147483647}]}))
         self.assertTrue(valid["passed"], valid)
 
 
@@ -1306,7 +1306,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
             with self.subTest(count=count):
                 metadata = json.dumps({
                     "format": {"duration": "12"},
-                    "streams": [{"codec_type": "video", "nb_frames": count}]})
+                    "streams": [{"codec_type": "video", "nb_frames": count},
+                                {"codec_type": "audio"}]})
                 self.assertTrue(self.inspect_with_probe(metadata)["passed"])
 
     def test_signal_parser_ignores_metadata_and_unrelated_logs(self):
