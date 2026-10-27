@@ -117,6 +117,32 @@ class SignalTimingIntegrityTests(unittest.TestCase):
         self.assertIn("EXPORT_FULL_SIGNAL_DURATION_INVALID",
                       {issue["code"] for issue in result["issues"]})
 
+    def test_contradictory_reported_signal_durations_fail_closed(self):
+        for kind, kwargs in (
+                ("black", {"video_sample":
+                           "black_start: 0 black_end: 2 black_duration: 1\\n"}),
+                ("silence", {"audio_sample":
+                             "silence_start: 0\\nsilence_end: 2 | silence_duration: 1\\n"}),
+                ("freeze", {"video_sample":
+                            "freeze_start: 0\\nfreeze_end: 2 | freeze_duration: 1\\n"})):
+            with self.subTest(kind=kind):
+                result = self.inspect(**kwargs)
+                self.assertFalse(result["passed"], result)
+                self.assertIn("EXPORT_SAMPLE_SIGNAL_DURATION_MISMATCH",
+                              {issue["code"] for issue in result["issues"]})
+
+    def test_full_signal_duration_disagreement_fails_closed(self):
+        result = self.inspect(full_signal_scan=True, audio_full=(
+            "silence_start: 0\\nsilence_end: 2 | silence_duration: 0.1\\n"))
+        self.assertFalse(result["passed"], result)
+        self.assertIn("EXPORT_FULL_SIGNAL_DURATION_MISMATCH",
+                      {issue["code"] for issue in result["issues"]})
+
+    def test_small_duration_rounding_differences_are_tolerated(self):
+        result = self.inspect(video_sample=(
+            "black_start: 0.001 black_end: 2.000 black_duration: 2.000\\n"))
+        self.assertTrue(result["passed"], result)
+
     def test_track_details_include_container_relative_start_and_end(self):
         result = self.inspect()
         self.assertTrue(result["passed"], result)
