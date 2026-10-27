@@ -586,6 +586,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
     frozen_frames = []
     long_silences = []
     audio_peaks = []
+    audio_channel_peaks = []
     # Overlapping decode windows can clip one physical defect into different
     # absolute ranges. Coalesce overlapping intervals per signal type/track
     # and keep the public event and its separate QA issue in sync.
@@ -702,6 +703,19 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             if kind == "audio":
                 channel_peaks = _audio_channel_peaks(decoded.stderr or "")
                 declared_channels = audio_details[ordinal]["channels"]
+                if channel_peaks:
+                    # JSON has no representation for -Infinity. Preserve a
+                    # separate silent-channel list instead of emitting NaN/Inf.
+                    audio_channel_peaks.append({
+                        "sample_start_seconds": round(start, 6),
+                        "stream_ordinal": ordinal,
+                        "peak_dbfs_by_channel": {
+                            str(channel): (round(value, 3)
+                                           if math.isfinite(value) else None)
+                            for channel, value in sorted(channel_peaks.items())},
+                        "silent_channels": sorted(
+                            channel for channel, value in channel_peaks.items()
+                            if value == -math.inf)})
                 if channel_peaks and declared_channels is not None:
                     expected = set(range(1, declared_channels + 1))
                     observed = set(channel_peaks)
@@ -866,5 +880,6 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                            else None),
             "fps": video_details[0]["fps"] if video_details else None,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
+            "audio_channel_peaks": audio_channel_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
             "audio_streams": len(audios), "samples": samples, "path": str(target)}
