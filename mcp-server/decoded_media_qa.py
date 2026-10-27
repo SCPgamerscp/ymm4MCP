@@ -324,8 +324,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         for stream in streams:
             if stream["codec_type"] in ("video", "audio"):
                 stream_start = _optional_stream_time(stream.get("start_time"), signed=True)
-                if stream_start is not None and stream_start - container_start > duration + 1:
-                    raise ValueError("stream starts beyond container end")
+                if stream_start is not None:
+                    relative_start = stream_start - container_start
+                    if not math.isfinite(relative_start):
+                        raise ValueError("stream start offset overflow")
+                    if relative_start > duration + 1:
+                        raise ValueError("stream starts beyond container end")
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
 
