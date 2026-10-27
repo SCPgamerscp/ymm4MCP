@@ -71,12 +71,12 @@ class SignalConsistencyTests(unittest.TestCase):
     def test_audible_channel_overrides_silent_overall(self):
         metadata = {"format": {"duration": "1.5"}, "streams": [
             {"codec_type": "video"}, {"codec_type": "audio", "channels": 2}]}
-        log = ("[Parsed_astats_0 @ 0x123] Overall\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\\n"
-               "[Parsed_astats_0 @ 0x123] Channel: 1\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -4\\n"
-               "[Parsed_astats_0 @ 0x123] Channel: 2\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\\n")
+        log = ("[Parsed_astats_0 @ 0x123] Overall\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -4\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n")
         report, _ = self.inspect(metadata, log)
         self.assertTrue(report["passed"], report)
         self.assertNotIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
@@ -86,12 +86,12 @@ class SignalConsistencyTests(unittest.TestCase):
     def test_audible_overall_overrides_silent_channel_inventory(self):
         metadata = {"format": {"duration": "1.5"}, "streams": [
             {"codec_type": "video"}, {"codec_type": "audio", "channels": 2}]}
-        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\\n"
-               "[Parsed_astats_0 @ 0x123] Channel: 2\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\\n"
-               "[Parsed_astats_0 @ 0x123] Overall\\n"
-               "[Parsed_astats_0 @ 0x123] Peak level dB: -3\\n")
+        log = ("[Parsed_astats_0 @ 0x123] Channel: 1\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n"
+               "[Parsed_astats_0 @ 0x123] Channel: 2\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -inf\n"
+               "[Parsed_astats_0 @ 0x123] Overall\n"
+               "[Parsed_astats_0 @ 0x123] Peak level dB: -3\n")
         report, _ = self.inspect(metadata, log)
         self.assertTrue(report["passed"], report)
         self.assertNotIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
