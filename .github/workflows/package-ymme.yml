@@ -143,6 +143,7 @@ jobs:
           $launcherLines = @(
             '@echo off',
             'setlocal EnableDelayedExpansion',
+            'echo %~1 %~2>>"%~dp0launcher-calls.txt"',
             'if "%YMM4MCP_PY_FORCE_FAIL%"=="1" exit /b 91',
             'if /I "%~1"=="-3" if /I "%~2"=="-c" (',
             '  set "probe=%~3"',
@@ -324,7 +325,11 @@ jobs:
           }
           $fallbackExists = Test-Path -LiteralPath $fallbackMarker
           $fallbackValue = if ($fallbackExists) { [IO.File]::ReadAllText($fallbackMarker).Trim() } else { '<missing>' }
-          Write-Output "Legacy launcher fallback: exit=$rerunExit; marker=$fallbackValue"
+          Write-Output "Legacy launcher fallback: exit=$rerunExit; marker=$fallbackValue; disabled=$(Test-Path -LiteralPath $disableLatest)"
+          $callsPath = Join-Path $fakeLauncherDir 'launcher-calls.txt'
+          if (Test-Path -LiteralPath $callsPath) {
+            Write-Output "Fake launcher calls: $([IO.File]::ReadAllText($callsPath))"
+          }
           if ($rerunExit -ne 0 -or $fallbackValue -cne 'selected') {
             throw 'Installer failed to fall back to registered Python 3.12 on older launcher'
           }
