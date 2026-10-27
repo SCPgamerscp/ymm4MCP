@@ -6,7 +6,7 @@ import decoded_media_qa as qa
 
 class FFmpegSignalIntegrityTests(unittest.TestCase):
     def test_nonfinite_end_does_not_invent_signal_until_sample_eof(self):
-        for token in ("NaN", "nan", "INF", "Infinity", "-inf", "1e999"):
+        for token in ("NaN", "nan", "INF", "Infinity", "-inf", "1e999", "1e+", "invalid", "2junk"):
             with self.subTest(token=token):
                 log = f"[blackdetect @ 0x1] black_start: 1 black_end: {token}"
                 self.assertEqual(
