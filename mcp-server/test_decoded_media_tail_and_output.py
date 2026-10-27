@@ -1378,6 +1378,26 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertEqual(self.inspect_with_probe(unindexed)["error_code"],
                          "EXPORT_PROBE_FAILED")
 
+    def test_pathological_distinct_signal_log_has_bounded_qa_work(self):
+        # Hundreds of disjoint detections previously grew the coalescing
+        # scan quadratically, even though subprocess output was byte-bounded.
+        metadata = json.dumps({
+            "format": {"duration": "8"},
+            "streams": [{"codec_type": "video"}]})
+        events = "\n".join(
+            f"black_start: {i * 0.025:.3f} black_end: {i * 0.025 + 0.01:.3f}"
+            for i in range(300))
+
+        def fake(command, timeout):
+            return subprocess.CompletedProcess(
+                command, 0, metadata if command[0] == "ffprobe" else "",
+                events if command[0] == "ffmpeg" else "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video), require_audio=False)
+        self.assertFalse(report["passed"], report)
+        self.assertEqual(report["error_code"], "EXPORT_SIGNAL_LIMIT")
+
     def test_signal_parser_ignores_metadata_and_unrelated_logs(self):
         # FFmpeg -v info prints attacker-controlled container metadata. It
         # must not be interpreted as a black/silence/freeze filter finding.
