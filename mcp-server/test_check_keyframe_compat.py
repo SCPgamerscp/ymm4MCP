@@ -14,7 +14,8 @@ HEADERS = {"X-Ymm4-Token": "fake-test-token"}
 class FakeYmm4:
     def __init__(self):
         self.frames = {"Zoom": [{"at": 0, "value": 1.0}],
-                       "X": [{"at": 0, "value": 0.0}]}
+                       "X": [{"at": 0, "value": 0.0}],
+                       "Opacity": [{"at": 0, "value": 100.0}]}
         self.posts = []
         self.revision = 1
         self.fail_set = None
@@ -22,6 +23,7 @@ class FakeYmm4:
         self.fail_remove = None
         self.corrupt_original_on_remove = None
         self.corrupt_other_on_remove = None
+        self.corrupt_unrelated_on_remove = None
         self.item_length = 100
         self.item_type = "ImageItem"
         self.item_count = 1
@@ -36,6 +38,11 @@ class FakeYmm4:
                      "length": self.item_length, "type": self.item_type}
                     for _ in range(self.item_count)]})
             prop = request.url.params.get("prop")
+            if prop is None:
+                return httpx.Response(200, json={"success": True, "animations": [
+                    {"prop": name, "keyframes": [dict(f) for f in frames]}
+                    for name, frames in self.frames.items()],
+                    "revision": f"r{self.revision}"})
             if prop not in self.frames:
                 return httpx.Response(200, json={"success": True, "animations": [],
                                                   "revision": f"r{self.revision}"})
@@ -65,6 +72,8 @@ class FakeYmm4:
             if prop == self.corrupt_other_on_remove:
                 other = "X" if prop == "Zoom" else "Zoom"
                 self.frames[other][0]["value"] += 1
+            if prop == self.corrupt_unrelated_on_remove:
+                self.frames["Opacity"][0]["value"] += 1
             self.revision += 1
         return httpx.Response(200, json={"success": True})
 
@@ -170,6 +179,16 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertNotEqual(fake.frames["X"][0]["value"], 0.0)
+        self.assertEqual(len(fake.posts), 2)
+
+    def test_cleanup_rejects_damage_to_unrelated_animation(self):
+        fake = FakeYmm4()
+        fake.corrupt_unrelated_on_remove = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*Opacity"):
+            probe(fake)
+        self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
+        self.assertEqual(fake.frames["X"], [{"at": 0, "value": 0.0}])
+        self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
         self.assertEqual(len(fake.posts), 2)
 
 
