@@ -1036,7 +1036,8 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         equivalent = json.dumps({
             "format": {"duration": "8"},
             "streams": [{"codec_type": "video", "avg_frame_rate": "30000/1001"},
-                        {"codec_type": "video", "avg_frame_rate": "60000/2002"}]})
+                        {"codec_type": "video", "avg_frame_rate": "60000/2002"},
+                        {"codec_type": "audio"}]})
         report = self.inspect_with_probe(equivalent)
         self.assertTrue(report["passed"], report)
         self.assertFalse(any(issue["code"] == "EXPORT_VIDEO_TRACK_FPS_MISMATCH"
