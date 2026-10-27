@@ -79,17 +79,17 @@ class DurationExpectationTests(unittest.TestCase):
 
 class SignalPairTests(unittest.TestCase):
     def test_repeated_start_keeps_first_observed_boundary(self):
-        log = "black_start: 1.0\\nblack_start: 2.0\\nblack_end: 4.0"
+        log = "black_start: 1.0\nblack_start: 2.0\nblack_end: 4.0"
         self.assertEqual(qa._signal_ranges(log, "black_start", "black_end", 8),
                          [(1.0, 4.0)])
 
     def test_out_of_order_end_does_not_erase_active_start(self):
-        log = "silence_start: 2\\nsilence_end: 1\\nsilence_end: 5"
+        log = "silence_start: 2\nsilence_end: 1\nsilence_end: 5"
         self.assertEqual(qa._signal_ranges(log, "silence_start", "silence_end", 8),
                          [(2.0, 5.0)])
 
     def test_duplicate_start_reaching_eof_closes_from_earliest_start(self):
-        log = "freeze_start: 1\\nfreeze_start: 3"
+        log = "freeze_start: 1\nfreeze_start: 3"
         self.assertEqual(qa._signal_ranges(log, "freeze_start", "freeze_end", 6),
                          [(1.0, 6)])
 
