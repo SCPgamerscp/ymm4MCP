@@ -43,7 +43,9 @@ jobs:
           # Also compose the five #140 keyframe fixes against the same plugin
           # before shipping a .ymme. A successful standalone PR build cannot
           # prove that both issue groups are compatible.
-          for number in 221 228 234 241 243 244 248 257 259 218 219 251 254 255; do
+          # PR #229 also modifies package-ymme.yml (export QA), so include
+          # it to catch cross-PR workflow conflicts before a manual merge.
+          for number in 221 228 229 234 241 243 244 248 257 259 218 219 251 254 255; do
             if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
               # Pin the triggering PR to its event SHA, not a newer moving ref.
               git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
