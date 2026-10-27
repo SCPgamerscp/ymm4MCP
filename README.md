@@ -20,7 +20,7 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
    .\setup.ps1 -ConfigureClaudeDesktop
    ```
 
-   PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同様に `%LOCALAPPDATA%\YMM4MCP\mcp-server` に**永続インストール**してからClaude Desktopを設定します。ダウンロードしたZIPの展開フォルダーを削除しても設定が壊れません。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。
+   PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同様に `%LOCALAPPDATA%\YMM4MCP\mcp-server` に**永続インストール**してからClaude Desktopを設定します。ダウンロードしたZIPの展開フォルダーを削除しても設定が壊れません。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。 `mcpServers.ymm4` に既に設定したAPIキー等の `env`、`timeout`、`disabled` も保持します。`-Port` を明示した場合のみ `YMM4_API_BASE` を指定ポートに更新します。
    YMM4を起動した状態で `check_connection.cmd` をダブルクリックすると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。PowerShellからは `./setup.ps1 -CheckConnection` も利用できます（こちらは仮想環境の依存関係も再確認します）。
    プラグインのポートを変更した場合は `./setup.ps1 -ConfigureClaudeDesktop -CheckConnection -Port 9000` のように同じポートを指定すると、Claude Desktop の `YMM4_API_BASE` と接続確認に反映します。省略時は接続ファイルの設定を使います。
 
