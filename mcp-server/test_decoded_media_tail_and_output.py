@@ -1068,5 +1068,53 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
         self.assertFalse(any("0:a" in " ".join(command)
                              for command in commands if command[0] == "ffmpeg"))
 
+    def test_skips_empty_windows_for_intentionally_delayed_tracks(self):
+        metadata = json.dumps({
+            "format": {"duration": "30", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "0", "duration": "30"},
+                        {"codec_type": "audio", "start_time": "10", "duration": "15"}]})
+        decoded_windows = []
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            stream = command[command.index("-map") + 1]
+            start = float(command[command.index("-ss") + 1])
+            decoded_windows.append((stream, start))
+            # An actual FFmpeg invocation for the empty head would fail.
+            return subprocess.CompletedProcess(
+                command, 1 if stream == "0:a:0" and start == 0 else 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertTrue(report["passed"], report)
+        self.assertNotIn(("0:a:0", 0.0), decoded_windows)
+        self.assertIn(("0:a:0", 11.0), decoded_windows)
+        self.assertIn(("0:a:0", 22.0), decoded_windows)
+        self.assertIn("EXPORT_STREAM_STARTS_LATE",
+                      [issue["code"] for issue in report["issues"]])
+
+    def test_track_between_sample_windows_is_not_certified(self):
+        metadata = json.dumps({
+            "format": {"duration": "30", "start_time": "0"},
+            "streams": [{"codec_type": "video", "start_time": "0", "duration": "30"},
+                        {"codec_type": "audio", "start_time": "9", "duration": "1"}]})
+        decoded_streams = []
+
+        def fake(command, timeout):
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            decoded_streams.append(command[command.index("-map") + 1])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake):
+            report = qa.inspect(str(self.video))
+        self.assertFalse(report["passed"], report)
+        self.assertNotIn("0:a:0", decoded_streams)
+        self.assertIn({"code": "EXPORT_STREAM_NOT_SAMPLED", "severity": "error",
+                       "stream_type": "audio", "stream_ordinal": 0},
+                      report["issues"])
+        self.assertEqual(report["verification_scope"], "incomplete")
+
 if __name__ == "__main__":
     unittest.main()
