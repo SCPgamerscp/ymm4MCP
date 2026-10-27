@@ -199,6 +199,6 @@ jobs:
       - name: Run all composed Python regression tests
         working-directory: composed
         run: python -m unittest discover -s mcp-server -p 'test_*.py' -q
-      - name: Run real decoded-export MP4 smoke tests (not mocks)
+      - name: Run real decoded-export MP4 and stream-tail smoke tests (not mocks)
         working-directory: composed/mcp-server
-        run: python -m unittest -v test_decoded_media_real_ffmpeg
+        run: python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration
