@@ -89,14 +89,14 @@ class StatusJsonIntegrityTests(unittest.TestCase):
 
     def test_stream_rejects_overlimit_without_consuming_remaining_chunks(self):
         # The limit must apply while streaming, not after client.get buffers.
-        chunks = iter([b"x" * 8192] * 9)
+        chunks = iter([b"x" * 8192] * 10)
         response = MagicMock()
         response.iter_bytes.return_value = chunks
         client = MagicMock()
         client.__enter__.return_value = client
         client.stream.return_value.__enter__.return_value = response
         with patch.object(check_connection, "connection_settings", return_value=(
-                "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \\
+                "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
             with self.assertRaisesRegex(ValueError, "大きすぎ"):
                 check_connection.check()
@@ -110,8 +110,8 @@ class StatusJsonIntegrityTests(unittest.TestCase):
         client.__enter__.return_value = client
         client.stream.return_value.__enter__.return_value = response
         with patch.object(check_connection, "connection_settings", return_value=(
-                "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \\
-             patch.object(check_connection.httpx, "Client", return_value=client), \\
+                "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
+             patch.object(check_connection.httpx, "Client", return_value=client), \
              patch.object(check_connection.time, "monotonic", side_effect=[0.0, 11.0]):
             with self.assertRaisesRegex(ValueError, "タイムアウト"):
                 check_connection.check()
