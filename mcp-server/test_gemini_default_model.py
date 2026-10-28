@@ -42,6 +42,24 @@ class BundledGeminiModelTests(unittest.TestCase):
                 self.assertEqual(self.configured(json.dumps(
                     {"default_model": name}).encode("utf-8")), name)
 
+    def test_duplicate_model_key_falls_back_instead_of_using_last_value(self):
+        raw = (b'{"default_model":"gemini-3.8-flash",'
+               b'"default_model":"custom-model_v2.0"}')
+        self.assertEqual(self.configured(raw), gemini_video.DEFAULT_GEMINI_MODEL)
+
+    def test_duplicate_nested_metadata_key_also_falls_back(self):
+        raw = (b'{"default_model":"custom-model_v2.0",'
+               b'"metadata":{"name":"a","name":"b"}}')
+        self.assertEqual(self.configured(raw), gemini_video.DEFAULT_GEMINI_MODEL)
+
+    def test_ambiguous_model_path_segments_are_rejected(self):
+        for model in ("models//gemini-3.8-flash", "models/../gemini-3.8-flash",
+                      "models/./gemini-3.8-flash", "gemini-3.8-flash/"):
+            with self.subTest(model=model):
+                self.assertEqual(self.configured(json.dumps(
+                    {"default_model": model}).encode("utf-8")),
+                    gemini_video.DEFAULT_GEMINI_MODEL)
+
     def test_utf8_bom_config_is_accepted(self):
         self.assertEqual(self.configured(b"\xef\xbb\xbf" +
                          b'{"default_model": "gemini-3.8-flash"}'),
