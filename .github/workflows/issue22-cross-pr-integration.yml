@@ -252,6 +252,7 @@ jobs:
               > "$RUNNER_TEMP/audit-fetch.log" 2>&1; then
               failed=$((failed + 1))
               echo "| #${number} | FETCH FAILED | Could not retrieve PR head |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::PR #${number} fetch failed: $(tail -n 2 "$RUNNER_TEMP/audit-fetch.log" | tr '\n' ' ')"
               continue
             fi
             if git merge --no-ff --no-edit "refs/remotes/audit-pr/${number}" \
@@ -267,6 +268,7 @@ jobs:
               # Escape Markdown table separators in path names.
               conflict_files="${conflict_files//|/\\|}"
               echo "| #${number} | CONFLICT / FAILED | ${conflict_files} |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::PR #${number} integration conflict: ${conflict_files}"
               if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
                 git merge --abort
               fi
