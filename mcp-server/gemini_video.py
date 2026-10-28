@@ -307,7 +307,13 @@ def analyze_frames_dir(
     # 解析対象の画像ファイルを決定(metaがあればそれを優先、なければフォルダ走査)
     if frames_meta:
         # A partial selection must never be reported as a complete QA pass.
+        # The YMM4 export API emits plain basenames. Reject path aliases,
+        # traversal, control characters and padded names before any disk I/O.
         if any(not isinstance(m.get("file"), str) or not m["file"]
+               or len(m["file"]) > 255
+               or m["file"].strip() != m["file"]
+               or any(ord(c) < 32 or ord(c) == 127 for c in m["file"])
+               or "/" in m["file"] or "\\" in m["file"]
                or not m["file"].lower().endswith(".png") for m in frames_meta):
             return {"success": False, "source": "frames_dir",
                     "error": "frames_meta contains an invalid PNG filename"}
@@ -343,8 +349,18 @@ def analyze_frames_dir(
                         "error": "frames_meta frame order conflicts with capture order"}
     else:
         try:
-            files = sorted((f for f in os.listdir(frames_dir) if f.lower().endswith(".png")),
-                           key=_frame_filename_key)
+            # scandir is incremental; listdir materializes every directory
+            # entry before a limit can be applied. Bound even non-PNG entries
+            # so an untrusted directory cannot starve the QA process.
+            files = []
+            with os.scandir(frames_dir) as iterator:
+                for scanned_count, item in enumerate(iterator, start=1):
+                    if scanned_count > 100_000:
+                        return {"success": False, "source": "frames_dir",
+                                "error": "PNG directory exceeds the 100000 entry scan limit"}
+                    if item.name.lower().endswith(".png"):
+                        files.append(item.name)
+            files.sort(key=_frame_filename_key)
         except OSError as exc:
             return {"success": False, "source": "frames_dir",
                     "error": f"Cannot enumerate PNG frames: {exc}"}
@@ -353,25 +369,33 @@ def analyze_frames_dir(
     if not entries:
         return {"success": False, "error": "解析対象の画像がありません"}
 
-    # Validate every declared capture *before* downsampling. A missing or
-    # empty frame that is not selected for upload still invalidates the export.
-    if frames_meta is not None:
-        for e in entries:
-            path = _safe_frame_path(frames_dir, e["file"])
-            if path is None:
+    # Check the complete capture before downsampling, even without explicit
+    # metadata. A broken unselected PNG must not yield a successful QA result.
+    seen_capture_paths = set()
+    for e in entries:
+        path = _safe_frame_path(frames_dir, e["file"])
+        if path is None:
+            return {"success": False, "source": "frames_dir",
+                    "error": "PNG frame is missing or outside export directory"}
+        # Distinct names (including symlink aliases) may refer to the same
+        # underlying frame. Treat such metadata as an incomplete capture.
+        if frames_meta is not None:
+            canonical = os.path.normcase(path)
+            if canonical in seen_capture_paths:
                 return {"success": False, "source": "frames_dir",
-                        "error": "Declared PNG frame is missing or outside export directory"}
-            try:
-                size = os.path.getsize(path)
-            except OSError as exc:
-                return {"success": False, "source": "frames_dir",
-                        "error": f"Cannot inspect declared PNG frame: {exc}"}
-            if size == 0:
-                return {"success": False, "source": "frames_dir",
-                        "error": "Declared PNG frame is empty"}
-            if size > MAX_FRAME_IMAGE_BYTES:
-                return {"success": False, "source": "frames_dir",
-                        "error": "Declared PNG frame exceeds the upload size limit"}
+                        "error": "frames_meta contains duplicate resolved PNG frames"}
+            seen_capture_paths.add(canonical)
+        try:
+            size = os.path.getsize(path)
+        except OSError as exc:
+            return {"success": False, "source": "frames_dir",
+                    "error": f"Cannot inspect PNG frame: {exc}"}
+        if size == 0:
+            return {"success": False, "source": "frames_dir",
+                    "error": "PNG frame is empty"}
+        if size > MAX_FRAME_IMAGE_BYTES:
+            return {"success": False, "source": "frames_dir",
+                    "error": "PNG frame exceeds the upload size limit"}
 
     # 多すぎる場合は均等間引き
     if len(entries) > max_images:
