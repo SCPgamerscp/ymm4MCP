@@ -544,7 +544,7 @@ def _loudnorm_measurements(log):
             # Reject exponent-overflow and deeply nested unused fields rather
             # than accepting a plausible input_i from a corrupted record.
             _check_probe_depth(record)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, RecursionError) as exc:
             if candidate:
                 raise ValueError("malformed loudnorm measurement") from exc
             continue
