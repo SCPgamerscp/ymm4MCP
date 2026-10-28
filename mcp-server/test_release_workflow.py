@@ -32,7 +32,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         # CI must install what users download, not a different working-tree
         # directory. Test both first install and a later re-extraction.
         smoke = self.workflow.split(
-            "      - name: Smoke-test one-click MCP server setup\\n", 1
+            "      - name: Smoke-test one-click MCP server setup\n", 1
         )[1].split("      - uses: actions/upload-artifact@v4", 1)[0]
         self.assertIn("Get-ChildItem -LiteralPath artifacts -Filter 'YMM4McpServer-*.zip'",
                       smoke)
@@ -46,7 +46,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("& (Join-Path $upgrade 'install.cmd')", smoke)
         self.assertIn("Join-Path $upgrade 'connection.json'", smoke)
         self.assertNotIn("Copy-Item -LiteralPath 'mcp-server'", smoke)
-        self.assertNotIn('cmd.exe /c "mcp-server\\\\install.cmd"', smoke)
+        self.assertNotIn('cmd.exe /c "mcp-server\\install.cmd"', smoke)
 
     def test_release_requires_both_test_and_package_jobs(self):
         self.assertIn("needs: [package, python-tests]", self.release)
