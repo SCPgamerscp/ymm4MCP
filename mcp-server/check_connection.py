@@ -1,5 +1,7 @@
 """Check the installed MCP server's authenticated local YMM4 connection."""
+import json
 import sys
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -26,26 +28,26 @@ def _reject_nonfinite_json_constant(value: str):
     raise ValueError("YMM4のステータスJSONに不正な数値があります")
 
 
-def _status_json_too_deep(body: bytes) -> bool:
-    """Bound structural nesting without counting brackets inside JSON strings."""
+def _status_json_too_deep(body: str) -> bool:
+    """Bound structural nesting in decoded JSON, including UTF-16/32 inputs."""
     depth = 0
     quoted = False
     escaped = False
-    for byte in body:
+    for char in body:
         if quoted:
             if escaped:
                 escaped = False
-            elif byte == 92:  # backslash
+            elif char == '\\':  # backslash
                 escaped = True
-            elif byte == 34:  # double quote
+            elif char == '"':  # double quote
                 quoted = False
-        elif byte == 34:
+        elif char == '"':
             quoted = True
-        elif byte in (91, 123):  # [ or {
+        elif char in ('[', '{'):
             depth += 1
             if depth > MAX_STATUS_JSON_DEPTH:
                 return True
-        elif byte in (93, 125):  # ] or }
+        elif char in (']', '}'):
             depth -= 1
     return False
 
@@ -54,22 +56,34 @@ def check() -> dict:
     base, headers = connection_settings()
     # This endpoint is strictly loopback. Environment HTTP(S)_PROXY settings
     # must never receive the plugin's X-Ymm4-Token credential.
+    # Stream before buffering so an unexpected local responder cannot force
+    # an unbounded allocation. HTTPX's read timeout is per operation; also
+    # enforce a total response deadline against indefinitely trickled data.
+    deadline = time.monotonic() + 10.0
     with httpx.Client(timeout=5.0, trust_env=False) as client:
-        response = client.get(base + "/status", headers=headers)
-        response.raise_for_status()
-        # The local endpoint has a tiny status payload. Bound JSON parsing
-        # even when an unexpected service responds with an oversized body.
-        if len(response.content) > MAX_STATUS_JSON_BYTES:
-            raise ValueError("YMM4のステータスJSONが大きすぎます")
-        if _status_json_too_deep(response.content):
-            raise ValueError("YMM4のステータスJSONが深すぎます")
-        try:
-            status = response.json(
-                object_pairs_hook=_unique_json_object,
-                parse_constant=_reject_nonfinite_json_constant,
-            )
-        except RecursionError as exc:
-            raise ValueError("YMM4のステータスJSONが深すぎます") from exc
+        with client.stream("GET", base + "/status", headers=headers) as response:
+            response.raise_for_status()
+            body = bytearray()
+            for chunk in response.iter_bytes(chunk_size=8192):
+                if time.monotonic() > deadline:
+                    raise ValueError("YMM4のステータス応答がタイムアウトしました")
+                if len(body) + len(chunk) > MAX_STATUS_JSON_BYTES:
+                    raise ValueError("YMM4のステータスJSONが大きすぎます")
+                body.extend(chunk)
+    # json.loads(bytes) detects UTF-8/16/32. Decode with the same rules
+    # before counting nesting; scanning raw UTF-16 bytes misses escapes.
+    raw = bytes(body)
+    decoded = raw.decode(json.detect_encoding(raw))
+    if _status_json_too_deep(decoded):
+        raise ValueError("YMM4のステータスJSONが深すぎます")
+    try:
+        status = json.loads(
+            decoded,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except RecursionError as exc:
+        raise ValueError("YMM4のステータスJSONが深すぎます") from exc
     if (not isinstance(status, dict) or status.get("status") != "running"
             or "error" in status or "error_code" in status
             or ("success" in status and status["success"] is not True)):
