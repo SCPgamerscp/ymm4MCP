@@ -126,7 +126,7 @@ class GeminiFrameIntegrityTests(unittest.TestCase):
         self.assertIn("conflicts", error)
 
     def test_directory_read_failure_is_structured(self):
-        with patch.object(gemini_video.os, "listdir", side_effect=OSError("denied")):
+        with patch.object(gemini_video.os, "scandir", side_effect=OSError("denied")):
             result = gemini_video.analyze_frames_dir(self.tmp.name)
         self.assertFalse(result["success"])
         self.assertIn("Cannot enumerate", result["error"])
