@@ -81,5 +81,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                       self.release)
 
 
+    def test_official_reference_download_retries_and_validates_archive(self):
+        # Transient upstream truncation must not fail the first attempt forever,
+        # and no partial ZIP/DLL may be used for a successful package.
+        root = WORKFLOW.parents[2]
+        script = (root / "ci" / "download-ymm4-lite.ps1").read_text(encoding="utf-8")
+        composed = (root / ".github" / "workflows"
+                    / "issue22-cross-pr-integration.yml").read_text(encoding="utf-8")
+        self.assertIn("$maxAttempts = 3", script)
+        self.assertIn("-TimeoutSec 300", script)
+        self.assertIn("Remove-Item -LiteralPath $archive", script)
+        self.assertIn("Remove-Item -LiteralPath $directory", script)
+        self.assertIn("[IO.Compression.ZipFile]::OpenRead($archive)", script)
+        self.assertIn("Expand-Archive -LiteralPath $archive", script)
+        self.assertIn("YukkuriMovieMaker.Plugin.dll", script)
+        self.assertIn("YukkuriMovieMaker.Controls.dll", script)
+        self.assertIn("throw \"Official YMM4 Lite download/validation failed", script)
+        self.assertIn("& ./ci/download-ymm4-lite.ps1", self.workflow)
+        self.assertIn("& ./ci/download-ymm4-lite.ps1", composed)
+        self.assertIn("& ./composed/ci/download-ymm4-lite.ps1", composed)
+        self.assertNotIn("Invoke-WebRequest -Uri 'https://files.manjubox.net/", self.workflow)
+        self.assertNotIn("Invoke-WebRequest -Uri 'https://files.manjubox.net/", composed)
+
+
 if __name__ == "__main__":
     unittest.main()
