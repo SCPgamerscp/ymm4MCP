@@ -45,8 +45,9 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
     def test_composition_includes_export_qa_pr(self):
         # The export QA branch modifies the same packaging workflow as #228;
         # composing it is required before claiming release integration passed.
+        # This order must match the numeric all-open-PR merge audit.
         self.assertIn(
-            "for number in 221 228 229 234 241 243 244 248 257 259 218 219 251 254 255;",
+            "for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259;",
             self.source,
         )
 
