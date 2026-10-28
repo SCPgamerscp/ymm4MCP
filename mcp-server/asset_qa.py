@@ -1,13 +1,29 @@
 """Turn read-only host asset checks into an explicit final QA criterion."""
 
 import ntpath
+import re
 
 from jobs import is_absolute_media_path
 
 
 def _valid_item_id(value: object) -> bool:
-    return (isinstance(value, str) and bool(value.strip())
+    # Whitespace-padded IDs are ambiguous aliases, not distinct timeline items.
+    return (isinstance(value, str) and bool(value)
+            and value.strip() == value
             and not any(ord(char) < 32 or ord(char) == 127 for char in value))
+
+
+def _ambiguous_windows_path(path: str) -> bool:
+    """Reject Win32 aliases that can identify another file or an ADS stream."""
+    drive, tail = ntpath.splitdrive(path)
+    if not drive:
+        return False  # Do not apply Windows filename rules to POSIX paths.
+    # Win32 normally discards trailing dots/spaces from path components.
+    # ntpath.normpath does not, so duplicate-state detection could be bypassed.
+    parts = re.split(r"[\\/]+", tail)
+    return (":" in tail or any(
+        part not in ("", ".", "..") and part.endswith((".", " "))
+        for part in parts))
 
 
 def report(availability: dict) -> dict:
@@ -23,8 +39,12 @@ def report(availability: dict) -> dict:
     count = availability.get("checked_count")
     if not isinstance(complete, bool) or complete != (not unknown and not unchecked):
         raise ValueError("asset availability completeness is inconsistent")
-    if type(count) is not int or count < 0:
-        raise ValueError("checked_count must be a non-negative integer")
+    # The producer checks at most 100 distinct source paths. Reject a
+    # contradictory count rather than certifying an impossible host snapshot.
+    if type(count) is not int or not 0 <= count <= 100:
+        raise ValueError("checked_count must be an integer in 0..100")
+    if count + len(unchecked) > 100:
+        raise ValueError("asset source count exceeds the host check limit")
 
     # Host paths are grouped by canonical Windows path: a source cannot be
     # both missing and unchecked, and an item cannot have multiple statuses.
@@ -39,7 +59,8 @@ def report(availability: dict) -> dict:
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
                 source["path"].strip() != source["path"] or
-                not is_absolute_media_path(source["path"])):
+                not is_absolute_media_path(source["path"]) or
+                _ambiguous_windows_path(source["path"])):
             raise ValueError("asset source entries require a valid path")
         item_ids = source.get("item_ids")
         if not isinstance(item_ids, list) or not item_ids:
