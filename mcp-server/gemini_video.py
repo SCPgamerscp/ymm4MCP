@@ -45,6 +45,22 @@ MAX_MODEL_CONFIG_BYTES = 64 * 1024
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 
 
+def _unique_model_config_object(pairs: list[tuple[str, Any]]) -> dict:
+    """Reject ambiguous model configuration keys, including nested metadata."""
+    config = {}
+    for key, value in pairs:
+        if key in config:
+            raise ValueError("duplicate Gemini model configuration key")
+        config[key] = value
+    return config
+
+
+def _valid_model_id(value: Any) -> bool:
+    """Allow explicit model names while rejecting ambiguous path segments."""
+    return (isinstance(value, str) and _MODEL_ID.fullmatch(value) is not None
+            and all(segment not in ("", ".", "..") for segment in value.split("/")))
+
+
 def _get_default_model() -> str:
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     try:
@@ -54,10 +70,13 @@ def _get_default_model() -> str:
                 raw = f.read(MAX_MODEL_CONFIG_BYTES + 1)
             if len(raw) > MAX_MODEL_CONFIG_BYTES:
                 return DEFAULT_GEMINI_MODEL
-            config = json.loads(raw.decode("utf-8-sig"))
+            config = json.loads(
+                raw.decode("utf-8-sig"),
+                object_pairs_hook=_unique_model_config_object,
+            )
             if isinstance(config, dict):
                 model = config.get("default_model")
-                if isinstance(model, str) and _MODEL_ID.fullmatch(model):
+                if _valid_model_id(model):
                     return model
     except (OSError, UnicodeError, ValueError):
         pass
