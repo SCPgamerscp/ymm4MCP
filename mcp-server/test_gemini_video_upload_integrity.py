@@ -97,7 +97,7 @@ class GeminiFilePollingRetryTests(unittest.TestCase):
             SimpleNamespace(state=SimpleNamespace(name="ACTIVE")),
         ]
         with patch.object(gemini_video.time, "monotonic",
-                          side_effect=[0, 0, 1, 5, 6]), \
+                          side_effect=[0, 0, 1, 5, 5, 6]), \
              patch.object(gemini_video.time, "sleep") as sleep:
             result = gemini_video._wait_file_active(
                 self.client, self.uploaded, timeout_sec=10)
