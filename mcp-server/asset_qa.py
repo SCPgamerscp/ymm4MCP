@@ -8,6 +8,7 @@ import unicodedata
 MAX_ITEM_ID_LENGTH = 256
 MAX_POSIX_PATH_LENGTH = 4096
 MAX_WINDOWS_PATH_LENGTH = 32767
+MAX_PATH_COMPONENT_LENGTH = 255
 
 # Windows device names are aliases even when an extension is appended.
 _RESERVED_WINDOWS_NAME = re.compile(
@@ -31,6 +32,16 @@ def _path_too_long(path: str) -> bool:
     if ntpath.splitdrive(path)[0]:
         return len(path.encode("utf-16-le")) // 2 > MAX_WINDOWS_PATH_LENGTH
     return len(path.encode("utf-8")) > MAX_POSIX_PATH_LENGTH
+
+
+def _oversized_path_component(path: str) -> bool:
+    """Check per-component filesystem limits in native encoded units."""
+    if ntpath.splitdrive(path)[0]:
+        parts = re.split(r"[\\/]", path)
+        return any(len(part.encode("utf-16-le")) // 2 > MAX_PATH_COMPONENT_LENGTH
+                   for part in parts if part)
+    return any(len(part.encode("utf-8")) > MAX_PATH_COMPONENT_LENGTH
+               for part in path.split("/") if part)
 
 
 def _invalid_windows_component(part: str) -> bool:
@@ -119,6 +130,7 @@ def report(availability: dict) -> dict:
                 source["path"].strip() != source["path"] or
                 _unsafe_controls(source["path"]) or
                 _path_too_long(source["path"]) or
+                _oversized_path_component(source["path"]) or
                 (source["path"].endswith("/") or
                  (ntpath.splitdrive(source["path"])[0] and
                   source["path"].endswith("\\"))) or
