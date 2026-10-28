@@ -1,13 +1,30 @@
 """Turn read-only host asset checks into an explicit final QA criterion."""
 
 import ntpath
+import posixpath
 import re
 
 # Windows device names are aliases even when an extension is appended.
 _RESERVED_WINDOWS_NAME = re.compile(
-    r"(?i)^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$"
+    r"(?i)^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$"
 )
 _INVALID_WINDOWS_CHARS = re.compile(r'[<>"|?*]')
+
+# Reject invisible control/format characters that can disguise QA identities.
+_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def _unsafe_controls(value: str) -> bool:
+    return any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
+               or char in _BIDI_CONTROLS for char in value)
+
+
+def _invalid_windows_component(part: str) -> bool:
+    return (not part or part in (".", "..") or part.endswith((".", " "))
+            or _INVALID_WINDOWS_CHARS.search(part) is not None
+            or _RESERVED_WINDOWS_NAME.fullmatch(part) is not None
+            or _unsafe_controls(part) or ":" in part)
+
 
 from jobs import is_absolute_media_path
 
@@ -16,7 +33,7 @@ def _valid_item_id(value: object) -> bool:
     # Whitespace-padded IDs are ambiguous aliases, not distinct timeline items.
     return (isinstance(value, str) and bool(value)
             and value.strip() == value
-            and not any(ord(char) < 32 or ord(char) == 127 for char in value))
+            and not _unsafe_controls(value))
 
 
 def _ambiguous_windows_path(path: str) -> bool:
@@ -29,13 +46,18 @@ def _ambiguous_windows_path(path: str) -> bool:
         return False  # POSIX filenames can legally contain Windows punctuation.
     if not tail:
         return True  # A UNC share root is not a media file.
+    # ntpath.splitdrive strips UNC server/share components from the tail.
+    # Validate those components, not only the final file path.
+    if drive.startswith(("\\\\", "//")):
+        share_parts = re.split(r"[\\/]", drive[2:])
+        if len(share_parts) != 2 or any(
+                _invalid_windows_component(part) for part in share_parts):
+            return True
+    elif not re.fullmatch(r"[A-Za-z]:", drive):
+        return True
     # Keep empty segments rather than normalizing them away.
     parts = re.split(r"[\\/]", tail)
-    return (":" in tail or any(
-        not part or part in (".", "..") or part.endswith((".", " "))
-        or _INVALID_WINDOWS_CHARS.search(part)
-        or _RESERVED_WINDOWS_NAME.fullmatch(part)
-        for part in parts[1:]))
+    return any(_invalid_windows_component(part) for part in parts[1:])
 
 
 def _ambiguous_posix_path(path: str) -> bool:
@@ -81,6 +103,7 @@ def report(availability: dict) -> dict:
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
                 source["path"].strip() != source["path"] or
+                _unsafe_controls(source["path"]) or
                 (source["path"].endswith("/") or
                  (ntpath.splitdrive(source["path"])[0] and
                   source["path"].endswith("\\"))) or
@@ -91,7 +114,11 @@ def report(availability: dict) -> dict:
         item_ids = source.get("item_ids")
         if not isinstance(item_ids, list) or not item_ids:
             raise ValueError("asset source entries require item IDs")
-        canonical_path = ntpath.normcase(ntpath.normpath(source["path"]))
+        # POSIX paths are case-sensitive and backslash is a literal character.
+        # ntpath would incorrectly merge distinct source files.
+        path = source["path"]
+        canonical_path = (ntpath.normcase(ntpath.normpath(path))
+                          if ntpath.splitdrive(path)[0] else posixpath.normpath(path))
         if canonical_path in seen_paths:
             raise ValueError("asset source path appears in multiple states")
         seen_paths.add(canonical_path)
