@@ -60,7 +60,17 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 {"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","full_decode":true,"min_integrated_lufs":-24,"max_integrated_lufs":-12}
 ```
 
-結果の `integrated_loudness` は `[{"stream_ordinal":0,"integrated_lufs":-18.5}]` の形式です。閾値違反は `EXPORT_LOUDNESS_TOO_QUIET` / `EXPORT_LOUDNESS_TOO_LOUD`、測定失敗は `EXPORT_LOUDNESS_FAILED` / `EXPORT_LOUDNESS_UNVERIFIABLE` / `EXPORT_LOUDNESS_TIMEOUT`（すべてerror）です。`qa_gate.decoded_export_check` からも指定できます。LUFSは映像全体の音量基準であり、**セリフとBGMを別々に識別した相対音量評価やTrue Peakの保証ではありません**。
+結果の `integrated_loudness` は `[{"stream_ordinal":0,"integrated_lufs":-18.5}]` の形式です。閾値違反は `EXPORT_LOUDNESS_TOO_QUIET` / `EXPORT_LOUDNESS_TOO_LOUD`、測定失敗は `EXPORT_LOUDNESS_FAILED` / `EXPORT_LOUDNESS_UNVERIFIABLE` / `EXPORT_LOUDNESS_TIMEOUT`（すべてerror）です。`qa_gate.decoded_export_check` からも指定できます。LUFSは映像全体の音量基準であり、**セリフとBGMを別々に識別した相対音量評価やTrue Peakの保証ではありません（上記の独立したdBTPゲートで測定できます）**。
+
+## オプション：全尺True Peak（dBTP）上限
+
+`max_true_peak_dbtp`（-60〜12 dBTP）を指定すると、各音声トラックの**正規化前**のインターサンプルピークをFFmpeg `loudnorm` の `input_tp` で測定します。サンプルピークが0 dBFS未満でも、再生時の補間で0 dBTPを超える場合を検出できます。たとえば配信向けの上限を-1 dBTPにする場合：
+
+```json
+{"action":"qa_gate","decoded_export_check":{"path":"C:/Videos/final.mp4","full_decode":true,"min_integrated_lufs":-24,"max_integrated_lufs":-12,"max_true_peak_dbtp":-1}}
+```
+
+`true_peaks` に `[{"stream_ordinal":0,"true_peak_dbtp":-2.1}]` を返します。上限超過は `EXPORT_TRUE_PEAK_EXCEEDED`（error）です。測定失敗や時間切れはLUFSと同じエラーで不合格です。LUFSとTrue Peakの両方を指定しても、同一トラックのFFmpeg全尺測定は**1回**だけ実行します。`full_decode:true` が必須で、無指定時の追加測定はありません。これは**出力音声を変更・正規化する機能ではなく、完成ファイルの検品**です。トラック別のピークであり、複数トラックを再生時にミックスした合成ピークの保証ではありません。
 
 ## オプション：全トラックの末尾までの継続確認
 

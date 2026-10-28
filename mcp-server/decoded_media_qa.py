@@ -518,8 +518,8 @@ def run(command, timeout):
         command, returncode, stdout_head.decode("utf-8"),
         stderr_tail.decode("utf-8", errors="replace"))
 
-def _integrated_lufs_from_loudnorm(log):
-    """Read one FFmpeg loudnorm first-pass measurement, never its normalized output."""
+def _loudnorm_measurements(log):
+    """Read original integrated LUFS and inter-sample true peak (dBTP)."""
     # FFmpeg emits the input measurements in a final JSON object. Reject
     # missing, duplicate, or nonfinite values rather than inventing loudness.
     blocks = re.findall(r"(?ms)^[ \t]*\{[ \t]*\n.*?^[ \t]*\}[ \t]*$", log)
@@ -556,7 +556,12 @@ def _integrated_lufs_from_loudnorm(log):
     lufs = float(value)
     if not math.isfinite(lufs) or not -100 <= lufs <= 30:
         raise ValueError("loudnorm integrated loudness is out of range")
-    return lufs
+    return lufs, float(record["input_tp"])
+
+
+def _integrated_lufs_from_loudnorm(log):
+    """Backward-compatible helper for LUFS-only callers and tests."""
+    return _loudnorm_measurements(log)[0]
 
 
 def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
@@ -571,7 +576,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
              require_audio_peak_metrics=False, expected_video_frames=None,
              min_audio_peak_dbfs=None, max_audio_peak_dbfs=None,
              max_stereo_imbalance_db=None, min_integrated_lufs=None,
-             max_integrated_lufs=None):
+             max_integrated_lufs=None, max_true_peak_dbtp=None):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -589,9 +594,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     if (min_integrated_lufs is not None and max_integrated_lufs is not None
             and min_integrated_lufs > max_integrated_lufs):
         raise ValueError("min_integrated_lufs exceeds max_integrated_lufs")
-    loudness_requested = min_integrated_lufs is not None or max_integrated_lufs is not None
+    if max_true_peak_dbtp is not None and (
+            type(max_true_peak_dbtp) not in (int, float)
+            or not math.isfinite(max_true_peak_dbtp)
+            or not -60 <= max_true_peak_dbtp <= 12):
+        raise ValueError("max_true_peak_dbtp must be finite and in [-60, 12]")
+    loudness_requested = (min_integrated_lufs is not None
+                          or max_integrated_lufs is not None
+                          or max_true_peak_dbtp is not None)
     if loudness_requested and not full_decode:
-        raise ValueError("integrated loudness gates require full_decode=True")
+        raise ValueError("loudness and true peak gates require full_decode=True")
     if not isinstance(full_signal_scan, bool):
         raise ValueError("full_signal_scan must be boolean")
     if full_signal_scan and not full_decode:
@@ -1776,6 +1788,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     # sampled from a few windows. This is opt-in because every track requires
     # an additional full-length FFmpeg loudnorm first pass.
     integrated_loudness = []
+    true_peaks = []
     if loudness_requested and full_decode_ok and audios:
         for ordinal in range(len(audios)):
             remaining = full_deadline - time.monotonic()
@@ -1806,13 +1819,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                "stream_ordinal": ordinal})
                 continue
             try:
-                lufs = _integrated_lufs_from_loudnorm(measured.stderr or "")
+                lufs, true_peak = _loudnorm_measurements(measured.stderr or "")
             except ValueError:
                 issues.append({"code": "EXPORT_LOUDNESS_UNVERIFIABLE",
                                "severity": "error", "stream_ordinal": ordinal})
                 continue
             integrated_loudness.append({"stream_ordinal": ordinal,
                                         "integrated_lufs": round(lufs, 2)})
+            true_peaks.append({"stream_ordinal": ordinal,
+                               "true_peak_dbtp": round(true_peak, 2)})
             if min_integrated_lufs is not None and lufs < min_integrated_lufs:
                 issues.append({"code": "EXPORT_LOUDNESS_TOO_QUIET",
                                "severity": "error", "stream_ordinal": ordinal,
@@ -1823,6 +1838,11 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                "severity": "error", "stream_ordinal": ordinal,
                                "integrated_lufs": round(lufs, 2),
                                "maximum_lufs": max_integrated_lufs})
+            if max_true_peak_dbtp is not None and true_peak > max_true_peak_dbtp:
+                issues.append({"code": "EXPORT_TRUE_PEAK_EXCEEDED",
+                               "severity": "error", "stream_ordinal": ordinal,
+                               "true_peak_dbtp": round(true_peak, 2),
+                               "maximum_dbtp": max_true_peak_dbtp})
     # Explicit quality gates turn *observed* signal defects into blocking
     # errors. They do not claim that sampled-only scans cover the entire file.
     # Apply them after merging overlapping sample and full-scan intervals.
@@ -1870,6 +1890,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             "fps": video_details[0]["fps"] if video_details else None,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
             "integrated_loudness": integrated_loudness,
+            "true_peaks": true_peaks,
             # Highest observed sample peak across every audio track/window.
             # None means no finite measurement, not proof of silence.
             "audio_peak_db": max((p["peak_dbfs"] for p in audio_peaks), default=None),

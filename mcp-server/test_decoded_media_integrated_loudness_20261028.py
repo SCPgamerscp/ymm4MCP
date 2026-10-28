@@ -87,6 +87,33 @@ class LoudnessTests(unittest.TestCase):
         self.assertTrue(all(command[command.index("-map") + 1] == "0:a:0"
                             for command in loudnorm_commands))
 
+    def test_true_peak_gate_uses_original_full_track_audio(self):
+        # FFmpeg loudnorm input_tp is the pre-normalization inter-sample
+        # true peak; output_tp is the normalized output and must not be used.
+        self.assertEqual((-20.5, -4.1), qa._loudnorm_measurements(LOUDNORM))
+        for invalid in (True, float("nan"), -61, 13, "0"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                qa.inspect(str(self.video), full_decode=True,
+                           max_true_peak_dbtp=invalid)
+        with self.assertRaises(ValueError):
+            qa.inspect(str(self.video), max_true_peak_dbtp=-1)
+        with patch.object(qa, "run", side_effect=self.fake_run):
+            passed = qa.inspect(str(self.video), full_decode=True,
+                                min_integrated_lufs=-25, max_true_peak_dbtp=-3)
+            exceeded = qa.inspect(str(self.video), full_decode=True,
+                                  max_true_peak_dbtp=-5)
+        self.assertTrue(passed["passed"], passed)
+        self.assertEqual([{"stream_ordinal": 0, "true_peak_dbtp": -4.1}],
+                         passed["true_peaks"])
+        self.assertFalse(exceeded["passed"], exceeded)
+        self.assertIn("EXPORT_TRUE_PEAK_EXCEEDED",
+                      {issue["code"] for issue in exceeded["issues"]})
+        # A LUFS and true-peak check share the same full-length first pass.
+        loudnorm_commands = [command for command in self.commands
+                             if "-af" in command and "loudnorm=" in
+                             command[command.index("-af") + 1]]
+        self.assertEqual(2, len(loudnorm_commands))
+
     def test_invalid_measurement_and_process_failure_are_blocking(self):
         def missing_measurement(command, timeout):
             result = self.fake_run(command, timeout)
@@ -119,6 +146,13 @@ class RealLoudnessTests(unittest.TestCase):
             self.assertEqual(1, len(report["integrated_loudness"]))
             measured = report["integrated_loudness"][0]["integrated_lufs"]
             self.assertTrue(-50 < measured < 0, report)
+            self.assertEqual(1, len(report["true_peaks"]))
+            self.assertTrue(-60 < report["true_peaks"][0]["true_peak_dbtp"] < 0, report)
+            true_peak_fail = qa.inspect(str(video), full_decode=True,
+                                        max_true_peak_dbtp=-60)
+            self.assertFalse(true_peak_fail["passed"], true_peak_fail)
+            self.assertIn("EXPORT_TRUE_PEAK_EXCEEDED",
+                          {issue["code"] for issue in true_peak_fail["issues"]})
             strict = qa.inspect(str(video), full_decode=True,
                                 min_integrated_lufs=0)
             self.assertFalse(strict["passed"], strict)

@@ -254,6 +254,7 @@ TOOLS = [
                 "max_stereo_imbalance_db": {"type": "number", "minimum": 0, "maximum": 120, "description": "decoded_export_qa: ステレオ左右ピーク差の上限(dB)"},
                 "min_integrated_lufs": {"type": "number", "minimum": -70, "maximum": 10, "description": "decoded_export_qa: 全音声トラックの統合ラウドネス下限(LUFS)。full_decode必須"},
                 "max_integrated_lufs": {"type": "number", "minimum": -70, "maximum": 10, "description": "decoded_export_qa: 全音声トラックの統合ラウドネス上限(LUFS)。full_decode必須"},
+                "max_true_peak_dbtp": {"type": "number", "minimum": -60, "maximum": 12, "description": "decoded_export_qa: 全音声トラックのTrue Peak上限(dBTP)。full_decode必須"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
@@ -1081,7 +1082,8 @@ async def dispatch(args: dict) -> Any:
                             "max_freeze_seconds", "require_audio_peak_metrics",
                             "expected_video_frames", "min_audio_peak_dbfs",
                             "max_audio_peak_dbfs", "max_stereo_imbalance_db",
-                            "min_integrated_lufs", "max_integrated_lufs")
+                            "min_integrated_lufs", "max_integrated_lufs",
+                            "max_true_peak_dbtp")
                            if key in args})
                 case "export_qa":
                     path = args.get("path")
@@ -1376,7 +1378,8 @@ async def dispatch(args: dict) -> Any:
                                        "expected_video_frames", "min_audio_peak_dbfs",
                                        "max_audio_peak_dbfs", "max_stereo_imbalance_db",
                                        "expected_audio_streams",
-                                       "min_integrated_lufs", "max_integrated_lufs"}:
+                                       "min_integrated_lufs", "max_integrated_lufs",
+                                       "max_true_peak_dbtp"}:
                     raise ValueError("decoded_export_check requires path and supported options")
                 criteria["decoded_export"] = config
                 report = await dispatch({"action": "get_info", "sub_action": "decoded_export_qa", **config})
