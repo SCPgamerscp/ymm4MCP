@@ -40,4 +40,40 @@ try
     throw new Exception("persistence errors must be propagated");
 }
 catch (InvalidOperationException) { }
+// An external YMM4 process can change the on-disk settings without changing
+// this process's Server.Settings. A stale file fingerprint must reject a save.
+var tempSettings = Path.Combine(Path.GetTempPath(),
+    "ymm4-settings-concurrency-" + Guid.NewGuid().ToString("N") + ".json");
+try
+{
+    Check(SettingsViewSaveCoordinator.FileFingerprint(tempSettings) == "<missing>",
+        "missing settings file must have a stable sentinel");
+    File.WriteAllText(tempSettings, "{\"port\":8765}");
+    var observedFile = SettingsViewSaveCoordinator.FileFingerprint(tempSettings);
+    File.WriteAllText(tempSettings, "{\"port\":9000}");
+    var externalFile = SettingsViewSaveCoordinator.FileFingerprint(tempSettings);
+    Check(externalFile != observedFile, "external settings edit was not detected");
+    bool persistedStale = false;
+    Check(!SettingsViewSaveCoordinator.TryCommit(current, () => current,
+        () => persistedStale = true,
+        () => SettingsViewSaveCoordinator.FileFingerprint(tempSettings) == observedFile),
+        "stale on-disk settings must reject a save");
+    Check(!persistedStale, "stale on-disk settings unexpectedly persisted");
+    // Even if the bytes have not changed since opening, values already
+    // different from this process's in-memory settings must not be saved.
+    Check(!SettingsViewSaveCoordinator.TryCommit(current, () => current,
+        () => persistedStale = true,
+        () => new SettingsViewSnapshot(9000, false, true).Equals(current)),
+        "external settings values must reject a save");
+    Check(SettingsViewSaveCoordinator.TryCommit(current, () => current,
+        () => persistedStale = true,
+        () => SettingsViewSaveCoordinator.FileFingerprint(tempSettings) == externalFile),
+        "fresh on-disk state should allow saving");
+    Check(persistedStale, "fresh on-disk state did not persist");
+}
+finally
+{
+    if (File.Exists(tempSettings)) File.Delete(tempSettings);
+}
+
 Console.WriteLine("Settings view snapshot tests passed");
