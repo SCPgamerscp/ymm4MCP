@@ -51,6 +51,62 @@ class GeminiFrameIntegrityTests(unittest.TestCase):
         ])
         self.assertIn("inconsistent", error)
 
+    def test_all_present_but_invalid_timestamps_are_rejected(self):
+        self.png("a.png")
+        self.png("b.png")
+        error = self.reject_without_upload([
+            {"file": "a.png", "timeMs": "bad", "frame": 0},
+            {"file": "b.png", "timeMs": "bad", "frame": 30},
+        ])
+        self.assertIn("inconsistent", error)
+
+    def test_all_present_but_invalid_frame_indices_are_rejected(self):
+        self.png("a.png")
+        self.png("b.png")
+        error = self.reject_without_upload([
+            {"file": "a.png", "timeMs": 0, "frame": "bad"},
+            {"file": "b.png", "timeMs": 1000, "frame": "bad"},
+        ])
+        self.assertIn("inconsistent", error)
+
+    def test_mixed_present_and_absent_metadata_is_rejected(self):
+        self.png("a.png")
+        self.png("b.png")
+        error = self.reject_without_upload([
+            {"file": "a.png", "timeMs": 0},
+            {"file": "b.png"},
+        ])
+        self.assertIn("inconsistent", error)
+
+    def test_unsampled_missing_frame_invalidates_entire_export(self):
+        # With five frames and max_images=3, frame 1 would not be uploaded.
+        for i in (0, 2, 3, 4):
+            self.png(f"{i}.png")
+        metadata = [
+            {"file": f"{i}.png", "timeMs": i * 1000, "frame": i}
+            for i in range(5)
+        ]
+        with patch.object(gemini_video, "_client",
+                          side_effect=AssertionError("unexpected upload")):
+            result = gemini_video.analyze_frames_dir(
+                self.tmp.name, frames_meta=metadata, max_images=3)
+        self.assertFalse(result["success"], result)
+        self.assertIn("missing", result["error"])
+
+    def test_unsampled_empty_frame_invalidates_entire_export(self):
+        for i in range(5):
+            self.png(f"{i}.png", b"" if i == 1 else b"PNG fixture")
+        metadata = [
+            {"file": f"{i}.png", "timeMs": i * 1000, "frame": i}
+            for i in range(5)
+        ]
+        with patch.object(gemini_video, "_client",
+                          side_effect=AssertionError("unexpected upload")):
+            result = gemini_video.analyze_frames_dir(
+                self.tmp.name, frames_meta=metadata, max_images=3)
+        self.assertFalse(result["success"], result)
+        self.assertIn("empty", result["error"])
+
     def test_conflicting_time_and_frame_order_is_rejected(self):
         self.png("a.png")
         self.png("b.png")
