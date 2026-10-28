@@ -1,5 +1,6 @@
 """Read the plugin's per-user connection descriptor without caching rotated tokens."""
 import json
+import math
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,6 +15,10 @@ class ConnectionConfigurationError(ValueError):
 MAX_DESCRIPTOR_BYTES = 64 * 1024
 MAX_DESCRIPTOR_DEPTH = 128
 MAX_API_TOKEN_LENGTH = 256
+# Numbers in the descriptor are metadata, not a reason to spend unbounded
+# CPU converting enormous integer or floating-point literals.
+MAX_DESCRIPTOR_INTEGER_DIGITS = 128
+MAX_DESCRIPTOR_FLOAT_CHARS = 128
 
 
 def _unique_json_object(pairs):
@@ -28,6 +33,23 @@ def _unique_json_object(pairs):
 def _reject_nonfinite_constant(value: str):
     """Connection metadata must use standards-compliant JSON numbers."""
     raise ValueError("nonfinite connection descriptor number")
+
+
+def _bounded_json_integer(literal: str) -> int:
+    """Reject huge integer tokens before int() performs expensive conversion."""
+    if len(literal.lstrip("-")) > MAX_DESCRIPTOR_INTEGER_DIGITS:
+        raise ValueError("connection descriptor integer is too long")
+    return int(literal)
+
+
+def _bounded_json_float(literal: str) -> float:
+    """Reject expensive or overflowing floating-point JSON metadata."""
+    if len(literal) > MAX_DESCRIPTOR_FLOAT_CHARS:
+        raise ValueError("connection descriptor floating-point literal is too long")
+    value = float(literal)
+    if not math.isfinite(value):
+        raise ValueError("nonfinite connection descriptor number")
+    return value
 
 
 def _descriptor_too_deep(body: str) -> bool:
@@ -94,6 +116,8 @@ def connection_settings() -> tuple[str, dict[str, str]]:
                 decoded,
                 object_pairs_hook=_unique_json_object,
                 parse_constant=_reject_nonfinite_constant,
+                parse_int=_bounded_json_integer,
+                parse_float=_bounded_json_float,
             )
             _reject_unpaired_surrogates(descriptor)
             if not isinstance(descriptor, dict):
