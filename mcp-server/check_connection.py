@@ -31,7 +31,7 @@ def check() -> dict:
     # Version is printed in the installer terminal. Never display control
     # sequences, Unicode direction overrides, or arbitrarily large values
     # returned by an unexpected service on the configured loopback port.
-    if version is not None and (
+    if "version" in status and (
             not isinstance(version, str) or not version or len(version) > 128
             or not version.isprintable()):
         raise ValueError("YMM4の応答バージョンが不正です")
