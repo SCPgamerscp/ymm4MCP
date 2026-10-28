@@ -152,19 +152,21 @@ def _invalid_signal_timestamps(log, start_name, end_name, window_duration=None):
     """Reject malformed or out-of-window FFmpeg signal timestamps."""
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
                    "freeze_start": "freezedetect"}[start_name]
-    pattern = re.compile(r"\b(?:" + re.escape(start_name) + r"|"
+    pattern = re.compile(r"\b(" + re.escape(start_name) + r"|"
                          + re.escape(end_name) + r"):\s*([^\s]*)")
     number = re.compile(
         r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     for line in log.splitlines():
         payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
-        for raw in pattern.findall(payload):
+        for name, raw in pattern.findall(payload):
             if not number.fullmatch(raw) or not math.isfinite(float(raw)):
                 return True
-            # Negative preroll is valid, but a detector cannot observe events
-            # arbitrarily far beyond the decoded sample/track boundary.
-            if (window_duration is not None and float(raw) >
-                    window_duration + max(0.05, window_duration * 0.001)):
+            # A start after the window cannot be observed. However an end
+            # beyond the window may legitimately describe a partially clipped
+            # event, which the range parser safely truncates at the boundary.
+            if (name == start_name and window_duration is not None and
+                    float(raw) > window_duration +
+                    max(0.05, window_duration * 0.001)):
                 return True
     return False
 
