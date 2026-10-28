@@ -7,12 +7,19 @@ $directory = Join-Path $temporaryRoot 'ymm4-lite'
 $source = 'https://files.manjubox.net/YukkuriMovieMaker_v4_Lite.zip'
 $maxAttempts = 3
 
+# Begin each invocation with a fresh archive. A failed HTTP transfer may leave
+# usable partial bytes, but a completed/invalid ZIP must never be resumed.
+Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $downloadCompleted = $false
     try {
-        # Never reuse a partially downloaded ZIP or partially expanded DLLs.
-        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        # A failed HTTP transfer can leave a partial ZIP. PowerShell's -Resume
+        # uses HTTP Range where supported; if the server cannot resume, it
+        # downloads from the beginning. Never reuse partially expanded DLLs.
         Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue
-        Invoke-WebRequest -Uri $source -OutFile $archive -TimeoutSec 300 -ErrorAction Stop
+        Invoke-WebRequest -Uri $source -OutFile $archive -Resume -TimeoutSec 300 -ErrorAction Stop
+        $downloadCompleted = $true
         if ((Get-Item -LiteralPath $archive).Length -lt 1MB) {
             throw 'Official YMM4 Lite download is unexpectedly small'
         }
@@ -43,6 +50,11 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         return $libPath
     }
     catch {
+        # A completed but invalid ZIP is not a resumable transfer: restart it
+        # from byte zero. An interrupted HTTP download may be resumed on retry.
+        if ($downloadCompleted) {
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        }
         if ($attempt -eq $maxAttempts) {
             throw "Official YMM4 Lite download/validation failed after $maxAttempts attempts: $($_.Exception.Message)"
         }
