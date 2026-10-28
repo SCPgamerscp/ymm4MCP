@@ -25,21 +25,21 @@ try {
         $stream = $entry.Open()
         try {
             $randomBytes = [byte[]]::new(1250000)
-            [Security.Cryptography.RandomNumberGenerator]::Fill($randomBytes)
+            [System.Security.Cryptography.RandomNumberGenerator]::Fill($randomBytes)
             $stream.Write($randomBytes, 0, $randomBytes.Length)
         }
         finally { $stream.Dispose() }
     }
     finally { $zip.Dispose() }
 
-    $script:validZip = [IO.File]::ReadAllBytes($fixture)
-    $half = [int][Math]::Floor($script:validZip.Length / 2)
-    $script:partialZip = [byte[]]::new($half)
-    [Array]::Copy($script:validZip, $script:partialZip, $half)
-    $script:invalidZip = [byte[]]::new(1250000)
-    [Security.Cryptography.RandomNumberGenerator]::Fill($script:invalidZip)
-    $script:mode = ''
-    $script:callCount = 0
+    $global:validZip = [IO.File]::ReadAllBytes($fixture)
+    $half = [int][Math]::Floor($global:validZip.Length / 2)
+    $global:partialZip = [byte[]]::new($half)
+    [Array]::Copy($global:validZip, $global:partialZip, $half)
+    $global:invalidZip = [byte[]]::new(1250000)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($global:invalidZip)
+    $global:mode = ''
+    $global:callCount = 0
 
     # Function shadowing deliberately replaces the HTTP transport only. The
     # actual helper's retry, ZIP verification and extraction run unchanged.
@@ -52,46 +52,46 @@ try {
         if (-not $Resume -or $TimeoutSec -ne 300) {
             throw 'Downloader must use bounded resumable requests'
         }
-        $script:callCount++
-        if ($script:callCount -eq 1 -and $script:mode -eq 'interrupted') {
-            [IO.File]::WriteAllBytes($OutFile, $script:partialZip)
+        $global:callCount++
+        if ($global:callCount -eq 1 -and $global:mode -eq 'interrupted') {
+            [IO.File]::WriteAllBytes($OutFile, $global:partialZip)
             throw 'Simulated ResponseEnded after partial transfer'
         }
-        if ($script:callCount -eq 2 -and $script:mode -eq 'interrupted') {
+        if ($global:callCount -eq 2 -and $global:mode -eq 'interrupted') {
             if (-not (Test-Path -LiteralPath $OutFile) -or
-                (Get-Item -LiteralPath $OutFile).Length -ne $script:partialZip.Length) {
+                (Get-Item -LiteralPath $OutFile).Length -ne $global:partialZip.Length) {
                 throw 'Partial transfer was discarded instead of resumed'
             }
             $stream = [IO.File]::Open($OutFile, [IO.FileMode]::Append)
             try {
-                $stream.Write($script:validZip, $script:partialZip.Length,
-                    $script:validZip.Length - $script:partialZip.Length)
+                $stream.Write($global:validZip, $global:partialZip.Length,
+                    $global:validZip.Length - $global:partialZip.Length)
             }
             finally { $stream.Dispose() }
             return
         }
-        if ($script:callCount -eq 1 -and $script:mode -eq 'corrupt') {
-            [IO.File]::WriteAllBytes($OutFile, $script:invalidZip)
+        if ($global:callCount -eq 1 -and $global:mode -eq 'corrupt') {
+            [IO.File]::WriteAllBytes($OutFile, $global:invalidZip)
             return
         }
-        if ($script:callCount -eq 2 -and $script:mode -eq 'corrupt') {
+        if ($global:callCount -eq 2 -and $global:mode -eq 'corrupt') {
             if (Test-Path -LiteralPath $OutFile) {
                 throw 'Completed invalid ZIP must be discarded before retry'
             }
-            [IO.File]::WriteAllBytes($OutFile, $script:validZip)
+            [IO.File]::WriteAllBytes($OutFile, $global:validZip)
             return
         }
-        throw "Unexpected download attempt $script:callCount ($script:mode)"
+        throw "Unexpected download attempt $global:callCount ($global:mode)"
     }
 
     foreach ($scenario in @('interrupted', 'corrupt')) {
         $env:RUNNER_TEMP = Join-Path $testRoot $scenario
         New-Item -ItemType Directory -Path $env:RUNNER_TEMP | Out-Null
-        $script:mode = $scenario
-        $script:callCount = 0
+        $global:mode = $scenario
+        $global:callCount = 0
         $lib = & $helper
-        if ($script:callCount -ne 2) {
-            throw "$scenario expected exactly two download calls; got $script:callCount"
+        if ($global:callCount -ne 2) {
+            throw "$scenario expected exactly two download calls; got $global:callCount"
         }
         foreach ($name in @('YukkuriMovieMaker.Plugin.dll', 'YukkuriMovieMaker.Controls.dll')) {
             if (-not (Test-Path -LiteralPath (Join-Path $lib $name) -PathType Leaf)) {
@@ -104,4 +104,5 @@ try {
 finally {
     $env:RUNNER_TEMP = $originalRunnerTemp
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Variable -Name validZip,partialZip,invalidZip,mode,callCount -Scope Global -ErrorAction SilentlyContinue
 }
