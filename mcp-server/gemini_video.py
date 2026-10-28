@@ -126,10 +126,55 @@ def _build_prompt(event_instruction: str) -> str:
     )
 
 
+MAX_GEMINI_RESPONSE_CHARS = 4 * 1024 * 1024
+
+
+def _unique_gemini_object(pairs: list[tuple[str, Any]]) -> dict:
+    """Reject conflicting claims in nested model-generated JSON objects."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_gemini_constant(token: str) -> None:
+    raise ValueError(f"nonstandard JSON numeric constant: {token}")
+
+
+def _finite_gemini_float(token: str) -> float:
+    if len(token) > 128:
+        raise ValueError("JSON floating-point literal is too long")
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError("JSON floating-point number is not finite")
+    return value
+
+
+def _reject_gemini_surrogates(value: Any) -> None:
+    """JSON escaped unpaired surrogates cannot be encoded as valid UTF-8."""
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in current):
+                raise ValueError("unpaired Unicode surrogate in Gemini JSON")
+        elif isinstance(current, dict):
+            pending.extend(current.keys())
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+
+
 def _extract_json(text: str) -> dict:
     """Geminiの応答からJSONを頑健に抽出する。コードフェンスや前後テキストを許容。"""
     if not text:
         return {"summary": "", "events": [], "_parse_error": "空の応答"}
+    # The response has already been downloaded, but do not parse an unbounded
+    # model response into a potentially huge object graph.
+    if len(text) > MAX_GEMINI_RESPONSE_CHARS:
+        return {"summary": "", "events": [], "_parse_error": "Gemini JSON response is too large"}
     # ```json ... ``` を剥がす
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidate = fence.group(1) if fence else None
@@ -139,7 +184,13 @@ def _extract_json(text: str) -> dict:
         end = text.rfind("}")
         candidate = text[start : end + 1] if (start >= 0 and end > start) else text
     try:
-        parsed = json.loads(candidate)
+        parsed = json.loads(
+            candidate,
+            object_pairs_hook=_unique_gemini_object,
+            parse_constant=_reject_gemini_constant,
+            parse_float=_finite_gemini_float,
+        )
+        _reject_gemini_surrogates(parsed)
         if (not isinstance(parsed, dict)
                 or not isinstance(parsed.get("summary"), str)
                 or not isinstance(parsed.get("events"), list)
