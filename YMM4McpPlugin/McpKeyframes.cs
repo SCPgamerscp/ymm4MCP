@@ -29,22 +29,51 @@ namespace YMM4McpPlugin
                 if (located.error != null) return located.error;
                 var item = located.item!;
                 var identity = GetItemIdentity(item);
-                var properties = string.IsNullOrWhiteSpace(prop)
-                    ? ListAnimatableProperties(item)
-                    : new[] { prop };
+                // The opt-in live smoke test must never certify a partial
+                // inventory as complete when a YMM4 property getter fails.
+                bool strictInventory = string.IsNullOrWhiteSpace(prop)
+                    && req.QueryString["strict_inventory"] == "1";
+                IEnumerable<string> properties;
+                try
+                {
+                    properties = string.IsNullOrWhiteSpace(prop)
+                        ? strictInventory ? ListAnimatablePropertiesStrict(item) : ListAnimatableProperties(item)
+                        : new[] { prop };
+                }
+                catch (Exception)
+                {
+                    return Failure("ANIMATION_INVENTORY_INCOMPLETE",
+                        "アニメーション一覧の取得に失敗しました。実機検証を中断してください");
+                }
                 var animations = new List<object>();
                 var names = new List<string>();
                 foreach (var name in properties)
                 {
-                    var anim = ResolveAnimation(item, name);
-                    if (anim == null) continue;
-                    names.Add(name);
-                    animations.Add(new
+                    try
                     {
-                        prop = name,
-                        type = anim.GetType().Name,
-                        keyframes = ReadKeyframes(anim, located.frame)
-                    });
+                        var anim = ResolveAnimation(item, name);
+                        if (anim == null)
+                        {
+                            if (strictInventory)
+                                return Failure("ANIMATION_INVENTORY_INCOMPLETE",
+                                    "アニメーション " + name + " を再取得できませんでした");
+                            continue;
+                        }
+                        names.Add(name);
+                        animations.Add(new
+                        {
+                            prop = name,
+                            type = anim.GetType().Name,
+                            keyframes = ReadKeyframes(anim, located.frame)
+                        });
+                    }
+                    catch (Exception)
+                    {
+                        if (strictInventory)
+                            return Failure("ANIMATION_INVENTORY_INCOMPLETE",
+                                "アニメーション " + name + " の読取に失敗しました");
+                        throw;
+                    }
                 }
                 return (object)new
                 {
@@ -55,6 +84,7 @@ namespace YMM4McpPlugin
                     frame = located.frame,
                     layer = located.layer,
                     properties = names,
+                    inventory_complete = strictInventory,
                     animations
                 };
             });
@@ -182,6 +212,32 @@ namespace YMM4McpPlugin
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(n => n)
                 .ToArray();
+        }
+
+        // Strict mode is used only by the opt-in destructive smoke test.
+        // Unlike GetPropObj, direct reflection does not hide throwing getters.
+        // A failure in *any* readable item property aborts the test rather
+        // than allowing an unobserved animation to be changed silently.
+        private static string[] ListAnimatablePropertiesStrict(object item)
+        {
+            var names = new List<string>();
+            foreach (var property in item.GetType().GetProperties(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length != 0 || property.GetGetMethod(true) == null)
+                    continue;
+                object? value = property.GetValue(item);
+                if (value != null && value.GetType().Name.Contains("ReactiveProperty"))
+                {
+                    var inner = value.GetType().GetProperty("Value",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (inner?.GetGetMethod(true) != null)
+                        value = inner.GetValue(value);
+                }
+                if (IsAnimation(value)) names.Add(property.Name);
+            }
+            return names.Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         private static object? ResolveAnimation(object item, string prop)
@@ -341,11 +397,15 @@ namespace YMM4McpPlugin
         {
             if (TryInvokeNamed(anim, KeyframeRemoveNames, frame)) return true;
             var keyFrames = GetPropObj(anim, "KeyFrames");
-            return keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
+            if (keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame)) return true;
+            return KeyframeCollectionRemoval.TryRemove(anim, frame);
         }
 
         private static bool ClearKeyframes(object anim)
         {
+            // Prefer a single verified transaction over a series of removals.
+            // Otherwise a failure halfway through leaves an edited animation.
+            if (KeyframeCollectionRemoval.TryClear(anim)) return true;
             var frames = ReadFrameList(anim).OrderByDescending(f => f).ToArray();
             if (frames.Length == 0)
             {
@@ -355,7 +415,19 @@ namespace YMM4McpPlugin
             }
             bool any = false;
             foreach (var frame in frames)
-                any |= RemoveKeyframe(anim, frame);
+            {
+                if (!RemoveKeyframe(anim, frame))
+                {
+                    if (any)
+                        throw new InvalidOperationException(
+                            "Keyframe clear stopped after a partial native removal; inspect the animation before retrying.");
+                    return false;
+                }
+                any = true;
+            }
+            if (ReadFrameList(anim).Count != 0)
+                throw new InvalidOperationException(
+                    "Native keyframe clear returned success but some frames remain.");
             return any;
         }
 
