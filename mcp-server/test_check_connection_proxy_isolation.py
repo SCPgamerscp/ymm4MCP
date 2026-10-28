@@ -22,7 +22,8 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
                 accepted.json.return_value = {
                     "status": "running", "port": 8765, "success": True
                 }
-                accepted.iter_bytes.return_value = [json.dumps(accepted.json.return_value).encode("utf-8")]
+                accepted.headers = {}
+        accepted.iter_bytes.return_value = [json.dumps(accepted.json.return_value).encode("utf-8")]
                 wrong = MagicMock()
                 wrong.__enter__.return_value = rejected
                 right = MagicMock()
@@ -44,7 +45,7 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
                 client_factory.assert_called_once_with(timeout=5.0, trust_env=False)
                 self.assertEqual(client.stream.call_args_list, [
                     call("GET", base + "/status", headers={"X-Ymm4-Token": "0ecret"}),
-                    call("GET", base + "/status", headers={"X-Ymm4-Token": "secret"}),
+                    call("GET", base + "/status", headers={"X-Ymm4-Token": "secret", "Accept-Encoding": "identity"}),
                 ])
                 self.assertEqual(result["port"], 8765)
 
