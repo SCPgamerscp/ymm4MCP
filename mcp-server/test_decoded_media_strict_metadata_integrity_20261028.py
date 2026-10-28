@@ -64,6 +64,16 @@ class StrictQAMetadataIntegrityTests(unittest.TestCase):
         self.assertFalse(result["passed"], result)
         self.assertIn("EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE", self.codes(result))
 
+    def test_strict_peak_accepts_overall_complete_silence(self):
+        result = self.inspect(
+            [{"codec_type": "video"},
+             {"codec_type": "audio", "channels": 2}],
+            audio_log="Overall\nPeak level dB: -inf\n",
+            require_audio_peak_metrics=True)
+        self.assertTrue(result["passed"], result)
+        self.assertIn("EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
+                      self.codes(result))
+
     def test_strict_peak_accepts_all_declared_channels(self):
         result = self.inspect(
             [{"codec_type": "video"},

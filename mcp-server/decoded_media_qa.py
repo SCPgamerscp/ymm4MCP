@@ -1373,7 +1373,12 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 # A partial channel inventory cannot satisfy a strict peak
                 # measurement requirement even if one channel has a value.
                 if (require_audio_peak_metrics and declared_channels is not None
-                        and not complete_channels):
+                        and not complete_channels
+                        # An Overall -inf is a complete-silence measurement even
+                        # when FFmpeg omits per-channel sections entirely.
+                        # A finite Overall peak does not prove each channel.
+                        and not (overall_silent and not channel_peaks
+                                 and not observed_headers)):
                     issues.append({
                         "code": "EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE",
                         "severity": "error", "stream_ordinal": ordinal,
