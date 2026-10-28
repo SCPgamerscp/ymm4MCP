@@ -1260,6 +1260,13 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         "sample_start_seconds": round(start, 6),
                         "declared_channels": declared_channels,
                         "measured_channels": sorted(channel_peaks)})
+                if require_audio_peak_metrics and declared_channels is None:
+                    # A finite Overall peak alone cannot prove that every
+                    # channel was measured when the channel count is unknown.
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_UNKNOWN",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
                 if max_stereo_imbalance_db is not None and declared_channels != 2:
                     issues.append({
                         "code": "EXPORT_SAMPLE_STEREO_CHANNELS_UNVERIFIABLE",
