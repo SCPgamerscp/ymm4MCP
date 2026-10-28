@@ -1,5 +1,6 @@
 """Check the installed MCP server's authenticated local YMM4 connection."""
 import json
+import math
 import sys
 import time
 from urllib.parse import urlsplit
@@ -26,6 +27,21 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
 def _reject_nonfinite_json_constant(value: str):
     """JSON does not permit NaN/Infinity, even in ignored fields."""
     raise ValueError("YMM4のステータスJSONに不正な数値があります")
+
+
+def _finite_json_float(value: str) -> float:
+    """Reject overflowed JSON exponents, not just nonstandard NaN tokens."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("YMM4のステータスJSONに不正な数値があります")
+    return number
+
+
+def _bounded_json_int(value: str) -> int:
+    """Bound integer parsing even when Python's global digit guard is disabled."""
+    if len(value.lstrip("-")) > 128:
+        raise ValueError("YMM4のステータスJSONの整数が長すぎます")
+    return int(value)
 
 
 def _status_json_too_deep(body: str) -> bool:
@@ -88,6 +104,15 @@ def check() -> dict:
             # Content-Length is optional for chunked responses. When present,
             # reject oversized, malformed, or inconsistent framing.
             length_header = response.headers.get("content-length")
+            transfer_encoding = response.headers.get("transfer-encoding")
+            if transfer_encoding is not None:
+                # RFC framing forbids using Content-Length alongside
+                # Transfer-Encoding. Reject ambiguous/multi-coded responses.
+                if (not isinstance(transfer_encoding, str)
+                        or transfer_encoding.strip().lower() != "chunked"):
+                    raise ValueError("YMM4のステータスTransfer-Encodingが不正です")
+                if length_header is not None:
+                    raise ValueError("YMM4のステータスHTTPフレーミングが矛盾しています")
             declared_length = None
             if length_header is not None:
                 if (not isinstance(length_header, str) or not length_header.isascii()
@@ -116,6 +141,8 @@ def check() -> dict:
             decoded,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_nonfinite_json_constant,
+            parse_float=_finite_json_float,
+            parse_int=_bounded_json_int,
         )
     except RecursionError as exc:
         raise ValueError("YMM4のステータスJSONが深すぎます") from exc
