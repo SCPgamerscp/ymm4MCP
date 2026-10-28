@@ -26,6 +26,7 @@ import time
 from typing import Any, Optional
 
 import httpx
+import requests
 
 # google-genai は遅延 import する(未インストールでもサーバー自体は起動できるように)
 _GENAI_IMPORT_ERROR: Optional[str] = None
