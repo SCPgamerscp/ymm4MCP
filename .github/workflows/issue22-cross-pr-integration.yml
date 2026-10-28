@@ -364,7 +364,7 @@ jobs:
           }
       - name: Regression-test interrupted and corrupt official reference downloads
         shell: pwsh
-        run: ./ci/test-download-ymm4-lite.ps1
+        run: ./composed/ci/test-download-ymm4-lite.ps1
       - name: Download official YMM4 Lite references
         shell: pwsh
         run: |
