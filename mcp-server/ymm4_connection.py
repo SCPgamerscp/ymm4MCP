@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -105,7 +106,16 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             path = str(Path(local) / "YMM4MCP" / "connection.json")
     if path:
         try:
-            with open(path, "rb") as source:
+            # Never block on a substituted FIFO/device or follow a descriptor
+            # symlink into another file. Check both before and after opening:
+            # a path can change between lstat() and open().
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                raise ValueError("connection descriptor must be a regular file")
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise ValueError("connection descriptor must be a regular file")
                 raw = source.read(MAX_DESCRIPTOR_BYTES + 1)
             if len(raw) > MAX_DESCRIPTOR_BYTES:
                 raise ValueError("connection descriptor is too large")
@@ -157,7 +167,7 @@ def connection_settings() -> tuple[str, dict[str, str]]:
     if (parsed.scheme != "http" or "@" in parsed.netloc
             or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
             or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or parsed.path.rstrip("/") != "/api"):
+            or parsed.path not in ("/api", "/api/")):
         raise ConnectionConfigurationError("YMM4_API_BASE はローカルHTTPの /api URLのみ指定できます")
     try:
         # YMM4 never binds its API on the implicit HTTP port 80. An omitted
