@@ -183,11 +183,17 @@ def _wait_file_active(client, file_obj, timeout_sec: int = 180):
     deadline = time.monotonic() + timeout_sec
     consecutive_errors = 0
     while True:
-        # Do not initiate another network request after the overall deadline.
-        if time.monotonic() >= deadline:
+        # SDK v0.3.0 silently ignored HTTP timeouts. Since v1.0.0,
+        # GetFileConfig.http_options.timeout is passed to the HTTP transport
+        # in milliseconds. Bound each request by the *remaining* budget,
+        # rather than checking the deadline only after a blocked call returns.
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms < 1:
             raise TimeoutError("Gemini File API polling timed out")
         try:
-            f = client.files.get(name=name)
+            f = client.files.get(
+                name=name, config={"http_options": {"timeout": remaining_ms}}
+            )
         except Exception as exc:
             if not _transient_file_api_error(exc):
                 raise
