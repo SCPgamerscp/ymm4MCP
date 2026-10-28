@@ -54,14 +54,28 @@ def _status_json_too_deep(body: str) -> bool:
 
 def check() -> dict:
     base, headers = connection_settings()
-    # This endpoint is strictly loopback. Environment HTTP(S)_PROXY settings
-    # must never receive the plugin's X-Ymm4-Token credential.
+    token = headers.get("X-Ymm4-Token")
+    if not isinstance(token, str) or not token:
+        raise ValueError("認証付き接続の確認に必要なYMM4 APIトークンがありません")
+    # A positive response alone does not prove the endpoint enforces auth.
+    invalid_token = ("0" if token[0] != "0" else "1") + token[1:]
+    invalid_headers = {**headers, "X-Ymm4-Token": invalid_token}
+    url = base + "/status"
+    # Both probes stay on loopback; ambient proxies must never see the token.
     # Stream before buffering so an unexpected local responder cannot force
     # an unbounded allocation. HTTPX's read timeout is per operation; also
     # enforce a total response deadline against indefinitely trickled data.
     deadline = time.monotonic() + 10.0
     with httpx.Client(timeout=5.0, trust_env=False) as client:
-        with client.stream("GET", base + "/status", headers=headers) as response:
+        # Inspect only the headers of the negative probe, without buffering
+        # an untrusted response body.
+        with client.stream("GET", url, headers=invalid_headers) as rejected:
+            if rejected.status_code != 401:
+                raise ValueError(
+                    "YMM4の認証が有効であることを確認できません"
+                    "（不正なトークンへの応答がHTTP 401ではありません）"
+                )
+        with client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             body = bytearray()
             for chunk in response.iter_bytes(chunk_size=8192):
