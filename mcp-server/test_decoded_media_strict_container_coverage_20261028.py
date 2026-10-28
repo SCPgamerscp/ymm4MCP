@@ -104,5 +104,32 @@ class StrictContainerCoverageTests(unittest.TestCase):
         self.assertTrue(report["passed"], report)
 
 
+    def test_video_gap_between_staggered_tracks_is_blocking(self):
+        report = self.inspect_tracks([
+            {"codec_type": "video", "start_time": "0", "duration": "1"},
+            {"codec_type": "video", "start_time": "3", "duration": "1"}],
+            max_black_seconds=0.2)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_VIDEO_INTERNAL_GAP_EXCEEDED", self.codes(report))
+
+    def test_audio_gap_between_staggered_tracks_is_blocking(self):
+        report = self.inspect_tracks([
+            {"codec_type": "video", "start_time": "0", "duration": "4"},
+            {"codec_type": "audio", "start_time": "0", "duration": "1"},
+            {"codec_type": "audio", "start_time": "3", "duration": "1"}],
+            max_silence_seconds=0.2)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_AUDIO_INTERNAL_GAP_EXCEEDED", self.codes(report))
+
+    def test_overlapping_audio_tracks_have_no_internal_gap(self):
+        report = self.inspect_tracks([
+            {"codec_type": "video", "start_time": "0", "duration": "4"},
+            {"codec_type": "audio", "start_time": "0", "duration": "3"},
+            {"codec_type": "audio", "start_time": "2", "duration": "2"}],
+            max_silence_seconds=0.2)
+        self.assertTrue(report["passed"], report)
+        self.assertNotIn("EXPORT_AUDIO_INTERNAL_GAP_EXCEEDED", self.codes(report))
+
+
 if __name__ == "__main__":
     unittest.main()
