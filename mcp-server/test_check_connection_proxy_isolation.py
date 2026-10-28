@@ -44,7 +44,7 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
                 client_factory.assert_called_once_with(timeout=5.0, trust_env=False)
                 self.assertEqual(client.stream.call_args_list, [
                     call("GET", base + "/status", headers={"X-Ymm4-Token": "0ecret"}),
-                    call(base + "/status", headers={"X-Ymm4-Token": "secret"}),
+                    call("GET", base + "/status", headers={"X-Ymm4-Token": "secret"}),
                 ])
                 self.assertEqual(result["port"], 8765)
 
