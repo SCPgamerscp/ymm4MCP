@@ -30,7 +30,7 @@ class StatusVersionIntegrityTests(unittest.TestCase):
                 self.check_payload({"status": "running", "port": 8765, "version": version})
 
     def test_rejects_invalid_version_shapes_and_oversized_strings(self):
-        for version in (True, 123, {}, [], "", "v" * 129):
+        for version in (None, True, 123, {}, [], "", "v" * 129):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, "バージョン"):
                 self.check_payload({"status": "running", "port": 8765, "version": version})
 
