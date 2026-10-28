@@ -12,6 +12,7 @@ def fake_client(payload, rejected_status=401):
     rejected = MagicMock(status_code=rejected_status)
     accepted = MagicMock(status_code=200)
     accepted.json.return_value = payload
+    accepted.headers = {}
     accepted.iter_bytes.return_value = [json.dumps(payload).encode("utf-8")]
     wrong = MagicMock()
     wrong.__enter__.return_value = rejected
