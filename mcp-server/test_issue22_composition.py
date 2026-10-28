@@ -67,16 +67,23 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
 
 
     def test_real_export_qa_uses_exact_composed_source(self):
-        # A second merge on Ubuntu could pick up newer PR heads than the
-        # Windows build. Transfer the built composition as a source artifact.
-        self.assertIn("git archive --format=tar --output=issue22-composed.tar HEAD",
-                      self.source)
-        self.assertIn("name: issue22-composed-source", self.source)
+        # Real export QA must inspect the exact all-open-PR archive that
+        # passed both the Windows package and Python integration jobs.
+        # The curated 15-PR source is NOT equivalent to the all-PR package.
         self.assertIn("  composed-real-export-qa:", self.source)
-        self.assertIn("needs: [setup-cross-pr-integration, all-open-prs-windows-package]", self.source)
-        self.assertIn("tar -xf issue22-composed.tar -C composed", self.source)
-        self.assertIn("python -m unittest discover -s mcp-server -p 'test_*.py' -q",
-                      self.source)
+        export_job = self.source.split("  composed-real-export-qa:", 1)[1].split(
+            "  audit-open-pr-merge-compatibility:", 1
+        )[0]
+        self.assertIn(
+            "needs: [setup-cross-pr-integration, all-open-prs-windows-package, all-open-prs-python-integration]",
+            export_job,
+        )
+        self.assertIn("name: all-open-prs-composed-source", export_job)
+        self.assertIn("tar -xf all-open-prs-composed.tar -C composed", export_job)
+        self.assertNotIn("issue22-composed-source", self.source)
+        self.assertNotIn("issue22-composed.tar", self.source)
+        # The complete Python suite is already a required upstream job.
+        self.assertNotIn("python -m unittest discover", export_job)
         self.assertIn(
             "python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration test_decoded_media_required_tail_20261028",
             self.source,
@@ -108,7 +115,7 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertNotIn("Download official YMM4 Lite references", curated)
         self.assertNotIn("Build and verify composed YMM4 .ymme", curated)
         self.assertIn(
-            "needs: [setup-cross-pr-integration, all-open-prs-windows-package]",
+            "needs: [setup-cross-pr-integration, all-open-prs-windows-package, all-open-prs-python-integration]",
             self.source,
         )
         self.assertIn("Build complete all-PR .ymme package", all_pr_windows)
@@ -134,8 +141,12 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
                       self.source)
         self.assertIn("dotnet build composed/YMM4McpPlugin/YMM4McpPlugin.csproj",
                       self.source)
-        self.assertIn("Get-ChildItem -Path composed/tests -Recurse -Filter 'Keyframe*.csproj'",
+        self.assertIn("Get-ChildItem -Path composed/tests -Recurse -Filter '*.Tests.csproj'",
                       self.source)
+        self.assertIn("if ($projects.Count -lt 11)", self.source)
+        self.assertIn("dotnet run --project $project.FullName --configuration Release",
+                      self.source)
+        self.assertNotIn("Filter 'Keyframe*.csproj'", self.source)
         self.assertNotIn("git push", self.source)
 
     def test_all_open_pr_audit_pins_the_triggering_pr_head(self):
