@@ -71,6 +71,13 @@ class SignalDiagnosticIntegrityTests(unittest.TestCase):
         self.assertTrue(result["passed"], result)
         self.assertNotIn("EXPORT_SAMPLE_SIGNAL_LABEL_INVALID", self.codes(result))
 
+    def test_valid_signal_end_beyond_window_is_clipped_not_rejected(self):
+        result = self.inspect_logs(video_log="black_start: 3 black_end: 5")
+        self.assertTrue(result["passed"], result)
+        self.assertNotIn("EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
+                         self.codes(result))
+        self.assertEqual(result["black_frames"][0]["duration_seconds"], 1)
+
     def test_sample_rejects_black_timestamp_far_beyond_decode_window(self):
         result = self.inspect_logs(video_log="black_start: 20 black_end: 21")
         self.assertFalse(result["passed"], result)
