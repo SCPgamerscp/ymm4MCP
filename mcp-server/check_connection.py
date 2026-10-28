@@ -31,6 +31,8 @@ def _reject_nonfinite_json_constant(value: str):
 
 def _finite_json_float(value: str) -> float:
     """Reject overflowed JSON exponents, not just nonstandard NaN tokens."""
+    if len(value) > 128:
+        raise ValueError("YMM4のステータスJSONの小数が長すぎます")
     number = float(value)
     if not math.isfinite(number):
         raise ValueError("YMM4のステータスJSONに不正な数値があります")
@@ -66,6 +68,21 @@ def _status_json_too_deep(body: str) -> bool:
         elif char in (']', '}'):
             depth -= 1
     return False
+
+
+def _reject_unpaired_surrogates(status: object) -> None:
+    """JSON escapes must not smuggle invalid Unicode into ignored metadata."""
+    pending = [status]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in current):
+                raise ValueError("YMM4のステータスJSONに不正なUnicodeがあります")
+        elif isinstance(current, dict):
+            pending.extend(current.keys())
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
 
 
 def check() -> dict:
@@ -152,7 +169,12 @@ def check() -> dict:
     # json.loads(bytes) detects UTF-8/16/32. Decode with the same rules
     # before counting nesting; scanning raw UTF-16 bytes misses escapes.
     raw = bytes(body)
-    decoded = raw.decode(json.detect_encoding(raw))
+    encoding = json.detect_encoding(raw)
+    # An explicit UTF-8 Content-Type must not silently accept UTF-16/32
+    # bodies. Legacy hosts without Content-Type may still send those forms.
+    if content_type is not None and encoding not in ("utf-8", "utf-8-sig"):
+        raise ValueError("YMM4のステータスJSONの文字コードがContent-Typeと一致しません")
+    decoded = raw.decode(encoding)
     if _status_json_too_deep(decoded):
         raise ValueError("YMM4のステータスJSONが深すぎます")
     try:
@@ -165,6 +187,7 @@ def check() -> dict:
         )
     except RecursionError as exc:
         raise ValueError("YMM4のステータスJSONが深すぎます") from exc
+    _reject_unpaired_surrogates(status)
     if (not isinstance(status, dict) or status.get("status") != "running"
             or "error" in status or "error_code" in status
             or ("success" in status and status["success"] is not True)):
