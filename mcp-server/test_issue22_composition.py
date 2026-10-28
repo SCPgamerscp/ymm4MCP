@@ -73,7 +73,7 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
                       self.source)
         self.assertIn("name: issue22-composed-source", self.source)
         self.assertIn("  composed-real-export-qa:", self.source)
-        self.assertIn("needs: setup-cross-pr-integration", self.source)
+        self.assertIn("needs: [setup-cross-pr-integration, all-open-prs-windows-package]", self.source)
         self.assertIn("tar -xf issue22-composed.tar -C composed", self.source)
         self.assertIn("python -m unittest discover -s mcp-server -p 'test_*.py' -q",
                       self.source)
@@ -93,6 +93,29 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertIn("sudo apt-get install -y -qq ffmpeg", self.source)
         self.assertIn("ffmpeg -version | head -n 1", self.source)
         self.assertIn("ffprobe -version | head -n 1", self.source)
+
+
+    def test_curated_suite_does_not_repeat_full_windows_package_download(self):
+        # The 15-PR regression suite previously repeated the large YMM4 Lite
+        # download and timed out while the full 50-PR package had passed.
+        # One authoritative Windows package job must gate real export QA.
+        curated = self.source.split(
+            "  setup-cross-pr-integration:", 1
+        )[1].split("  composed-real-export-qa:", 1)[0]
+        all_pr_windows = self.source.split(
+            "  all-open-prs-windows-package:", 1
+        )[1]
+        self.assertNotIn("Download official YMM4 Lite references", curated)
+        self.assertNotIn("Build and verify composed YMM4 .ymme", curated)
+        self.assertIn(
+            "needs: [setup-cross-pr-integration, all-open-prs-windows-package]",
+            self.source,
+        )
+        self.assertIn("Build complete all-PR .ymme package", all_pr_windows)
+        self.assertEqual(
+            self.source.count("      - name: Download official YMM4 Lite references"),
+            1,
+        )
 
     def test_all_open_prs_are_tested_from_one_immutable_archive(self):
         # A clean 50-PR merge is not enough: both platforms must consume the
