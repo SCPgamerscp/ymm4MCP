@@ -61,7 +61,6 @@ class AssetQaWindowsPathIntegrityTests(unittest.TestCase):
         self.assert_rejected((
             "/",
             "/tmp/clip/",
-            "/tmp/clip\\",
         ))
 
     def test_preserves_valid_names_and_posix_punctuation(self):
@@ -72,6 +71,7 @@ class AssetQaWindowsPathIntegrityTests(unittest.TestCase):
             "\\\\server\\share\\voice clip.wav",
             "/tmp/clip?draft.mp4",
             "/tmp/clip:take.wav",
+            "/tmp/clip\\",
         ):
             with self.subTest(path=path):
                 result = asset_qa.report(self.snapshot(path))
