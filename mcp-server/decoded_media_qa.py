@@ -1057,6 +1057,25 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                "severity": "error",
                                "missing_tail_seconds": round(missing_tail, 6),
                                "max_seconds": limit})
+            # Head/tail checks alone miss an empty interval *between*
+            # staggered tracks. Merge overlapping track intervals and reject
+            # uncovered interior gaps; a different track covering the gap
+            # is sufficient, so intentional overlays are not penalized.
+            intervals = sorted(
+                (max(0.0, start - container_start),
+                 min(duration, start - container_start + length))
+                for start, length in zip(starts_known, ends_known))
+            covered_until = intervals[0][1]
+            for next_start, next_end in intervals[1:]:
+                gap = next_start - covered_until
+                if gap > limit + 0.05:
+                    issues.append({"code": code_prefix + "_INTERNAL_GAP_EXCEEDED",
+                                   "severity": "error",
+                                   "gap_start_seconds": round(covered_until, 6),
+                                   "gap_end_seconds": round(next_start, 6),
+                                   "gap_seconds": round(gap, 6),
+                                   "max_seconds": limit})
+                covered_until = max(covered_until, next_end)
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
     if (require_audio or audio_quality_requested
