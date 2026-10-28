@@ -113,7 +113,7 @@ class SignalDiagnosticIntegrityTests(unittest.TestCase):
         result = self.inspect_logs(
             require_audio=True, audio_channels=None,
             require_audio_peak_metrics=True,
-            audio_log="Overall\\nPeak level dB: -12")
+            audio_log="Overall\nPeak level dB: -12")
         self.assertFalse(result["passed"], result)
         self.assertIn("EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_UNKNOWN",
                       self.codes(result))
@@ -121,7 +121,7 @@ class SignalDiagnosticIntegrityTests(unittest.TestCase):
     def test_non_strict_peak_metrics_allow_unknown_channel_count(self):
         result = self.inspect_logs(
             require_audio=True, audio_channels=None,
-            audio_log="Overall\\nPeak level dB: -12")
+            audio_log="Overall\nPeak level dB: -12")
         self.assertTrue(result["passed"], result)
 
     def test_strict_peak_metrics_accept_complete_silent_channels(self):
