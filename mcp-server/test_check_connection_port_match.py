@@ -9,10 +9,14 @@ class StatusPortConsistencyTests(unittest.TestCase):
     def check_with(self, base, port):
         client = MagicMock()
         client.__enter__.return_value = client
-        client.get.return_value.json.return_value = {
+        rejected = MagicMock(status_code=401)
+        accepted = MagicMock(status_code=200)
+        accepted.json.return_value = {
             "status": "running", "port": port, "success": True,
         }
-        with patch.object(check_connection, "connection_settings", return_value=(base, {})), \
+        client.get.side_effect = [rejected, accepted]
+        with patch.object(check_connection, "connection_settings", return_value=(
+                base, {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
             return check_connection.check()
 
@@ -25,7 +29,6 @@ class StatusPortConsistencyTests(unittest.TestCase):
         self.assertEqual(self.check_with("http://localhost:9001/api", 9001)["port"], 9001)
 
     def test_implicit_http_port_remains_compatible(self):
-        # If no explicit port is configured, the status payload remains authoritative.
         self.assertEqual(self.check_with("http://localhost/api", 8765)["port"], 8765)
 
 
