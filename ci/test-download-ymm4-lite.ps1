@@ -5,6 +5,7 @@ $helper = Join-Path $PSScriptRoot 'download-ymm4-lite.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("ymm4-lite-resume-test-" + [guid]::NewGuid().ToString('N'))
 $originalRunnerTemp = $env:RUNNER_TEMP
 New-Item -ItemType Directory -Path $testRoot | Out-Null
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 
 try {
     $fixture = Join-Path $testRoot 'fixture.zip'
@@ -25,7 +26,7 @@ try {
         $stream = $entry.Open()
         try {
             $randomBytes = [byte[]]::new(1250000)
-            [System.Security.Cryptography.RandomNumberGenerator]::Fill($randomBytes)
+            $rng.GetBytes($randomBytes)
             $stream.Write($randomBytes, 0, $randomBytes.Length)
         }
         finally { $stream.Dispose() }
@@ -37,7 +38,7 @@ try {
     $global:partialZip = [byte[]]::new($half)
     [Array]::Copy($global:validZip, $global:partialZip, $half)
     $global:invalidZip = [byte[]]::new(1250000)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($global:invalidZip)
+    $rng.GetBytes($global:invalidZip)
     $global:mode = ''
     $global:callCount = 0
 
@@ -102,6 +103,7 @@ try {
     }
 }
 finally {
+    $rng.Dispose()
     $env:RUNNER_TEMP = $originalRunnerTemp
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Variable -Name validZip,partialZip,invalidZip,mode,callCount -Scope Global -ErrorAction SilentlyContinue
