@@ -532,7 +532,10 @@ def _loudnorm_measurements(log):
     blocks = re.findall(r"(?ms)^[ \t]*\{[ \t]*\n.*?^[ \t]*\}[ \t]*$", log)
     blocks += re.findall(r"(?m)^[ \t]*\{[^\r\n]*\}[ \t]*$", log)
     measurements = []
-    loudnorm_fields = ("input_i", "input_tp", "input_lra", "input_thresh", "output_i")
+    loudnorm_fields = (
+        "input_i", "input_tp", "input_lra", "input_thresh", "output_i",
+        "output_tp", "output_lra", "output_thresh", "target_offset",
+        "normalization_type")
     # A truncated second measurement has no closing brace and therefore
     # cannot appear in blocks. It must not be ignored after a valid first
     # measurement: that would certify an ambiguous or corrupted FFmpeg log.
@@ -547,7 +550,9 @@ def _loudnorm_measurements(log):
         # An invalid second measurement must not disappear merely because a
         # different (valid) loudnorm JSON block was also emitted. Ignore
         # unrelated JSON, but fail closed for any recognizable measurement.
-        candidate = any(re.search(r'"' + field + r'"\s*:', block)
+        # Damaged separators must not hide a second measurement, and a
+        # standalone auxiliary-only object is not harmless metadata.
+        candidate = any('"' + field + '"' in block
                         for field in loudnorm_fields)
         try:
             record = json.loads(block, object_pairs_hook=_unique_object_pairs,
