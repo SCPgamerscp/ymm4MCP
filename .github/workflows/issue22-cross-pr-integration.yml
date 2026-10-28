@@ -46,7 +46,11 @@ jobs:
           # prove that both issue groups are compatible.
           # PR #229 also modifies package-ymme.yml (export QA), so include
           # it to catch cross-PR workflow conflicts before a manual merge.
-          for number in 221 228 229 234 241 243 244 248 257 259 218 219 251 254 255; do
+          # Merge in the same ascending order as the 50-PR audit. The prior
+          # hand-picked order merged #228/#229 before #219 and caused a
+          # package-ymme.yml conflict despite the all-PR audit succeeding.
+          # Keeping the order deterministic avoids a false release blocker.
+          for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259; do
             if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
               # Pin the triggering PR to its event SHA, not a newer moving ref.
               git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
