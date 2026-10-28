@@ -321,6 +321,22 @@ def analyze_frames_dir(
         if len({e["file"] for e in entries}) != len(entries):
             return {"success": False, "source": "frames_dir",
                     "error": "frames_meta contains duplicate PNG filenames"}
+        # The YMM4 exporter numbers captures from zero. An incomplete or
+        # duplicated index sequence can conceal missing frames even when all
+        # remaining filenames and timestamps look valid.
+        if any("index" in e for e in entries):
+            if (any(type(e.get("index")) is not int or e["index"] < 0
+                    for e in entries)
+                    or {e["index"] for e in entries} != set(range(len(entries)))):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains incomplete capture indices"}
+        # Older callers may omit dimensions, but if the exporter supplies them
+        # they must be complete and usable for every captured image.
+        if any("width" in e or "height" in e for e in entries):
+            if any(type(e.get(axis)) is not int or not 1 <= e[axis] <= 32_768
+                   for e in entries for axis in ("width", "height")):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains invalid capture dimensions"}
         time_present = ["timeMs" in e for e in entries]
         frame_present = ["frame" in e for e in entries]
         has_time = [_valid_time_ms(e.get("timeMs")) for e in entries]
