@@ -37,7 +37,7 @@ class ConnectionCheckTests(unittest.TestCase):
             call("GET", "http://127.0.0.1:8765/api/status",
                  headers={"X-Ymm4-Token": "0ecret"}),
             call("GET", "http://127.0.0.1:8765/api/status",
-                 headers={"X-Ymm4-Token": "secret"}),
+                 headers={"X-Ymm4-Token": "secret", "Accept-Encoding": "identity"}),
         ])
         self.assertEqual(result["port"], 8765)
 
