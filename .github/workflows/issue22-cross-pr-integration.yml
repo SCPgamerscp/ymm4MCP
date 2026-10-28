@@ -204,6 +204,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # Pin the triggering #228 revision in BOTH composed trees. A newer
+          # push during this run must not change the revision under test.
+          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
         run: |
           set -euo pipefail
           git config user.name "Read-only PR integration audit"
@@ -233,8 +236,11 @@ jobs:
             echo "| --- | --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
           for number in "${numbers[@]}"; do
-            if ! git fetch --no-tags origin \
-              "refs/pull/${number}/head:refs/remotes/audit-pr/${number}" \
+            refspec="refs/pull/${number}/head:refs/remotes/audit-pr/${number}"
+            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
+              refspec="${EVENT_PR_228_HEAD_SHA}:refs/remotes/audit-pr/${number}"
+            fi
+            if ! git fetch --no-tags origin "$refspec" \
               > "$RUNNER_TEMP/audit-fetch.log" 2>&1; then
               failed=$((failed + 1))
               echo "| #${number} | FETCH FAILED | Could not retrieve PR head |" >> "$GITHUB_STEP_SUMMARY"
