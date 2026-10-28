@@ -119,6 +119,18 @@ class GeminiFilePollingRetryTests(unittest.TestCase):
                     self.client, self.uploaded, timeout_sec=10)
         self.client.files.get.assert_not_called()
 
+    def test_requests_transport_timeout_is_retried(self):
+        self.client.files.get.side_effect = [
+            requests.exceptions.Timeout("Gemini poll stalled"),
+            SimpleNamespace(state=SimpleNamespace(name="ACTIVE")),
+        ]
+        with patch.object(gemini_video.time, "monotonic", return_value=0), \
+             patch.object(gemini_video.time, "sleep") as sleep:
+            result = gemini_video._wait_file_active(self.client, self.uploaded)
+        self.assertEqual(result.state.name, "ACTIVE")
+        self.assertEqual(self.client.files.get.call_count, 2)
+        sleep.assert_called_once_with(3)
+
     def test_unauthorized_is_not_retried(self):
         self.client.files.get.side_effect = FileApiError(401)
         with patch.object(gemini_video.time, "sleep") as sleep:
