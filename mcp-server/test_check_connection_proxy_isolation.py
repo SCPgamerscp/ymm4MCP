@@ -1,7 +1,7 @@
 """Local authenticated connection checks must ignore ambient proxy variables (#22)."""
 import os
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import check_connection
 
@@ -16,9 +16,12 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
             with self.subTest(base=base):
                 client = MagicMock()
                 client.__enter__.return_value = client
-                client.get.return_value.json.return_value = {
+                rejected = MagicMock(status_code=401)
+                accepted = MagicMock(status_code=200)
+                accepted.json.return_value = {
                     "status": "running", "port": 8765, "success": True
                 }
+                client.get.side_effect = [rejected, accepted]
                 proxy_environment = {
                     "HTTP_PROXY": "http://127.0.0.1:9999",
                     "HTTPS_PROXY": "http://127.0.0.1:9999",
@@ -33,9 +36,10 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
                     result = check_connection.check()
 
                 client_factory.assert_called_once_with(timeout=5.0, trust_env=False)
-                client.get.assert_called_once_with(
-                    base + "/status", headers={"X-Ymm4-Token": "secret"}
-                )
+                self.assertEqual(client.get.call_args_list, [
+                    call(base + "/status", headers={"X-Ymm4-Token": "0ecret"}),
+                    call(base + "/status", headers={"X-Ymm4-Token": "secret"}),
+                ])
                 self.assertEqual(result["port"], 8765)
 
 
