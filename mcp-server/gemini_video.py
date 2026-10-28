@@ -65,6 +65,8 @@ DEFAULT_MODEL = _get_default_model()
 MAX_FRAME_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_AUDIO_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
+# Gemini File API has a per-file size limit; avoid unbounded video uploads.
+MAX_VIDEO_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 
 # デフォルトの検出指示(イベント全種類)。AIがカスタムプロンプトを渡せば上書きされる。
 DEFAULT_EVENT_INSTRUCTION = (
@@ -160,12 +162,37 @@ def _extract_json(text: str) -> dict:
         return {"summary": "", "events": [], "_parse_error": f"JSON解析失敗: {e}", "_raw": text[:2000]}
 
 
+def _video_signature(path: str) -> tuple[int, int, int, int]:
+    """Detect replacement or mutation of the file being analyzed."""
+    info = os.stat(path)
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def _transient_file_api_error(exc: Exception) -> bool:
+    """Only retry temporary File API failures, never auth or bad requests."""
+    return (getattr(exc, "status_code", None) in (429, 500, 502, 503, 504)
+            or isinstance(exc, (TimeoutError, ConnectionError)))
+
+
 def _wait_file_active(client, file_obj, timeout_sec: int = 180):
     """File API にアップロードした動画が ACTIVE になるまで待つ。"""
     name = file_obj.name
     deadline = time.monotonic() + timeout_sec
+    consecutive_errors = 0
     while True:
-        f = client.files.get(name=name)
+        try:
+            f = client.files.get(name=name)
+        except Exception as exc:
+            if not _transient_file_api_error(exc):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Gemini File API polling timed out") from exc
+            # Back off under 429/5xx, but never sleep beyond the same deadline.
+            consecutive_errors += 1
+            time.sleep(min(3 * (2 ** min(consecutive_errors - 1, 3)), remaining))
+            continue
+        consecutive_errors = 0
         state = getattr(f.state, "name", str(f.state))
         if state == "ACTIVE":
             return f
@@ -197,6 +224,12 @@ def analyze_video_file(
         return {"success": False, "error": msg}
     if not os.path.isfile(video_path):
         return {"success": False, "error": f"動画ファイルが見つかりません: {video_path}"}
+    try:
+        signature = _video_signature(video_path)
+    except OSError as exc:
+        return {"success": False, "error": f"動画ファイルを確認できません: {exc}"}
+    if signature[2] <= 0 or signature[2] > MAX_VIDEO_UPLOAD_BYTES:
+        return {"success": False, "error": "Video file is empty or exceeds the Gemini upload size limit"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
     client = None
@@ -204,11 +237,17 @@ def analyze_video_file(
     try:
         client = _client()
         uploaded = client.files.upload(file=video_path)
+        # A file modified during upload may not match the local media that
+        # the QA report will be attributed to. Never certify such a result.
+        if _video_signature(video_path) != signature:
+            return {"success": False, "error": "Video changed during Gemini upload", "source": "file"}
         active = _wait_file_active(client, uploaded)
         resp = client.models.generate_content(
             model=model,
             contents=[active, _build_prompt(instruction)],
         )
+        if _video_signature(video_path) != signature:
+            return {"success": False, "error": "Video changed during Gemini analysis", "source": "file"}
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
             return {"success": False, "error": parsed["_parse_error"], "source": "file"}
