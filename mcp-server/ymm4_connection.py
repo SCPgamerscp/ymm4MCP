@@ -12,6 +12,8 @@ class ConnectionConfigurationError(ValueError):
 # The plugin writes a small JSON descriptor. A corrupted or attacker-controlled
 # descriptor must not cause unbounded reads during every MCP request.
 MAX_DESCRIPTOR_BYTES = 64 * 1024
+MAX_DESCRIPTOR_DEPTH = 128
+MAX_API_TOKEN_LENGTH = 256
 
 
 def _unique_json_object(pairs):
@@ -23,9 +25,57 @@ def _unique_json_object(pairs):
     return result
 
 
+def _reject_nonfinite_constant(value: str):
+    """Connection metadata must use standards-compliant JSON numbers."""
+    raise ValueError("nonfinite connection descriptor number")
+
+
+def _descriptor_too_deep(body: str) -> bool:
+    """Bound JSON nesting without relying on the interpreter recursion limit."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_DESCRIPTOR_DEPTH:
+                return True
+        elif char in "]}":
+            depth -= 1
+    return False
+
+
+def _reject_unpaired_surrogates(value: object) -> None:
+    """Invalid escaped Unicode must not survive in ignored descriptor metadata."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in item):
+                raise ValueError("unpaired Unicode surrogate in connection descriptor")
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
 def connection_settings() -> tuple[str, dict[str, str]]:
     token = os.environ.get("YMM4_API_TOKEN", "")
     descriptor = {}
+    # An explicitly empty path is a configuration error, not a request to
+    # silently discover a different YMM4 instance via LOCALAPPDATA.
+    if "YMM4_CONNECTION_FILE" in os.environ and not os.environ["YMM4_CONNECTION_FILE"]:
+        raise ConnectionConfigurationError("YMM4_CONNECTION_FILE は空にできません")
     path = os.environ.get("YMM4_CONNECTION_FILE")
     if not path:
         local = os.environ.get("LOCALAPPDATA")
@@ -37,11 +87,18 @@ def connection_settings() -> tuple[str, dict[str, str]]:
                 raw = source.read(MAX_DESCRIPTOR_BYTES + 1)
             if len(raw) > MAX_DESCRIPTOR_BYTES:
                 raise ValueError("connection descriptor is too large")
-            descriptor = json.loads(raw.decode("utf-8-sig"),
-                                    object_pairs_hook=_unique_json_object)
+            decoded = raw.decode("utf-8-sig")
+            if _descriptor_too_deep(decoded):
+                raise ValueError("connection descriptor is too deeply nested")
+            descriptor = json.loads(
+                decoded,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_nonfinite_constant,
+            )
+            _reject_unpaired_surrogates(descriptor)
             if not isinstance(descriptor, dict):
                 raise ValueError("object required")
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             if not token:
                 raise ConnectionConfigurationError(
                     "YMM4接続情報を読めません。プラグインを起動し、YMM4_CONNECTION_FILEを確認してください"
@@ -85,7 +142,8 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             raise ValueError("port missing or out of range")
     except ValueError as exc:
         raise ConnectionConfigurationError("ポートは1024〜65535で指定してください") from exc
-    if not isinstance(token, str) or not token or any(not (33 <= ord(c) <= 126) for c in token):
+    if (not isinstance(token, str) or not token or len(token) > MAX_API_TOKEN_LENGTH
+            or any(not (33 <= ord(c) <= 126) for c in token)):
         raise ConnectionConfigurationError("有効なYMM4 APIトークンがありません")
     return base.rstrip("/"), {"X-Ymm4-Token": token}
 
