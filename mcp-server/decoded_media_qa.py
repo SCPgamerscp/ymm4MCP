@@ -522,7 +522,7 @@ def _integrated_lufs_from_loudnorm(log):
     """Read one FFmpeg loudnorm first-pass measurement, never its normalized output."""
     # FFmpeg emits the input measurements in a final JSON object. Reject
     # missing, duplicate, or nonfinite values rather than inventing loudness.
-    blocks = re.findall(r"(?ms)^[ \\t]*\\{[ \\t]*\\n.*?^[ \\t]*\\}[ \\t]*$", log)
+    blocks = re.findall(r"(?ms)^[ \t]*\{[ \t]*\n.*?^[ \t]*\}[ \t]*$", log)
     measurements = []
     for block in blocks:
         try:
@@ -539,7 +539,7 @@ def _integrated_lufs_from_loudnorm(log):
         raise ValueError("incomplete loudnorm measurement")
     value = record["input_i"]
     if type(value) is not str or not re.fullmatch(
-            r"[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)", value):
+            r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value):
         raise ValueError("loudnorm integrated loudness is not finite")
     lufs = float(value)
     if not math.isfinite(lufs) or not -100 <= lufs <= 30:
