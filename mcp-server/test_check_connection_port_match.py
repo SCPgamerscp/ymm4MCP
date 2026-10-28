@@ -1,4 +1,5 @@
 """Connection checks must not accept a response from an unexpected port."""
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +15,12 @@ class StatusPortConsistencyTests(unittest.TestCase):
         accepted.json.return_value = {
             "status": "running", "port": port, "success": True,
         }
-        client.get.side_effect = [rejected, accepted]
+        accepted.iter_bytes.return_value = [json.dumps(accepted.json.return_value).encode("utf-8")]
+        wrong = MagicMock()
+        wrong.__enter__.return_value = rejected
+        right = MagicMock()
+        right.__enter__.return_value = accepted
+        client.stream.side_effect = [wrong, right]
         with patch.object(check_connection, "connection_settings", return_value=(
                 base, {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
