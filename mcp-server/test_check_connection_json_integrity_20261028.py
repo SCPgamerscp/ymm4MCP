@@ -96,6 +96,7 @@ class StatusJsonIntegrityTests(unittest.TestCase):
         # The limit must apply while streaming, not after client.get buffers.
         chunks = iter([b"x" * 8192] * 10)
         response = MagicMock()
+        response.headers = {}
         response.iter_bytes.return_value = chunks
         client = self.fake_client(response)
         with patch.object(check_connection, "connection_settings", return_value=(
@@ -108,6 +109,7 @@ class StatusJsonIntegrityTests(unittest.TestCase):
 
     def test_stream_enforces_total_response_deadline(self):
         response = MagicMock()
+        response.headers = {}
         response.iter_bytes.return_value = iter([b'{"status":"running","port":8765}'])
         client = self.fake_client(response)
         with patch.object(check_connection, "connection_settings", return_value=(
