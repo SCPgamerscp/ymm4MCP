@@ -124,6 +124,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("Invoke-WebRequest -Uri 'https://files.manjubox.net/", composed)
 
 
+    def test_composed_reference_download_has_wall_clock_deadline(self):
+        # A network read can hang well beyond the per-request TimeoutSec.
+        # Bound both the curated 15-PR build and the full 50-PR build.
+        composed = (WORKFLOW.parent / "issue22-cross-pr-integration.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            composed.count(
+                "      - name: Download official YMM4 Lite references\n"
+                "        # Invoke-WebRequest -TimeoutSec bounds a socket wait, not the entire\n"
+                "        # transfer. A stalled upstream must not occupy a runner for 40+ min.\n"
+                "        timeout-minutes: 12\n"
+                "        shell: pwsh\n"
+            ),
+            2,
+        )
+
     def test_issue22_keyframe_composition_uses_same_order_as_all_pr_audit(self):
         # A stale, hand-picked order merged #228/#229 before #219 and
         # conflicted in package-ymme.yml, even though the numeric 50-PR
