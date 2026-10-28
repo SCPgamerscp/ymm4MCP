@@ -150,9 +150,19 @@ jobs:
             Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
           '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"},"ymm4":{"command":"old-classic.exe","args":["old-classic.py"],"env":{"GEMINI_API_KEY":"classic-placeholder","PYTHONUTF8":"1","YMM4_API_BASE":"http://127.0.0.1:8767/api"},"timeout":120}}}' |
             Set-Content -LiteralPath $configPath -Encoding UTF8
-          # Simulate an extracted Release ZIP that the user later deletes.
-          $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
-          Copy-Item -LiteralPath 'mcp-server' -Destination $extracted -Recurse -Force
+          # Exercise the actual GitHub Release ZIP, not the working-tree
+          # mcp-server directory. A missing installer or bad archive layout
+          # must fail before publishing a one-click installation package.
+          $serverPackage = @(Get-ChildItem -LiteralPath artifacts -Filter 'YMM4McpServer-*.zip' -File)
+          if ($serverPackage.Count -ne 1) { throw 'Expected exactly one built MCP server ZIP' }
+          $extractedRoot = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-extracted'
+          Expand-Archive -LiteralPath $serverPackage[0].FullName -DestinationPath $extractedRoot -Force
+          $extracted = Join-Path $extractedRoot 'mcp-server'
+          foreach ($required in @('install.cmd', 'setup.ps1', 'server.py', 'requirements.txt')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $extracted $required) -PathType Leaf)) {
+              throw "Release ZIP extraction is missing $required"
+            }
+          }
           # Regression: py -3 can select obsolete Python 3.9 while newer
           # Python 3 versions are registered. The installer must probe the
           # actual version, prefer the latest registered Python 3 (-V:3), and
@@ -278,7 +288,7 @@ jobs:
               $manualStore.mcpServers.ymm4.disabled -ne $true) {
             throw 'Manual setup damaged existing ymm4 settings during port update'
           }
-          Remove-Item -LiteralPath $extracted -Recurse -Force
+          Remove-Item -LiteralPath $extractedRoot -Recurse -Force
           if (-not (Test-Path -LiteralPath $installedPython) -or
               -not (Test-Path -LiteralPath $installedScript)) {
             throw 'Deleting the ZIP extraction must not remove the installed server'
@@ -317,12 +327,18 @@ jobs:
           [IO.File]::WriteAllText($installedConfig, $customConfig)
           $localSettings = Join-Path $installedDir 'settings.local.json'
           [IO.File]::WriteAllText($localSettings, $customLocal)
-          # A stale ZIP connection descriptor must not replace the plugin's
-          # actual connection state in the persistent MCP installation.
-          [IO.File]::WriteAllText((Join-Path 'mcp-server' 'connection.json'),
+          # Simulate an upgrade from a second extraction of the same
+          # published ZIP. Its local connection descriptor must not leak into
+          # the persistent installation or replace the host's real token.
+          $upgradeRoot = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-upgrade'
+          Expand-Archive -LiteralPath $serverPackage[0].FullName -DestinationPath $upgradeRoot -Force
+          $upgrade = Join-Path $upgradeRoot 'mcp-server'
+          if (-not (Test-Path -LiteralPath (Join-Path $upgrade 'install.cmd') -PathType Leaf)) {
+            throw 'Release ZIP upgrade extraction has no installer'
+          }
+          [IO.File]::WriteAllText((Join-Path $upgrade 'connection.json'),
                                   '{"token":"zip-must-not-be-installed"}')
-          # Re-running from another extraction must preserve the same stable path.
-          & cmd.exe /c "mcp-server\install.cmd"
+          & (Join-Path $upgrade 'install.cmd')
           if ([IO.File]::ReadAllText($installedConfig) -cne $customConfig -or
               [IO.File]::ReadAllText($localSettings) -cne $customLocal) {
             throw 'Installer upgrade overwrote local MCP server configuration'
