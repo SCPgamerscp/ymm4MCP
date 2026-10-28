@@ -56,15 +56,9 @@ jobs:
       - name: Download official YMM4 Lite build references
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'YukkuriMovieMaker_v4_Lite.zip'
-          $directory = Join-Path $env:RUNNER_TEMP 'ymm4-lite'
-          Invoke-WebRequest -Uri 'https://files.manjubox.net/YukkuriMovieMaker_v4_Lite.zip' -OutFile $archive
-          Expand-Archive -LiteralPath $archive -DestinationPath $directory
-          $pluginDlls = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter 'YukkuriMovieMaker.Plugin.dll' -File)
-          if ($pluginDlls.Count -ne 1) { throw "Expected one YMM4 Plugin DLL; found $($pluginDlls.Count)" }
-          $libPath = $pluginDlls[0].DirectoryName
-          if (-not (Test-Path -LiteralPath (Join-Path $libPath 'YukkuriMovieMaker.Controls.dll'))) {
-            throw 'YMM4 Controls DLL is missing'
+          $libPath = & ./ci/download-ymm4-lite.ps1
+          if (-not $libPath -or -not (Test-Path -LiteralPath $libPath -PathType Container)) {
+            throw 'Official YMM4 Lite reference download did not return a valid library path'
           }
           "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
       - name: Build .ymme
