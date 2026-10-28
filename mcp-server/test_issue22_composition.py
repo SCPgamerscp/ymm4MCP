@@ -138,6 +138,25 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
                       self.source)
         self.assertNotIn("git push", self.source)
 
+    def test_all_open_pr_audit_pins_the_triggering_pr_head(self):
+        # The 15-PR suite already pins PR #228 to the event SHA. The 50-PR
+        # audit must not silently test a newer #228 revision if it is pushed
+        # after the run starts, or the two green jobs prove different code.
+        audit = self.source.split(
+            "  audit-open-pr-merge-compatibility:", 1
+        )[1].split("  all-open-prs-python-integration:", 1)[0]
+        self.assertIn(
+            "EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}",
+            audit,
+        )
+        self.assertIn('if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then',
+                      audit)
+        self.assertIn(
+            'refspec="${EVENT_PR_228_HEAD_SHA}:refs/remotes/audit-pr/${number}"',
+            audit,
+        )
+        self.assertIn('git fetch --no-tags origin "$refspec"', audit)
+
     def test_all_open_pr_merge_audit_is_read_only_and_complete(self):
         # Individual mergeable=true flags do not prove a 50-PR sequence works.
         # The advisory job discovers current open PRs and attempts sequential
