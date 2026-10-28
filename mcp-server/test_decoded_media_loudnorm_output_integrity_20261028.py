@@ -64,5 +64,14 @@ class LoudnormOutputIntegrityTests(unittest.TestCase):
             qa._loudnorm_measurements(log_with(unused_metric=value))
 
 
+    def test_parser_recursion_limit_is_a_validation_error(self):
+        # A pathological nested JSON value may overflow Python's JSON
+        # decoder stack before the explicit metadata-depth check runs.
+        prefix = log_with(unused_metric=0).split('"unused_metric": 0')[0] + '"unused_metric": '
+        log = prefix + "[" * 1100 + "0" + "]" * 1100 + "\n}"
+        with self.assertRaises(ValueError):
+            qa._loudnorm_measurements(log)
+
+
 if __name__ == "__main__":
     unittest.main()
