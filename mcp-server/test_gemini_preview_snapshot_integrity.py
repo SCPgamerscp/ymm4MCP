@@ -17,7 +17,7 @@ class GeminiPreviewSnapshotIntegrityTests(unittest.TestCase):
         self.frame = self.folder / "0001.png"
         self.frame.write_bytes(b"frame-original")
         self.audio = self.folder / "audio.wav"
-        self.audio.write_bytes(b"RIFF\\x04\\x00\\x00\\x00WAVE")
+        self.audio.write_bytes(b"RIFF\x04\x00\x00\x00WAVE")
         self.client = MagicMock()
         self.client.models.generate_content.return_value = SimpleNamespace(
             text='{"summary":"ok","events":[]}')
@@ -26,8 +26,8 @@ class GeminiPreviewSnapshotIntegrityTests(unittest.TestCase):
             from_text=lambda **kw: SimpleNamespace(inline_data=None))
 
     def analyze(self, **kwargs):
-        with patch.object(gemini_video, "is_available", return_value=(True, "ok")), \\
-             patch.object(gemini_video, "_client", return_value=self.client), \\
+        with patch.object(gemini_video, "is_available", return_value=(True, "ok")), \
+             patch.object(gemini_video, "_client", return_value=self.client), \
              patch.object(gemini_video, "genai_types", SimpleNamespace(Part=self.part)):
             return gemini_video.analyze_frames_dir(str(self.folder), **kwargs)
 
@@ -48,7 +48,7 @@ class GeminiPreviewSnapshotIntegrityTests(unittest.TestCase):
 
     def test_audio_replaced_during_model_call_fails_closed(self):
         def mutate(**kwargs):
-            self.audio.write_bytes(b"RIFF\\x04\\x00\\x00\\x00WAVX")
+            self.audio.write_bytes(b"RIFF\x04\x00\x00\x00WAVX")
             return SimpleNamespace(text='{"summary":"ok","events":[]}')
         self.client.models.generate_content.side_effect = mutate
         result = self.analyze(audio_path=str(self.audio))
