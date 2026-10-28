@@ -128,6 +128,41 @@ def _build_prompt(event_instruction: str) -> str:
 
 
 MAX_GEMINI_RESPONSE_CHARS = 4 * 1024 * 1024
+MAX_GEMINI_JSON_INTEGER_DIGITS = 128
+MAX_GEMINI_JSON_DEPTH = 128
+
+
+def _bounded_gemini_integer(token: str) -> int:
+    """Bound integer parsing even on Python versions with a higher int limit."""
+    if len(token.lstrip("-")) > MAX_GEMINI_JSON_INTEGER_DIGITS:
+        raise ValueError("JSON integer literal is too long")
+    return int(token)
+
+
+def _gemini_json_too_deep(body: str) -> bool:
+    """Count actual JSON containers, ignoring braces inside escaped strings."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_GEMINI_JSON_DEPTH:
+                return True
+        elif char in "]}":
+            depth -= 1
+    return False
+
+
 
 
 def _unique_gemini_object(pairs: list[tuple[str, Any]]) -> dict:
@@ -185,10 +220,13 @@ def _extract_json(text: str) -> dict:
         end = text.rfind("}")
         candidate = text[start : end + 1] if (start >= 0 and end > start) else text
     try:
+        if _gemini_json_too_deep(candidate):
+            raise ValueError("Gemini JSON exceeds the nesting depth limit")
         parsed = json.loads(
             candidate,
             object_pairs_hook=_unique_gemini_object,
             parse_constant=_reject_gemini_constant,
+            parse_int=_bounded_gemini_integer,
             parse_float=_finite_gemini_float,
         )
         _reject_gemini_surrogates(parsed)
