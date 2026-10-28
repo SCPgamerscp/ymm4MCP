@@ -8,6 +8,7 @@ from ymm4_connection import ConnectionConfigurationError, connection_settings
 
 
 MAX_STATUS_JSON_BYTES = 65536
+MAX_STATUS_JSON_DEPTH = 128
 
 
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
@@ -25,6 +26,30 @@ def _reject_nonfinite_json_constant(value: str):
     raise ValueError("YMM4のステータスJSONに不正な数値があります")
 
 
+def _status_json_too_deep(body: bytes) -> bool:
+    """Bound structural nesting without counting brackets inside JSON strings."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for byte in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif byte == 92:  # backslash
+                escaped = True
+            elif byte == 34:  # double quote
+                quoted = False
+        elif byte == 34:
+            quoted = True
+        elif byte in (91, 123):  # [ or {
+            depth += 1
+            if depth > MAX_STATUS_JSON_DEPTH:
+                return True
+        elif byte in (93, 125):  # ] or }
+            depth -= 1
+    return False
+
+
 def check() -> dict:
     base, headers = connection_settings()
     # This endpoint is strictly loopback. Environment HTTP(S)_PROXY settings
@@ -36,6 +61,8 @@ def check() -> dict:
         # even when an unexpected service responds with an oversized body.
         if len(response.content) > MAX_STATUS_JSON_BYTES:
             raise ValueError("YMM4のステータスJSONが大きすぎます")
+        if _status_json_too_deep(response.content):
+            raise ValueError("YMM4のステータスJSONが深すぎます")
         try:
             status = response.json(
                 object_pairs_hook=_unique_json_object,
