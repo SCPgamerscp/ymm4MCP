@@ -338,6 +338,11 @@ def _audio_overall_silent(log):
             line, "astats", ("Channel", "Overall", "Peak level dB")).strip()
         if payload == "Overall":
             in_overall = True
+            # A later Overall section with no peak is not evidence of
+            # silence. Preserve earlier non-silent evidence, but revoke
+            # a previous silent-only measurement until this section reports.
+            if silent is True:
+                silent = None
         elif re.match(r"^Channel(?:\s|:|$)", payload):
             # A malformed channel header is a section boundary, but also
             # makes the earlier Overall summary insufficient evidence of
@@ -524,14 +529,24 @@ def _loudnorm_measurements(log):
     # missing, duplicate, or nonfinite values rather than inventing loudness.
     blocks = re.findall(r"(?ms)^[ \t]*\{[ \t]*\n.*?^[ \t]*\}[ \t]*$", log)
     measurements = []
+    loudnorm_fields = ("input_i", "input_tp", "input_lra", "input_thresh", "output_i")
     for block in blocks:
+        # An invalid second measurement must not disappear merely because a
+        # different (valid) loudnorm JSON block was also emitted. Ignore
+        # unrelated JSON, but fail closed for any recognizable measurement.
+        candidate = any(re.search(r'"' + field + r'"\s*:', block)
+                        for field in loudnorm_fields)
         try:
             record = json.loads(block, object_pairs_hook=_unique_object_pairs,
                                 parse_constant=_reject_nonfinite_json)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
+            if candidate:
+                raise ValueError("malformed loudnorm measurement") from exc
             continue
         if isinstance(record, dict) and "input_i" in record:
             measurements.append(record)
+        elif candidate:
+            raise ValueError("incomplete loudnorm measurement")
     if len(measurements) != 1:
         raise ValueError("loudnorm input measurement missing or ambiguous")
     record = measurements[0]
