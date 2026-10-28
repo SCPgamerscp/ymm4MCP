@@ -104,5 +104,35 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("Invoke-WebRequest -Uri 'https://files.manjubox.net/", composed)
 
 
+    def test_issue22_keyframe_composition_uses_same_order_as_all_pr_audit(self):
+        # A stale, hand-picked order merged #228/#229 before #219 and
+        # conflicted in package-ymme.yml, even though the numeric 50-PR
+        # composition passed. Keep the release subset deterministic.
+        import re
+        composed = (WORKFLOW.parent / "issue22-cross-pr-integration.yml").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"^\s*for number in ((?:\d+\s+)*\d+); do$",
+            composed,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "Missing curated integration PR loop")
+        numbers = [int(value) for value in match.group(1).split()]
+        self.assertEqual(numbers, sorted(set(numbers)), "PR order must be ascending and unique")
+        self.assertEqual(
+            set(numbers),
+            {218, 219, 221, 228, 229, 234, 241, 243, 244, 248,
+             251, 254, 255, 257, 259},
+            "Do not silently omit setup, keyframe or export-QA integration PRs",
+        )
+        # The event's PR #228 revision must remain pinned, not a moving head.
+        self.assertIn("EVENT_PR_228_HEAD_SHA", composed)
+        self.assertIn(
+            'git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"',
+            composed,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
