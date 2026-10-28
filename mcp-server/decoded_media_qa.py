@@ -30,6 +30,11 @@ def _trusted_filter_payload(line, filter_name, bare_names):
     # Tests and callers may provide the filter's unprefixed diagnostic text.
     if any(line.startswith(name + ":") for name in bare_names):
         return line
+    # Malformed bare signal labels must reach validation instead of being
+    # silently ignored as if the detector had emitted no events.
+    if any(re.match(r"^" + re.escape(name) + r"(?:\s|=|$)", line)
+           for name in bare_names if name.endswith(("_start", "_end", "_duration"))):
+        return line
     # Bare astats summaries sometimes omit the colon ("Overall"). Malformed
     # bare peak/channel labels must also reach validation instead of vanishing.
     # Prefixed diagnostics from other filters still cannot masquerade as astats.
@@ -129,8 +134,22 @@ def _invalid_audio_peak_metrics(log):
     return False
 
 
-def _invalid_signal_timestamps(log, start_name, end_name):
-    """Detect invalid filter timestamps, including malformed suffixes."""
+def _invalid_signal_labels(log, start_name, end_name):
+    """Reject damaged FFmpeg signal labels instead of missing the event."""
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    names = (start_name, end_name, start_name.replace("_start", "_duration"))
+    malformed = re.compile(r"(?<![A-Za-z0-9_])(?:"
+                           + "|".join(map(re.escape, names)) + r")\b(?!:)")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, filter_name, names)
+        if malformed.search(payload):
+            return True
+    return False
+
+
+def _invalid_signal_timestamps(log, start_name, end_name, window_duration=None):
+    """Reject malformed or out-of-window FFmpeg signal timestamps."""
     filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
                    "freeze_start": "freezedetect"}[start_name]
     pattern = re.compile(r"\b(?:" + re.escape(start_name) + r"|"
@@ -141,6 +160,11 @@ def _invalid_signal_timestamps(log, start_name, end_name):
         payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
         for raw in pattern.findall(payload):
             if not number.fullmatch(raw) or not math.isfinite(float(raw)):
+                return True
+            # Negative preroll is valid, but a detector cannot observe events
+            # arbitrarily far beyond the decoded sample/track boundary.
+            if (window_duration is not None and float(raw) >
+                    window_duration + max(0.05, window_duration * 0.001)):
                 return True
     return False
 
@@ -1227,8 +1251,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                 "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
                 # A partial channel inventory cannot satisfy a strict peak
                 # measurement requirement even if one channel has a value.
-                if (require_audio_peak_metrics and channel_peaks
-                        and declared_channels is not None and not complete_channels):
+                if (require_audio_peak_metrics and declared_channels is not None
+                        and (channel_peaks or observed_headers)
+                        and not complete_channels):
                     issues.append({
                         "code": "EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE",
                         "severity": "error", "stream_ordinal": ordinal,
@@ -1319,7 +1344,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             # them as warnings, not as proof of an invalid export.
             start_name, end_name = (("black_start", "black_end") if kind == "video"
                                     else ("silence_start", "silence_end"))
-            if _invalid_signal_timestamps(decoded.stderr or "", start_name, end_name):
+            if _invalid_signal_labels(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_LABEL_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_timestamps(decoded.stderr or "", start_name, end_name,
+                                          signal_window_length):
                 issues.append({
                     "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
                     "severity": "error", "stream_type": kind,
@@ -1367,8 +1399,16 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         return failure("EXPORT_SIGNAL_LIMIT",
                                        "無音検出イベント数が上限を超えました")
             if kind == "video":
-                if _invalid_signal_timestamps(
+                if _invalid_signal_labels(
                         decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_LABEL_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_timestamps(
+                        decoded.stderr or "", "freeze_start", "freeze_end",
+                        signal_window_length):
                     issues.append({
                         "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
                         "severity": "error", "stream_type": kind,
@@ -1548,7 +1588,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                [("silence_start", "silence_end", "audio",
                                  "EXPORT_SAMPLE_LONG_SILENCE", long_silences)])
                 for start_name, end_name, signal_kind, issue_code, destination in definitions:
-                    if _invalid_signal_timestamps(diagnostics, start_name, end_name):
+                    if _invalid_signal_labels(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_LABEL_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_timestamps(
+                            diagnostics, start_name, end_name, active_duration):
                         full_signal_scan_ok = False
                         issues.append({"code": "EXPORT_FULL_SIGNAL_TIMESTAMP_INVALID",
                                        "severity": "error", "stream_type": kind,
