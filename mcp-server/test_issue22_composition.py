@@ -141,12 +141,14 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
                       self.source)
         self.assertIn("dotnet build composed/YMM4McpPlugin/YMM4McpPlugin.csproj",
                       self.source)
+        full_windows = self.source.split("  all-open-prs-windows-package:", 1)[1]
         self.assertIn("Get-ChildItem -Path composed/tests -Recurse -Filter '*.Tests.csproj'",
-                      self.source)
-        self.assertIn("if ($projects.Count -lt 11)", self.source)
+                      full_windows)
+        self.assertIn("if ($projects.Count -lt 11)", full_windows)
         self.assertIn("dotnet run --project $project.FullName --configuration Release",
-                      self.source)
-        self.assertNotIn("Filter 'Keyframe*.csproj'", self.source)
+                      full_windows)
+        # The curated #140 job intentionally still runs a keyframe-focused suite.
+        self.assertNotIn("Filter 'Keyframe*.csproj'", full_windows)
         self.assertNotIn("git push", self.source)
 
     def test_all_open_pr_audit_pins_the_triggering_pr_head(self):
