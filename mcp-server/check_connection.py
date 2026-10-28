@@ -114,7 +114,8 @@ def check() -> dict:
                 if len(parts) == 2:
                     key, separator, value = parts[1].partition("=")
                     if (not separator or key.strip().lower() != "charset"
-                            or value.strip().strip('"').lower() not in ("utf-8", "utf8")):
+                            or value.strip().lower() not in
+                            ("utf-8", "utf8", '"utf-8"', '"utf8"')):
                         raise ValueError("YMM4のステータスContent-Typeの文字コードが不正です")
             # Content-Length is optional for chunked responses. When present,
             # reject oversized, malformed, or inconsistent framing.
