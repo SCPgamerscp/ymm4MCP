@@ -1013,16 +1013,50 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "excess_seconds": round(
                                        track_start + track_duration - duration, 3)})
                 missing = duration - (track_start + track_duration)
-                if missing > 1.0:
-                    # Track timing alone cannot distinguish a truncated
-                    # export from an intentionally shorter BGM/overlay track.
-                    # Keep the default advisory, and let callers explicitly
-                    # require every declared A/V track to reach the end.
+                # A caller requiring end coverage must not accept a truncated
+                # final half-second simply because the advisory threshold was
+                # historically one second. Allow 50 ms of timestamp/encoder
+                # rounding; keep the one-second threshold for default warnings.
+                if missing > (0.05 if require_tracks_to_end else 1.0):
                     issues.append({"code": "EXPORT_STREAM_ENDS_EARLY",
                                    "severity": "error" if require_tracks_to_end else "warning",
                                    "stream_type": kind,
                                    "stream_ordinal": ordinal,
                                    "missing_tail_seconds": round(missing, 3)})
+    # Signal detectors only examine *decoded* frames/samples. If every
+    # declared track starts late or ends early, the missing head/tail cannot
+    # produce blackdetect/silencedetect events. A strict quality gate must
+    # therefore also inspect container coverage. Use the union's outer
+    # boundaries, not individual track boundaries: staggered overlays and
+    # music tracks are valid when another track covers the same time.
+    for kind, tracks, limit, code_prefix in (
+            ("video", videos, max_black_seconds, "EXPORT_VIDEO"),
+            ("audio", audios, max_silence_seconds, "EXPORT_AUDIO")):
+        if limit is None or not tracks:
+            continue
+        starts_known = [
+            _optional_stream_time(track.get("start_time"), signed=True)
+            for track in tracks]
+        if all(start is not None for start in starts_known):
+            missing_head = min(starts_known) - container_start
+            if missing_head > limit + 0.05:
+                issues.append({"code": code_prefix + "_HEAD_GAP_EXCEEDED",
+                               "severity": "error",
+                               "missing_head_seconds": round(missing_head, 6),
+                               "max_seconds": limit})
+        ends_known = [
+            _optional_stream_time(track.get("duration"))
+            for track in tracks]
+        if (all(start is not None for start in starts_known)
+                and all(length is not None for length in ends_known)):
+            last_end = max(start - container_start + length
+                           for start, length in zip(starts_known, ends_known))
+            missing_tail = duration - last_end
+            if missing_tail > limit + 0.05:
+                issues.append({"code": code_prefix + "_TAIL_GAP_EXCEEDED",
+                               "severity": "error",
+                               "missing_tail_seconds": round(missing_tail, 6),
+                               "max_seconds": limit})
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
     if (require_audio or audio_quality_requested
