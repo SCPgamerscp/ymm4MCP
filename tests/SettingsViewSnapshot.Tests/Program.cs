@@ -50,6 +50,32 @@ try
         "missing settings file must have a stable sentinel");
     File.WriteAllText(tempSettings, "{\"port\":8765}");
     var observedFile = SettingsViewSaveCoordinator.FileFingerprint(tempSettings);
+    Check(!SettingsViewSaveCoordinator.SameReadableFingerprint(
+            SettingsViewSaveCoordinator.UnreadableFingerprint,
+            SettingsViewSaveCoordinator.UnreadableFingerprint),
+        "two unreadable fingerprints must never be considered unchanged");
+    Check(!SettingsViewSaveCoordinator.SameReadableFingerprint(
+            observedFile, SettingsViewSaveCoordinator.UnreadableFingerprint),
+        "a newly unreadable settings file must block saves");
+    Check(!SettingsViewSaveCoordinator.SameReadableFingerprint(
+            SettingsViewSaveCoordinator.UnreadableFingerprint, observedFile),
+        "an initially unreadable settings file must block saves");
+    Check(SettingsViewSaveCoordinator.SameReadableFingerprint(observedFile, observedFile),
+        "readable unchanged settings should remain writable");
+    using (var lockedFile = new FileStream(tempSettings, FileMode.Open,
+               FileAccess.ReadWrite, FileShare.None))
+    {
+        Check(SettingsViewSaveCoordinator.FileFingerprint(tempSettings) ==
+              SettingsViewSaveCoordinator.UnreadableFingerprint,
+            "locked settings must be classified as unreadable without throwing");
+        bool wroteLocked = false;
+        Check(!SettingsViewSaveCoordinator.TryCommit(current, () => current,
+                () => wroteLocked = true,
+                () => SettingsViewSaveCoordinator.SameReadableFingerprint(
+                    observedFile, SettingsViewSaveCoordinator.FileFingerprint(tempSettings))),
+            "unreadable on-disk settings must block a save");
+        Check(!wroteLocked, "locked settings unexpectedly persisted");
+    }
     File.WriteAllText(tempSettings, "{\"port\":9000}");
     var externalFile = SettingsViewSaveCoordinator.FileFingerprint(tempSettings);
     Check(externalFile != observedFile, "external settings edit was not detected");
