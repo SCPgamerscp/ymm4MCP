@@ -518,6 +518,35 @@ def run(command, timeout):
         command, returncode, stdout_head.decode("utf-8"),
         stderr_tail.decode("utf-8", errors="replace"))
 
+def _integrated_lufs_from_loudnorm(log):
+    """Read one FFmpeg loudnorm first-pass measurement, never its normalized output."""
+    # FFmpeg emits the input measurements in a final JSON object. Reject
+    # missing, duplicate, or nonfinite values rather than inventing loudness.
+    blocks = re.findall(r"(?ms)^[ \\t]*\\{[ \\t]*\\n.*?^[ \\t]*\\}[ \\t]*$", log)
+    measurements = []
+    for block in blocks:
+        try:
+            record = json.loads(block, object_pairs_hook=_unique_object_pairs,
+                                parse_constant=_reject_nonfinite_json)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(record, dict) and "input_i" in record:
+            measurements.append(record)
+    if len(measurements) != 1:
+        raise ValueError("loudnorm input measurement missing or ambiguous")
+    record = measurements[0]
+    if not {"input_tp", "input_lra", "input_thresh", "output_i"}.issubset(record):
+        raise ValueError("incomplete loudnorm measurement")
+    value = record["input_i"]
+    if type(value) is not str or not re.fullmatch(
+            r"[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)", value):
+        raise ValueError("loudnorm integrated loudness is not finite")
+    lufs = float(value)
+    if not math.isfinite(lufs) or not -100 <= lufs <= 30:
+        raise ValueError("loudnorm integrated loudness is out of range")
+    return lufs
+
+
 def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             expected_duration_seconds=None, duration_tolerance_seconds=1.0,
             expected_width=None, expected_height=None, expected_fps=None,
@@ -529,7 +558,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
              max_silence_seconds=None, max_freeze_seconds=None,
              require_audio_peak_metrics=False, expected_video_frames=None,
              min_audio_peak_dbfs=None, max_audio_peak_dbfs=None,
-             max_stereo_imbalance_db=None):
+             max_stereo_imbalance_db=None, min_integrated_lufs=None,
+             max_integrated_lufs=None):
     """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
@@ -539,6 +569,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         raise ValueError("sample_seconds must be an integer in 1..15")
     if not isinstance(full_decode, bool):
         raise ValueError("full_decode must be boolean")
+    for name, value in (("min_integrated_lufs", min_integrated_lufs),
+                        ("max_integrated_lufs", max_integrated_lufs)):
+        if value is not None and (type(value) not in (int, float)
+                                  or not math.isfinite(value) or not -70 <= value <= 10):
+            raise ValueError(f"{name} must be finite and in [-70, 10]")
+    if (min_integrated_lufs is not None and max_integrated_lufs is not None
+            and min_integrated_lufs > max_integrated_lufs):
+        raise ValueError("min_integrated_lufs exceeds max_integrated_lufs")
+    loudness_requested = min_integrated_lufs is not None or max_integrated_lufs is not None
+    if loudness_requested and not full_decode:
+        raise ValueError("integrated loudness gates require full_decode=True")
     if not isinstance(full_signal_scan, bool):
         raise ValueError("full_signal_scan must be boolean")
     if full_signal_scan and not full_decode:
@@ -612,7 +653,8 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
     audio_quality_requested = (
         expected_audio_codec is not None or require_audio_peak_metrics or
         min_audio_peak_dbfs is not None or max_audio_peak_dbfs is not None or
-        max_stereo_imbalance_db is not None or max_silence_seconds is not None)
+        max_stereo_imbalance_db is not None or max_silence_seconds is not None or
+        loudness_requested)
     if expected_audio_streams == 0 and audio_quality_requested:
         raise ValueError("audio QA options conflict with expected_audio_streams=0")
     # Detection filters must observe events shorter than the caller's
@@ -1702,6 +1744,57 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                            "全尺信号検出イベント数が上限を超えました")
             if full_deadline - time.monotonic() <= 0:
                 break
+    # Measure integrated loudness over each complete audio track, not a peak
+    # sampled from a few windows. This is opt-in because every track requires
+    # an additional full-length FFmpeg loudnorm first pass.
+    integrated_loudness = []
+    if loudness_requested and full_decode_ok and audios:
+        for ordinal in range(len(audios)):
+            remaining = full_deadline - time.monotonic()
+            if remaining <= 0:
+                issues.append({"code": "EXPORT_LOUDNESS_TIMEOUT", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
+                       "-v", "info", "-xerror", "-i", str(target),
+                       "-map", f"0:a:{ordinal}",
+                       "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json",
+                       "-abort_on", "empty_output+empty_output_stream",
+                       "-f", "null", "-"]
+            try:
+                measured = run(command, min(timeout, remaining))
+            except FileNotFoundError:
+                return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
+            except subprocess.TimeoutExpired:
+                issues.append({"code": "EXPORT_LOUDNESS_TIMEOUT", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            except (OSError, UnicodeDecodeError):
+                issues.append({"code": "EXPORT_LOUDNESS_FAILED", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            if measured.returncode:
+                issues.append({"code": "EXPORT_LOUDNESS_FAILED", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            try:
+                lufs = _integrated_lufs_from_loudnorm(measured.stderr or "")
+            except ValueError:
+                issues.append({"code": "EXPORT_LOUDNESS_UNVERIFIABLE",
+                               "severity": "error", "stream_ordinal": ordinal})
+                continue
+            integrated_loudness.append({"stream_ordinal": ordinal,
+                                        "integrated_lufs": round(lufs, 2)})
+            if min_integrated_lufs is not None and lufs < min_integrated_lufs:
+                issues.append({"code": "EXPORT_LOUDNESS_TOO_QUIET",
+                               "severity": "error", "stream_ordinal": ordinal,
+                               "integrated_lufs": round(lufs, 2),
+                               "minimum_lufs": min_integrated_lufs})
+            if max_integrated_lufs is not None and lufs > max_integrated_lufs:
+                issues.append({"code": "EXPORT_LOUDNESS_TOO_LOUD",
+                               "severity": "error", "stream_ordinal": ordinal,
+                               "integrated_lufs": round(lufs, 2),
+                               "maximum_lufs": max_integrated_lufs})
     # Explicit quality gates turn *observed* signal defects into blocking
     # errors. They do not claim that sampled-only scans cover the entire file.
     # Apply them after merging overlapping sample and full-scan intervals.
@@ -1748,6 +1841,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                            else None),
             "fps": video_details[0]["fps"] if video_details else None,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
+            "integrated_loudness": integrated_loudness,
             # Highest observed sample peak across every audio track/window.
             # None means no finite measurement, not proof of silence.
             "audio_peak_db": max((p["peak_dbfs"] for p in audio_peaks), default=None),
