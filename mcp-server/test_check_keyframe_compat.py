@@ -19,6 +19,7 @@ class FakeYmm4:
         self.posts = []
         self.revision = 1
         self.fail_set = None
+        self.timeout_after_failed_set = False
         self.external_change_after_failed_set = False
         self.external_replace_after_failed_set = False
         self.bad_value = None
@@ -102,6 +103,8 @@ class FakeYmm4:
                 if self.external_replace_after_failed_set:
                     self.frames[prop][-1]["value"] += 50
                     self.revision += 1
+                if self.timeout_after_failed_set:
+                    raise httpx.ReadTimeout("simulated lost response after mutation")
                 return httpx.Response(200, json={"success": False,
                                                   "error_code": "KEYFRAME_METHOD_UNAVAILABLE"})
         elif action == "remove":
@@ -236,6 +239,15 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
         self.assertEqual(len(fake.frames["Zoom"]), 1)
+
+    def test_lost_post_response_cleans_up_only_identifiable_own_frame(self):
+        fake = FakeYmm4()
+        fake.fail_set = "Zoom"
+        fake.timeout_after_failed_set = True
+        with self.assertRaisesRegex(ProbeError, "simulated lost response"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
+        self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
 
     def test_failed_post_with_concurrent_unrelated_edit_refuses_cleanup(self):
         fake = FakeYmm4()
