@@ -69,8 +69,22 @@ class AssetQaIdentityAndLimitsTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 asset_qa.report(self.snapshot(missing=[self.source(path)]))
 
+    def test_rejects_windows_dot_segments_and_empty_components(self):
+        # PR #230's shared export-path validator rejects traversal and
+        # ambiguous Windows separators. Asset QA must honor the same rule
+        # after all open PRs are composed; never weaken the path validator
+        # merely to satisfy an obsolete compatibility expectation.
+        for path in ("C:/media/../clip.mp4", "C:/media/./clip.mp4",
+                     "C:/media//clip.mp4"):
+            for state in ("missing", "unchecked"):
+                with self.subTest(path=path, state=state), self.assertRaises(ValueError):
+                    asset_qa.report(self.snapshot(
+                        missing=[self.source(path)] if state == "missing" else [],
+                        unchecked=[self.source(path)] if state == "unchecked" else [],
+                        count=1 if state == "missing" else 0))
+
     def test_preserves_valid_win32_and_posix_paths(self):
-        for path in ("C:/My Assets/clip.mp4", "C:/media/../clip.mp4",
+        for path in ("C:/My Assets/clip.mp4",
                      "\\\\server\\share\\voice clip.wav",
                      "/tmp/clip.with.dot.", "/tmp/clip:take.wav"):
             with self.subTest(path=path):
