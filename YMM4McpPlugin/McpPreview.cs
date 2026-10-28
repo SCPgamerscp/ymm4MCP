@@ -192,6 +192,8 @@ namespace YMM4McpPlugin
                     await Task.WhenAny(tcs.Task, Task.Delay(2000));
 
                     // バッファを結合
+                    if (buffer.IsTruncated) return (object)new { success = false, error_code = "AUDIO_CAPTURE_LIMIT_EXCEEDED",
+                        error = "録音バッファが安全な上限を超えました。録音時間やデバイス形式を調整してください" };
                     var allBytes = buffer.ToArray();
 
                     // WAVヘッダーを付けてbase64化
@@ -284,6 +286,8 @@ namespace YMM4McpPlugin
                     await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
                     await captureTask;
 
+                    if (audioBuffer.IsTruncated) return (object)new { success = false, error_code = "AUDIO_CAPTURE_LIMIT_EXCEEDED",
+                        error = "録音バッファが安全な上限を超えました。録音時間やデバイス形式を調整してください" };
                     var allBytes = audioBuffer.ToArray();
                     using var ms = new MemoryStream();
                     using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
