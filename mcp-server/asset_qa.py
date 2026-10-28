@@ -45,7 +45,7 @@ def _ambiguous_posix_path(path: str) -> bool:
     # A single initial slash is expected. Empty interior components and
     # dot segments are aliases of other paths; ordinary punctuation is fine.
     parts = path.split("/")
-    return any(part in ("", ".", "..") for part in parts[1:-1])
+    return any(part in ("", ".", "..") for part in parts[1:])
 
 
 def report(availability: dict) -> dict:
