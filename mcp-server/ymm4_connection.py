@@ -109,14 +109,31 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             # Never block on a substituted FIFO/device or follow a descriptor
             # symlink into another file. Check both before and after opening:
             # a path can change between lstat() and open().
-            if not stat.S_ISREG(os.lstat(path).st_mode):
+            path_stat = os.lstat(path)
+            if not stat.S_ISREG(path_stat.st_mode):
                 raise ValueError("connection descriptor must be a regular file")
             flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(path, flags)
             with os.fdopen(fd, "rb") as source:
-                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                opened_stat = os.fstat(source.fileno())
+                if not stat.S_ISREG(opened_stat.st_mode):
                     raise ValueError("connection descriptor must be a regular file")
+                # O_NOFOLLOW is not available on every platform (notably
+                # Windows). Detect a regular-file swap between lstat and open
+                # instead of trusting the pre-open path inspection.
+                if (path_stat.st_ino and opened_stat.st_ino
+                        and (path_stat.st_dev, path_stat.st_ino)
+                        != (opened_stat.st_dev, opened_stat.st_ino)):
+                    raise ValueError("connection descriptor changed before opening")
                 raw = source.read(MAX_DESCRIPTOR_BYTES + 1)
+                # A concurrent writer can leave a valid-looking but torn
+                # descriptor. Reject changes observed during the read.
+                read_stat = os.fstat(source.fileno())
+                if (opened_stat.st_dev, opened_stat.st_ino, opened_stat.st_size,
+                    opened_stat.st_mtime_ns, opened_stat.st_ctime_ns) != (
+                    read_stat.st_dev, read_stat.st_ino, read_stat.st_size,
+                    read_stat.st_mtime_ns, read_stat.st_ctime_ns):
+                    raise ValueError("connection descriptor changed during reading")
             if len(raw) > MAX_DESCRIPTOR_BYTES:
                 raise ValueError("connection descriptor is too large")
             decoded = raw.decode("utf-8-sig")
