@@ -7,6 +7,24 @@ import httpx
 from ymm4_connection import ConnectionConfigurationError, connection_settings
 
 
+MAX_STATUS_JSON_BYTES = 65536
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
+    """Do not let a later duplicate status field silently override evidence."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("YMM4のステータスJSONに重複キーがあります")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(value: str):
+    """JSON does not permit NaN/Infinity, even in ignored fields."""
+    raise ValueError("YMM4のステータスJSONに不正な数値があります")
+
+
 def check() -> dict:
     base, headers = connection_settings()
     # This endpoint is strictly loopback. Environment HTTP(S)_PROXY settings
@@ -14,7 +32,17 @@ def check() -> dict:
     with httpx.Client(timeout=5.0, trust_env=False) as client:
         response = client.get(base + "/status", headers=headers)
         response.raise_for_status()
-        status = response.json()
+        # The local endpoint has a tiny status payload. Bound JSON parsing
+        # even when an unexpected service responds with an oversized body.
+        if len(response.content) > MAX_STATUS_JSON_BYTES:
+            raise ValueError("YMM4のステータスJSONが大きすぎます")
+        try:
+            status = response.json(
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_nonfinite_json_constant,
+            )
+        except RecursionError as exc:
+            raise ValueError("YMM4のステータスJSONが深すぎます") from exc
     if (not isinstance(status, dict) or status.get("status") != "running"
             or "error" in status or "error_code" in status
             or ("success" in status and status["success"] is not True)):
