@@ -20,6 +20,9 @@ class FakeYmm4:
         self.revision = 1
         self.fail_set = None
         self.timeout_after_failed_set = False
+        self.omit_set_revision = False
+        self.external_change_after_unversioned_set = False
+        self.external_replace_after_unversioned_set = False
         self.external_change_after_failed_set = False
         self.external_replace_after_failed_set = False
         self.bad_value = None
@@ -107,6 +110,17 @@ class FakeYmm4:
                     raise httpx.ReadTimeout("simulated lost response after mutation")
                 return httpx.Response(200, json={"success": False,
                                                   "error_code": "KEYFRAME_METHOD_UNAVAILABLE"})
+            if self.omit_set_revision:
+                # A legacy host may mutate successfully but omit the revision.
+                # Simulate an independent editor changing the item before the
+                # probe reads it back, so cleanup must not adopt that revision.
+                if self.external_change_after_unversioned_set:
+                    self.frames["Opacity"][0]["value"] += 1
+                    self.revision += 1
+                if self.external_replace_after_unversioned_set:
+                    self.frames[prop][-1]["value"] += 50
+                    self.revision += 1
+                return httpx.Response(200, json={"success": True})
         elif action == "remove":
             if prop != self.fail_remove:
                 self.frames[prop] = [f for f in self.frames[prop] if f["at"] != at]
@@ -264,6 +278,36 @@ class LiveProbeProtocolTests(unittest.TestCase):
         fake.fail_set = "Zoom"
         fake.external_replace_after_failed_set = True
         with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*unacknowledged edit is ambiguous"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.25})
+
+    def test_unversioned_success_is_not_certified_and_is_cleaned_if_isolated(self):
+        fake = FakeYmm4()
+        fake.omit_set_revision = True
+        with self.assertRaisesRegex(ProbeError, "mutation succeeded without revision"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
+        self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
+        self.assertEqual(fake.frames["Opacity"], [{"at": 0, "value": 100.0}])
+
+    def test_unversioned_success_does_not_delete_concurrent_unrelated_edit(self):
+        fake = FakeYmm4()
+        fake.omit_set_revision = True
+        fake.external_change_after_unversioned_set = True
+        with self.assertRaisesRegex(
+                ProbeError, "CLEANUP FAILED.*unacknowledged edit is ambiguous"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 1.25})
+
+    def test_unversioned_success_does_not_delete_replaced_keyframe(self):
+        fake = FakeYmm4()
+        fake.omit_set_revision = True
+        fake.external_replace_after_unversioned_set = True
+        with self.assertRaisesRegex(
+                ProbeError, "CLEANUP FAILED.*unacknowledged edit is ambiguous"):
             probe(fake)
         self.assertEqual([p["action"] for p in fake.posts], ["set"])
         self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.25})
