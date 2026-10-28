@@ -46,6 +46,8 @@ namespace YMM4McpPlugin
         {
             SaveSettings();
             Server.Start();
+            // A successful listener start resolves a previous bind/start error.
+            _startupError = "";
         }), _ => !IsRunning);
         public ICommand StopCommand => new RelayCommand(_ => RunSafely(Server.Stop), _ => IsRunning);
         public ICommand SaveSettingsCommand => new RelayCommand(_ => RunSafely(SaveSettings), _ => !IsRunning);
