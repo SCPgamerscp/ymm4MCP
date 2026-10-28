@@ -111,7 +111,13 @@ def check() -> dict:
                     "YMM4の認証が有効であることを確認できません"
                     "（不正なトークンへの応答がHTTP 401ではありません）"
                 )
+        # The negative probe shares the same total deadline as the positive one.
+        # Never send the real token after an already-expired authentication probe.
+        if time.monotonic() > deadline:
+            raise ValueError("YMM4のステータス応答がタイムアウトしました")
         with client.stream("GET", url, headers=status_headers) as response:
+            if time.monotonic() > deadline:
+                raise ValueError("YMM4のステータス応答がタイムアウトしました")
             response.raise_for_status()
             # Do not allow gzip/deflate to inflate an arbitrarily large
             # response inside HTTPX before our byte-count check runs.
@@ -164,8 +170,14 @@ def check() -> dict:
                 if len(body) + len(chunk) > MAX_STATUS_JSON_BYTES:
                     raise ValueError("YMM4のステータスJSONが大きすぎます")
                 body.extend(chunk)
+            # A stalled EOF can exceed the deadline even without any data chunks.
+            if time.monotonic() > deadline:
+                raise ValueError("YMM4のステータス応答がタイムアウトしました")
             if declared_length is not None and len(body) != declared_length:
                 raise ValueError("YMM4のステータスContent-Lengthが応答サイズと一致しません")
+    # Closing the response stream must not hide a deadline overrun either.
+    if time.monotonic() > deadline:
+        raise ValueError("YMM4のステータス応答がタイムアウトしました")
     # json.loads(bytes) detects UTF-8/16/32. Decode with the same rules
     # before counting nesting; scanning raw UTF-16 bytes misses escapes.
     raw = bytes(body)
