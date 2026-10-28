@@ -60,6 +60,13 @@ class StatusJsonIntegrityTests(unittest.TestCase):
                 + b"[" * 1500 + b"0" + b"]" * 1500 + b"}"
             )
 
+    def test_brackets_inside_quoted_json_strings_do_not_count_as_nesting(self):
+        body = (
+            b'{"status":"running","port":8765,"extra":"'
+            + b"[" * 200 + b'\\\"' + b"{" * 200 + b'"}'
+        )
+        self.assertEqual(self.check_body(body)["port"], 8765)
+
     def test_accepts_normal_status_and_exact_size_boundary(self):
         body = b'{"status":"running","port":8765,"version":"4.56.1.1"}'
         self.assertEqual(self.check_body(body)["version"], "4.56.1.1")
