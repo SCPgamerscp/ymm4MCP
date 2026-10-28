@@ -91,6 +91,33 @@ class GeminiFilePollingRetryTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [3, 6])
         self.assertEqual(self.client.files.get.call_count, 3)
 
+    def test_each_poll_has_remaining_request_timeout(self):
+        self.client.files.get.side_effect = [
+            SimpleNamespace(state=SimpleNamespace(name="PROCESSING")),
+            SimpleNamespace(state=SimpleNamespace(name="ACTIVE")),
+        ]
+        with patch.object(gemini_video.time, "monotonic",
+                          side_effect=[0, 0, 1, 5, 6]), \
+             patch.object(gemini_video.time, "sleep") as sleep:
+            result = gemini_video._wait_file_active(
+                self.client, self.uploaded, timeout_sec=10)
+        self.assertEqual(result.state.name, "ACTIVE")
+        self.assertEqual(sleep.call_args.args[0], 3)
+        requests = self.client.files.get.call_args_list
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(
+            [call.kwargs["config"]["http_options"]["timeout"] for call in requests],
+            [10000, 5000],
+        )
+
+    def test_submillisecond_budget_skips_network_request(self):
+        with patch.object(gemini_video.time, "monotonic",
+                          side_effect=[0, 9.9995]):
+            with self.assertRaises(TimeoutError):
+                gemini_video._wait_file_active(
+                    self.client, self.uploaded, timeout_sec=10)
+        self.client.files.get.assert_not_called()
+
     def test_unauthorized_is_not_retried(self):
         self.client.files.get.side_effect = FileApiError(401)
         with patch.object(gemini_video.time, "sleep") as sleep:
