@@ -1,4 +1,5 @@
 """The install connection check must not trust unprintable host version data."""
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,8 @@ class StatusVersionIntegrityTests(unittest.TestCase):
         rejected = MagicMock(status_code=401)
         accepted = MagicMock(status_code=200)
         accepted.json.return_value = payload
+        accepted.iter_bytes.return_value = [json.dumps(payload).encode("utf-8")]
+        client.stream.return_value.__enter__.return_value = accepted
         # Standalone #244 makes only the positive request; when #228 is
         # composed first, the negative authentication probe must also work.
         # Select by token, not call order, to test both compositions.
