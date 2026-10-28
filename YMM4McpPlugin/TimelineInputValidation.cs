@@ -88,9 +88,18 @@ internal static class TimelineInputValidation
     internal static void ApplyShift<T>(IReadOnlyList<(T item, int frame, int length, int layer)> items,
         int delta, Action<T, int, int, int> apply)
     {
-        var planned = items.Select(entry => (entry.item, entry.frame,
-            target: CheckPlacement((long)entry.frame + delta, entry.length), entry.layer)).ToArray();
-        foreach (var entry in planned) apply(entry.item, entry.frame, entry.target, entry.layer);
+        // Validate the source as well as the destination before mutating anything.
+        // An invalid host frame must not become valid merely because delta is positive.
+        var planned = items.Select(entry =>
+        {
+            AtLeast(entry.layer, 0, "layer");
+            CheckPlacement(entry.frame, entry.length);
+            return (entry.item, entry.frame,
+                target: CheckPlacement((long)entry.frame + delta, entry.length), entry.layer);
+        }).ToArray();
+        foreach (var entry in planned)
+            if (entry.target != entry.frame)
+                apply(entry.item, entry.frame, entry.target, entry.layer);
     }
 
     internal static void ApplyResolve<T>(IReadOnlyList<(T item, int frame, int length, int layer)> items,
@@ -103,6 +112,7 @@ internal static class TimelineInputValidation
             long cursor = 0;
             foreach (var entry in layerItems.OrderBy(entry => entry.frame))
             {
+                AtLeast(entry.layer, 0, "layer");
                 CheckPlacement(entry.frame, entry.length);
                 int target = CheckPlacement(Math.Max((long)entry.frame, cursor), entry.length);
                 planned.Add((entry.item, entry.frame, target, entry.length, entry.layer));
