@@ -1,5 +1,7 @@
 """Check the installed MCP server's authenticated local YMM4 connection."""
+import json
 import sys
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -7,29 +9,95 @@ import httpx
 from ymm4_connection import ConnectionConfigurationError, connection_settings
 
 
+MAX_STATUS_JSON_BYTES = 65536
+MAX_STATUS_JSON_DEPTH = 128
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
+    """Do not let a later duplicate status field silently override evidence."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("YMM4のステータスJSONに重複キーがあります")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(value: str):
+    """JSON does not permit NaN/Infinity, even in ignored fields."""
+    raise ValueError("YMM4のステータスJSONに不正な数値があります")
+
+
+def _status_json_too_deep(body: str) -> bool:
+    """Bound structural nesting in decoded JSON, including UTF-16/32 inputs."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == '\\':  # backslash
+                escaped = True
+            elif char == '"':  # double quote
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in ('[', '{'):
+            depth += 1
+            if depth > MAX_STATUS_JSON_DEPTH:
+                return True
+        elif char in (']', '}'):
+            depth -= 1
+    return False
+
+
 def check() -> dict:
     base, headers = connection_settings()
     token = headers.get("X-Ymm4-Token")
     if not isinstance(token, str) or not token:
         raise ValueError("認証付き接続の確認に必要なYMM4 APIトークンがありません")
-
-    # A successful status response alone does not prove authentication.
-    # Probe with a WRONG token of the SAME length to catch length-only checks.
+    # A positive response alone does not prove the endpoint enforces auth.
     invalid_token = ("0" if token[0] != "0" else "1") + token[1:]
     invalid_headers = {**headers, "X-Ymm4-Token": invalid_token}
     url = base + "/status"
-
-    # Both probes stay on loopback; environment proxies must not see tokens.
+    # Both probes stay on loopback; ambient proxies must never see the token.
+    # Stream before buffering so an unexpected local responder cannot force
+    # an unbounded allocation. HTTPX's read timeout is per operation; also
+    # enforce a total response deadline against indefinitely trickled data.
+    deadline = time.monotonic() + 10.0
     with httpx.Client(timeout=5.0, trust_env=False) as client:
-        rejected = client.get(url, headers=invalid_headers)
-        if rejected.status_code != 401:
-            raise ValueError(
-                "YMM4の認証が有効であることを確認できません"
-                "（不正なトークンへの応答がHTTP 401ではありません）"
-            )
-        response = client.get(url, headers=headers)
-        response.raise_for_status()
-        status = response.json()
+        # Inspect only the headers of the negative probe, without buffering
+        # an untrusted response body.
+        with client.stream("GET", url, headers=invalid_headers) as rejected:
+            if rejected.status_code != 401:
+                raise ValueError(
+                    "YMM4の認証が有効であることを確認できません"
+                    "（不正なトークンへの応答がHTTP 401ではありません）"
+                )
+        with client.stream("GET", url, headers=headers) as response:
+            response.raise_for_status()
+            body = bytearray()
+            for chunk in response.iter_bytes(chunk_size=8192):
+                if time.monotonic() > deadline:
+                    raise ValueError("YMM4のステータス応答がタイムアウトしました")
+                if len(body) + len(chunk) > MAX_STATUS_JSON_BYTES:
+                    raise ValueError("YMM4のステータスJSONが大きすぎます")
+                body.extend(chunk)
+    # json.loads(bytes) detects UTF-8/16/32. Decode with the same rules
+    # before counting nesting; scanning raw UTF-16 bytes misses escapes.
+    raw = bytes(body)
+    decoded = raw.decode(json.detect_encoding(raw))
+    if _status_json_too_deep(decoded):
+        raise ValueError("YMM4のステータスJSONが深すぎます")
+    try:
+        status = json.loads(
+            decoded,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except RecursionError as exc:
+        raise ValueError("YMM4のステータスJSONが深すぎます") from exc
     if (not isinstance(status, dict) or status.get("status") != "running"
             or "error" in status or "error_code" in status
             or ("success" in status and status["success"] is not True)):
@@ -37,10 +105,20 @@ def check() -> dict:
     port = status.get("port")
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("YMM4の応答ポートが不正です")
+    # A successful HTTP response on another port does not prove that the
+    # configured plugin instance is the one we intended to contact.
     configured_port = urlsplit(base).port
     if configured_port is not None and port != configured_port:
         raise ValueError("YMM4の応答ポートが接続先ポートと一致しません")
-    return {"status": status["status"], "version": status.get("version"), "port": port}
+    version = status.get("version")
+    # Version is printed in the installer terminal. Never display control
+    # sequences, Unicode direction overrides, or arbitrarily large values
+    # returned by an unexpected service on the configured loopback port.
+    if "version" in status and (
+            not isinstance(version, str) or not version or len(version) > 128
+            or not version.isprintable()):
+        raise ValueError("YMM4の応答バージョンが不正です")
+    return {"status": status["status"], "version": version, "port": port}
 
 
 def main() -> int:
