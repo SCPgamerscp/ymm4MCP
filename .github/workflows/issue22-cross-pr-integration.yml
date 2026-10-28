@@ -126,6 +126,9 @@ jobs:
             dotnet run --project $project.FullName --configuration Release
             if ($LASTEXITCODE -ne 0) { throw "Composed keyframe regression failed: $($project.FullName)" }
           }
+      - name: Regression-test interrupted and corrupt official reference downloads
+        shell: pwsh
+        run: ./ci/test-download-ymm4-lite.ps1
       - name: Download official YMM4 Lite references
         shell: pwsh
         run: |
@@ -357,6 +360,9 @@ jobs:
             dotnet run --project $project.FullName --configuration Release
             if ($LASTEXITCODE -ne 0) { throw "Failed keyframe test: $($project.FullName)" }
           }
+      - name: Regression-test interrupted and corrupt official reference downloads
+        shell: pwsh
+        run: ./ci/test-download-ymm4-lite.ps1
       - name: Download official YMM4 Lite references
         shell: pwsh
         run: |
