@@ -74,5 +74,62 @@ class GeminiPreviewInputSafetyTests(unittest.TestCase):
         self.assertIn("upload size limit", error)
 
 
+    def test_missing_or_duplicate_capture_indices_fail(self):
+        for name in ("a.png", "b.png"):
+            (self.root / name).write_bytes(b"fixture")
+        for indices in ((0, 2), (0, 0), (True, 1), (0, None), (0, "1")):
+            with self.subTest(indices=indices):
+                meta = [{"file": "a.png", "index": indices[0]},
+                        {"file": "b.png", "index": indices[1]}]
+                self.assertIn("incomplete capture indices",
+                              self.reject(frames_meta=meta))
+
+    def test_mixed_present_and_missing_indices_fail(self):
+        for name in ("a.png", "b.png"):
+            (self.root / name).write_bytes(b"fixture")
+        self.assertIn("incomplete capture indices", self.reject(frames_meta=[
+            {"file": "a.png", "index": 0}, {"file": "b.png"}]))
+
+    def test_invalid_or_incomplete_dimensions_fail(self):
+        (self.root / "a.png").write_bytes(b"fixture")
+        for dims in ({"width": 0, "height": 100},
+                     {"width": True, "height": 100},
+                     {"width": 100},
+                     {"width": 100, "height": 32769},
+                     {"width": "100", "height": 100}):
+            with self.subTest(dims=dims):
+                self.assertIn("invalid capture dimensions",
+                              self.reject(frames_meta=[{"file": "a.png", **dims}]))
+
+    def test_valid_shuffled_indices_and_dimensions_remain_supported(self):
+        from unittest.mock import MagicMock
+        for name in ("a.png", "b.png"):
+            (self.root / name).write_bytes(b"fixture")
+        class Part:
+            @staticmethod
+            def from_bytes(*, data, mime_type):
+                return data
+            @staticmethod
+            def from_text(*, text):
+                return text
+        client = MagicMock()
+        client.models.generate_content.return_value = SimpleNamespace(
+            text='{"summary":"ok","events":[]}')
+        metadata = [
+            {"file": "b.png", "index": 1, "timeMs": 1000,
+             "frame": 30, "width": 1920, "height": 1080},
+            {"file": "a.png", "index": 0, "timeMs": 0,
+             "frame": 0, "width": 1920, "height": 1080},
+        ]
+        with patch.object(gemini_video, "_client", return_value=client), \\
+             patch.object(gemini_video, "genai_types", SimpleNamespace(Part=Part)):
+            result = gemini_video.analyze_frames_dir(
+                str(self.root), frames_meta=metadata)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["analyzed_images"], 2)
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
