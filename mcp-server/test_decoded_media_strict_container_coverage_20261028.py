@@ -92,10 +92,12 @@ class StrictContainerCoverageTests(unittest.TestCase):
         self.assertNotIn("EXPORT_VIDEO_HEAD_GAP_EXCEEDED", self.codes(report))
         self.assertNotIn("EXPORT_VIDEO_TAIL_GAP_EXCEEDED", self.codes(report))
 
-    def test_missing_track_timing_does_not_invent_a_gap(self):
+    def test_missing_track_timing_fails_closed_without_inventing_a_gap(self):
         report = self.inspect_tracks([
             {"codec_type": "video"}], max_black_seconds=0.1)
-        self.assertTrue(report["passed"], report)
+        self.assertFalse(report["passed"], report)
+        self.assertIn("EXPORT_VIDEO_COVERAGE_UNVERIFIABLE", self.codes(report))
+        self.assertNotIn("EXPORT_VIDEO_HEAD_GAP_EXCEEDED", self.codes(report))
 
     def test_small_gap_within_tolerance_is_allowed(self):
         report = self.inspect_tracks([

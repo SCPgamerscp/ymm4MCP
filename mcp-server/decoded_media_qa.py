@@ -535,8 +535,20 @@ def _integrated_lufs_from_loudnorm(log):
     if len(measurements) != 1:
         raise ValueError("loudnorm input measurement missing or ambiguous")
     record = measurements[0]
-    if not {"input_tp", "input_lra", "input_thresh", "output_i"}.issubset(record):
-        raise ValueError("incomplete loudnorm measurement")
+    # A valid input_i alongside corrupt auxiliary loudnorm measurements is
+    # not a trustworthy first-pass result. Validate the complete measurement
+    # instead of silently accepting NaN/Infinity or impossible loudness data.
+    for field, lower, upper in (("input_tp", -100, 30),
+                                ("input_lra", 0, 100),
+                                ("input_thresh", -100, 30),
+                                ("output_i", -100, 30)):
+        raw = record.get(field)
+        if (type(raw) is not str or not re.fullmatch(
+                r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", raw)):
+            raise ValueError("invalid loudnorm " + field)
+        numeric = float(raw)
+        if not math.isfinite(numeric) or not lower <= numeric <= upper:
+            raise ValueError("out-of-range loudnorm " + field)
     value = record["input_i"]
     if type(value) is not str or not re.fullmatch(
             r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value):
@@ -1089,6 +1101,18 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         ends_known = [
             _optional_stream_time(track.get("duration"))
             for track in tracks]
+        # A strict black/silence gate cannot certify unrendered timeline
+        # intervals if even one declared track has an unknown origin or end.
+        # Sample decoding may succeed despite a long uncovered head, tail or
+        # interior gap; do not silently skip the metadata coverage check.
+        if (any(start is None for start in starts_known)
+                or any(length is None for length in ends_known)):
+            issues.append({"code": code_prefix + "_COVERAGE_UNVERIFIABLE",
+                           "severity": "error",
+                           "unknown_start_count": sum(
+                               start is None for start in starts_known),
+                           "unknown_duration_count": sum(
+                               length is None for length in ends_known)})
         if (all(start is not None for start in starts_known)
                 and all(length is not None for length in ends_known)):
             last_end = max(start - container_start + length
@@ -1349,7 +1373,6 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 # A partial channel inventory cannot satisfy a strict peak
                 # measurement requirement even if one channel has a value.
                 if (require_audio_peak_metrics and declared_channels is not None
-                        and (channel_peaks or observed_headers)
                         and not complete_channels):
                     issues.append({
                         "code": "EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE",

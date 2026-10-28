@@ -103,3 +103,18 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 全尺信号走査も15分の全尺デコード予算を共有し、フィルタ失敗・タイムアウト・不正な診断は `EXPORT_FULL_SIGNAL_FAILED` / `EXPORT_FULL_SIGNAL_TIMEOUT` / `EXPORT_FULL_SIGNAL_TIMESTAMP_INVALID` で不合格になります。`full_signal_scan` 単独指定は拒否します。処理時間とCPU負荷が増えるため、既定値は `false` です。音量ピーク・左右チャンネルの `astats` は引き続きサンプル区間のみです。
 
 **重要な制約:** 通常の `full_decode:true` だけでは黒画面・無音・フリーズの検出はサンプル範囲のみ（`signal_scope:"sampled_only"`）です。全尺信号走査を指定しても、字幕の見切れ・意図的な演出かどうか・True Peak / LUFS・主観的品質は判定できません。YMM4実機での再生確認と併用してください。
+
+### Strict QA metadata integrity (2026-10-28)
+
+When `max_black_seconds` or `max_silence_seconds` is supplied, the
+corresponding stream inventory must include valid start and duration metadata
+for every track. Missing timing now reports
+`EXPORT_VIDEO_COVERAGE_UNVERIFIABLE` or
+`EXPORT_AUDIO_COVERAGE_UNVERIFIABLE` rather than silently treating unknown
+head/tail/interior coverage as a successful quality gate. Default non-strict
+sampling remains permissive.
+
+`require_audio_peak_metrics=True` requires a peak for every declared audio
+channel. An `Overall` peak alone does not prove complete per-channel
+measurement. Loudnorm integrated-LUFS gates also validate the auxiliary
+first-pass fields before accepting the integrated measurement.
