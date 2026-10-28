@@ -71,7 +71,7 @@ def report(availability: dict) -> dict:
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
                 source["path"].strip() != source["path"] or
-                source["path"].endswith(("/", "\")) or
+                source["path"].endswith(("/", "\\")) or
                 not is_absolute_media_path(source["path"]) or
                 _ambiguous_windows_path(source["path"])):
             raise ValueError("asset source entries require a valid path")
