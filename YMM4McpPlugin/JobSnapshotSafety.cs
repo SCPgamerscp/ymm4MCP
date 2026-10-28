@@ -6,6 +6,11 @@ namespace YMM4McpPlugin
 {
     internal static class JobSnapshotSafety
     {
+        // File.Move(overwrite: true) is not safe against concurrent writers on
+        // Windows: even distinct temporary files can race at the destination.
+        // Serialize only the final replacement, not the temporary file write.
+        private static readonly object SnapshotReplaceLock = new();
+
         private static readonly Regex JobId = new(
             @"^job_[A-Za-z0-9]{8,64}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -26,7 +31,10 @@ namespace YMM4McpPlugin
             try
             {
                 File.WriteAllText(temp, content);
-                File.Move(temp, path, overwrite: true);
+                lock (SnapshotReplaceLock)
+                {
+                    File.Move(temp, path, overwrite: true);
+                }
             }
             finally
             {
