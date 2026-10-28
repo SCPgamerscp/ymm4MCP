@@ -104,7 +104,7 @@ class StatusJsonIntegrityTests(unittest.TestCase):
              patch.object(check_connection.httpx, "Client", return_value=client):
             with self.assertRaisesRegex(ValueError, "大きすぎ"):
                 check_connection.check()
-        response.iter_bytes.assert_called_once_with(chunk_size=8192)
+        response.iter_bytes.assert_called_once_with()
         self.assertEqual(next(chunks), b"x" * 8192)
 
     def test_stream_enforces_total_response_deadline(self):
