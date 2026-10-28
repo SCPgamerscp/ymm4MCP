@@ -296,6 +296,11 @@ def analyze_frames_dir(
     if frames_meta is not None and len(frames_meta) > 100_000:
         return {"success": False, "source": "frames_dir",
                 "error": "frames_meta exceeds the 100000 frame metadata limit"}
+    # Explicit empty host capture metadata must not fall back to stale PNGs
+    # left in the export directory by an earlier capture.
+    if frames_meta is not None and not frames_meta:
+        return {"success": False, "source": "frames_dir",
+                "error": "frames_meta contains no captured frames"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
 
@@ -346,8 +351,15 @@ def analyze_frames_dir(
 
     # 多すぎる場合は均等間引き
     if len(entries) > max_images:
-        stepf = len(entries) / max_images
-        entries = [entries[int(i * stepf)] for i in range(max_images)]
+        # Cover the final frame as well as the first. The previous floor(i*N/K)
+        # sampling always skipped the last frame when downsampling, potentially
+        # missing a broken export tail. Use integer arithmetic for stable indices.
+        if max_images == 1:
+            entries = [entries[0]]
+        else:
+            last = len(entries) - 1
+            entries = [entries[(i * last) // (max_images - 1)]
+                       for i in range(max_images)]
 
     # 画像 + 各画像の時刻ラベルを contents に並べる
     contents: list[Any] = []
@@ -368,6 +380,9 @@ def analyze_frames_dir(
                         "source": "frames_dir"}
             with open(path, "rb") as fh:
                 img_bytes = fh.read(MAX_FRAME_IMAGE_BYTES + 1)
+            if not img_bytes:
+                return {"success": False, "error": "Selected PNG frame is empty",
+                        "source": "frames_dir"}
             if (len(img_bytes) > MAX_FRAME_IMAGE_BYTES
                     or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Frame payload exceeds the upload size limit",
