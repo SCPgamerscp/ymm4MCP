@@ -289,10 +289,12 @@ jobs:
           echo "**Composed: ${passed}; skipped/failed: ${failed}; total: ${#numbers[@]}.**" >> "$GITHUB_STEP_SUMMARY"
           echo "conflicts=$failed" >> "$GITHUB_OUTPUT"
           if (( failed > 0 )); then
-            echo "::warning::${failed} open PRs could not be composed in numeric order; see the job summary."
+            echo "::error::${failed} open PRs could not be composed in numeric order; see the job summary."
+            # A green audit with both all-PR test jobs skipped is misleading.
+            # Fail this job while leaving the independent #22 integration job
+            # runnable, so conflicts cannot masquerade as full CI success.
+            exit 1
           fi
-          # Advisory only: existing #22 release CI remains independently
-          # actionable even when unrelated PRs have integration conflicts.
 
       - name: Archive exact all-PR composition when conflict-free
         if: steps.merge-audit.outputs.conflicts == '0'
