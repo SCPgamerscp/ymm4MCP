@@ -315,10 +315,14 @@ def analyze_frames_dir(
         if len({e["file"] for e in entries}) != len(entries):
             return {"success": False, "source": "frames_dir",
                     "error": "frames_meta contains duplicate PNG filenames"}
+        time_present = ["timeMs" in e for e in entries]
+        frame_present = ["frame" in e for e in entries]
         has_time = [_valid_time_ms(e.get("timeMs")) for e in entries]
         has_frame = [_valid_frame_index(e.get("frame")) for e in entries]
-        if ((any(has_time) and not all(has_time))
-                or (any(has_frame) and not all(has_frame))):
+        # A present-but-invalid field is not the same as an absent field.
+        # All-invalid metadata must fail instead of falling back to filenames.
+        if ((any(time_present) and (not all(time_present) or not all(has_time)))
+                or (any(frame_present) and (not all(frame_present) or not all(has_frame)))):
             return {"success": False, "source": "frames_dir",
                     "error": "frames_meta has inconsistent timestamp/frame metadata"}
         if all(has_time):
@@ -348,6 +352,26 @@ def analyze_frames_dir(
 
     if not entries:
         return {"success": False, "error": "解析対象の画像がありません"}
+
+    # Validate every declared capture *before* downsampling. A missing or
+    # empty frame that is not selected for upload still invalidates the export.
+    if frames_meta is not None:
+        for e in entries:
+            path = _safe_frame_path(frames_dir, e["file"])
+            if path is None:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Declared PNG frame is missing or outside export directory"}
+            try:
+                size = os.path.getsize(path)
+            except OSError as exc:
+                return {"success": False, "source": "frames_dir",
+                        "error": f"Cannot inspect declared PNG frame: {exc}"}
+            if size == 0:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Declared PNG frame is empty"}
+            if size > MAX_FRAME_IMAGE_BYTES:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Declared PNG frame exceeds the upload size limit"}
 
     # 多すぎる場合は均等間引き
     if len(entries) > max_images:
