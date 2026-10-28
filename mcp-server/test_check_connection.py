@@ -1,4 +1,5 @@
 """Authenticated install checks require both negative and positive probes."""
+import json
 import unittest
 from unittest.mock import MagicMock, call, patch
 
@@ -11,7 +12,12 @@ def fake_client(payload, rejected_status=401):
     rejected = MagicMock(status_code=rejected_status)
     accepted = MagicMock(status_code=200)
     accepted.json.return_value = payload
-    client.get.side_effect = [rejected, accepted]
+    accepted.iter_bytes.return_value = [json.dumps(payload).encode("utf-8")]
+    wrong = MagicMock()
+    wrong.__enter__.return_value = rejected
+    right = MagicMock()
+    right.__enter__.return_value = accepted
+    client.stream.side_effect = [wrong, right]
     return client
 
 
@@ -27,10 +33,10 @@ class ConnectionCheckTests(unittest.TestCase):
 
     def test_checks_local_status_using_discovered_token(self):
         result, client = self.run_check({"status": "running", "port": 8765})
-        self.assertEqual(client.get.call_args_list, [
-            call("http://127.0.0.1:8765/api/status",
+        self.assertEqual(client.stream.call_args_list, [
+            call("GET", "http://127.0.0.1:8765/api/status",
                  headers={"X-Ymm4-Token": "0ecret"}),
-            call("http://127.0.0.1:8765/api/status",
+            call("GET", "http://127.0.0.1:8765/api/status",
                  headers={"X-Ymm4-Token": "secret"}),
         ])
         self.assertEqual(result["port"], 8765)
@@ -46,7 +52,7 @@ class ConnectionCheckTests(unittest.TestCase):
                      patch.object(check_connection.httpx, "Client", return_value=client):
                     with self.assertRaisesRegex(ValueError, "認証"):
                         check_connection.check()
-                self.assertEqual(client.get.call_count, 1,
+                self.assertEqual(client.stream.call_count, 1,
                                  "Do not send a valid token if the negative probe fails")
 
     def test_missing_token_fails_before_network(self):
