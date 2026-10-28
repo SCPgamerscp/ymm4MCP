@@ -130,6 +130,9 @@ jobs:
         shell: pwsh
         run: ./ci/test-download-ymm4-lite.ps1
       - name: Download official YMM4 Lite references
+        # Invoke-WebRequest -TimeoutSec bounds a socket wait, not the entire
+        # transfer. A stalled upstream must not occupy a runner for 40+ min.
+        timeout-minutes: 12
         shell: pwsh
         run: |
           $libPath = & ./ci/download-ymm4-lite.ps1
@@ -366,6 +369,9 @@ jobs:
         shell: pwsh
         run: ./composed/ci/test-download-ymm4-lite.ps1
       - name: Download official YMM4 Lite references
+        # Invoke-WebRequest -TimeoutSec bounds a socket wait, not the entire
+        # transfer. A stalled upstream must not occupy a runner for 40+ min.
+        timeout-minutes: 12
         shell: pwsh
         run: |
           $libPath = & ./composed/ci/download-ymm4-lite.ps1
