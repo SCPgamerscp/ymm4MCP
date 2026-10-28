@@ -21,7 +21,9 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
    ```
 
    PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同様に `%LOCALAPPDATA%\YMM4MCP\mcp-server` に**永続インストール**してからClaude Desktopを設定します。ダウンロードしたZIPの展開フォルダーを削除しても設定が壊れません。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。 `mcpServers.ymm4` に既に設定したAPIキー等の `env`、`timeout`、`disabled` も保持します。`-Port` を明示した場合のみ `YMM4_API_BASE` を指定ポートに更新します。
-   **再インストール時の設定保護:** 永続インストール先に既に存在する `config.json`（Geminiモデルなど）、`settings.local.json`、`.env` は、ZIP側のファイルで上書きしません。初回インストールでは同梱の `config.json` を配置します。既存のモデル選択を自動変更しないため、新しい既定モデルを利用したい場合は保存済みの `config.json` を確認・更新してください。ZIP展開フォルダー内の `connection.json` はインストール先へコピーしません。\n   YMM4を起動した状態で `check_connection.cmd` をダブルクリックすると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。PowerShellからは `./setup.ps1 -CheckConnection` も利用できます（こちらは仮想環境の依存関係も再確認します）。
+   **再インストール時の設定保護:** 永続インストール先に既に存在する `config.json`（Geminiモデルなど）、`settings.local.json`、`.env` は、ZIP側のファイルで上書きしません。初回インストールでは同梱の `config.json` を配置します。既存のモデル選択を自動変更しないため、新しい既定モデルを利用したい場合は保存済みの `config.json` を確認・更新してください。ZIP展開フォルダー内の `connection.json` はインストール先へコピーしません。
+
+   YMM4を起動した状態で `check_connection.cmd` をダブルクリックすると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。**正しいトークンで成功するだけでなく、同じ長さの誤ったトークンが HTTP 401 で拒否されることも確認します。** 認証が無効な応答なら導入成功と判定しません。PowerShellからは `./setup.ps1 -CheckConnection` も利用できます（こちらは仮想環境の依存関係も再確認します）。
    プラグインのポートを変更した場合は `./setup.ps1 -ConfigureClaudeDesktop -CheckConnection -Port 9000` のように同じポートを指定すると、Claude Desktop の `YMM4_API_BASE` と接続確認に反映します。省略時は接続ファイルの設定を使います。
 
 4. `install.cmd` または `setup.ps1 -ConfigureClaudeDesktop` を使った場合はClaude Desktopの設定は自動更新されるため、この手順は不要です。手動で設定する場合のみ、`%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示したJSONを設定します。手動設定時は利用するインストール先（通常 `%LOCALAPPDATA%\YMM4MCP\mcp-server`）の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定してください。
