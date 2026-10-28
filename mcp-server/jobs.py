@@ -35,7 +35,7 @@ def _valid_windows_file_path(candidate: str) -> bool:
         return False
     for part in segments:
         if (part.endswith((" ", ".")) or any(char in '<>:"|?*' for char in part) or
-                re.fullmatch(r"(?i)(?:con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])(?:\..*)?", part)):
+                re.fullmatch(r"(?i)(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?", part)):
             return False
     return True
 
