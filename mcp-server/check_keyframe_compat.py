@@ -115,6 +115,31 @@ def validate_test_item(client: httpx.Client, base: str,
         raise ProbeError(f"Frame {at} is outside the target item length; refusing edit")
 
 
+
+def _unacknowledged_insert_is_isolated(current: dict[str, list[dict]],
+                                       baseline: dict[str, list[dict]],
+                                       prop: str, at: int, value: float) -> bool:
+    """Only clean up a failed/unknown POST when its exact effect is identifiable.
+
+    A timeout or plugin error may have raced with another editor. Without an
+    acknowledged revision, deleting a frame merely because it exists could
+    delete that editor's work. Shared-frame changes are also ambiguous here.
+    """
+    if current.keys() != baseline.keys() or prop not in current:
+        return False
+    if any(current[name] != original for name, original in baseline.items()
+           if name != prop):
+        return False
+    added = [entry for entry in current[prop] if entry["at"] == at]
+    if len(added) != 1:
+        return False
+    observed = added[0].get("value")
+    return (type(observed) in (int, float) and math.isfinite(observed)
+            and math.isclose(observed, value, rel_tol=1e-5, abs_tol=1e-5)
+            and [entry for entry in current[prop] if entry["at"] != at]
+            == baseline[prop])
+
+
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, at: int, values: dict[str, float]) -> None:
     validate_test_item(client, base, headers, item_id, at)
@@ -186,7 +211,18 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                 try:
                     frames, revision = keyframes(client, base, headers, item_id, prop)
                     if has_frame(frames, at):
-                        if cleanup_revision is not None and revision != cleanup_revision:
+                        if cleanup_revision is None:
+                            # The POST failed or its response was lost. A new
+                            # frame might belong to another editor, not us.
+                            current, inventory_revision = snapshot_all_animations(
+                                client, base, headers, item_id)
+                            if (inventory_revision != revision
+                                    or not _unacknowledged_insert_is_isolated(
+                                        current, baseline, prop, at, value)):
+                                raise ProbeError(
+                                    f"{prop}: unacknowledged edit is ambiguous; "
+                                    "refusing destructive cleanup")
+                        elif revision != cleanup_revision:
                             raise ProbeError(
                                 f"{prop}: item changed after readback; refusing cleanup")
                         api(client, base, headers, "POST", "/items/keyframe",
