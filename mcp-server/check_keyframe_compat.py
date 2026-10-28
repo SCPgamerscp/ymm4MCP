@@ -185,8 +185,16 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             # Prefer the revision returned by the mutation itself: another
             # caller may edit the item before the next readback.
             returned_revision = result.get("revision")
-            if isinstance(returned_revision, str) and returned_revision:
-                cleanup_revision = returned_revision
+            # A successful HTTP response without the mutation's revision is
+            # not evidence that the frame still belongs to this probe. Another
+            # editor could update the item before our next GET; adopting that
+            # newer readback revision would authorize deleting their changes.
+            # Fail closed and use only the isolated-insert cleanup path below.
+            if not isinstance(returned_revision, str) or not returned_revision:
+                raise ProbeError(
+                    f"{prop}: mutation succeeded without revision; "
+                    "refusing unverified success")
+            cleanup_revision = returned_revision
             frames, readback_revision = keyframes(client, base, headers, item_id, prop)
             if cleanup_revision is not None and readback_revision != cleanup_revision:
                 raise ProbeError(f"{prop}: item changed after write; refusing cleanup")
