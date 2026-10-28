@@ -129,44 +129,20 @@ jobs:
       - name: Regression-test interrupted and corrupt official reference downloads
         shell: pwsh
         run: ./ci/test-download-ymm4-lite.ps1
-      - name: Download official YMM4 Lite references
-        # Invoke-WebRequest -TimeoutSec bounds a socket wait, not the entire
-        # transfer. A stalled upstream must not occupy a runner for 40+ min.
-        timeout-minutes: 12
-        shell: pwsh
-        run: |
-          $libPath = & ./ci/download-ymm4-lite.ps1
-          if (-not $libPath -or -not (Test-Path -LiteralPath $libPath -PathType Container)) {
-            throw 'Official YMM4 Lite reference download did not return a valid library path'
-          }
-          "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
-      - name: Build and verify composed YMM4 .ymme
-        shell: pwsh
-        run: |
-          dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
-          if ($LASTEXITCODE -ne 0) { throw 'Composed YMM4 plugin build failed' }
-          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
-          $package = "artifacts/YMM4McpPlugin-$version.ymme"
-          if (-not (Test-Path -LiteralPath $package)) { throw "Missing .ymme: $package" }
-          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $package).Path)
-          try {
-            $entries = @($zip.Entries | ForEach-Object { $_.FullName })
-            foreach ($required in @('YMM4McpPlugin/YMM4McpPlugin.dll', 'YMM4McpPlugin/YMM4McpPlugin.deps.json')) {
-              if ($entries -notcontains $required) { throw "Missing .ymme entry: $required" }
-            }
-          }
-          finally { $zip.Dispose() }
       - name: State the remaining live acceptance gates
         shell: pwsh
         run: |
-          Write-Output 'Combined Issue #22/#140 source, regression suites and package passed; no GitHub PR was merged.'
+          Write-Output 'Curated Issue #22/#140 regression suites passed; the all-open-PR Windows job separately gates the actual .ymme build. No PR was merged.'
           Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, UI port-change E2E, and YMM4 4.56.1.1 keyframe E2E.'
 
   composed-real-export-qa:
     # Run only after the same composed revision passes the Windows plugin
     # build. The archive is produced by the integration job; no second merge
     # against moving PR heads can silently test different source revisions.
-    needs: setup-cross-pr-integration
+    # Real export QA is meaningful only when the curated regressions AND the
+    # full open-PR Windows package both passed. Avoid a second, flaky download
+    # of the official YMM4 Lite ZIP in the curated job.
+    needs: [setup-cross-pr-integration, all-open-prs-windows-package]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
