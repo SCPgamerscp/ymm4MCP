@@ -175,7 +175,9 @@ def _transient_file_api_error(exc: Exception) -> bool:
     """Only retry temporary File API failures, never auth or bad requests."""
     return (getattr(exc, "code", None) in (429, 500, 502, 503, 504)
             or getattr(exc, "status_code", None) in (429, 500, 502, 503, 504)
-            or isinstance(exc, (TimeoutError, ConnectionError, httpx.TransportError)))
+            or isinstance(exc, (TimeoutError, ConnectionError, httpx.TransportError,
+                                requests.exceptions.Timeout,
+                                requests.exceptions.ConnectionError)))
 
 
 def _wait_file_active(client, file_obj, timeout_sec: int = 180):
