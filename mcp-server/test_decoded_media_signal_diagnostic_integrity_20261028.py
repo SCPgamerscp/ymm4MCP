@@ -17,11 +17,13 @@ class SignalDiagnosticIntegrityTests(unittest.TestCase):
         self.path.write_bytes(b"test export media " * 8)
 
     def inspect_logs(self, video_log="", audio_log="", *, full_scan=False,
-                     require_audio=False, **options):
+                     require_audio=False, audio_channels=2, **options):
         streams = [{"codec_type": "video", "start_time": "0", "duration": "4"}]
         if require_audio:
-            streams.append({"codec_type": "audio", "start_time": "0",
-                            "duration": "4", "channels": 2})
+            audio = {"codec_type": "audio", "start_time": "0", "duration": "4"}
+            if audio_channels is not None:
+                audio["channels"] = audio_channels
+            streams.append(audio)
         metadata = {"format": {"duration": "4", "start_time": "0"},
                     "streams": streams}
 
@@ -106,6 +108,21 @@ class SignalDiagnosticIntegrityTests(unittest.TestCase):
         self.assertFalse(result["passed"], result)
         self.assertIn("EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE",
                       self.codes(result))
+
+    def test_strict_peak_metrics_reject_unknown_channel_count(self):
+        result = self.inspect_logs(
+            require_audio=True, audio_channels=None,
+            require_audio_peak_metrics=True,
+            audio_log="Overall\\nPeak level dB: -12")
+        self.assertFalse(result["passed"], result)
+        self.assertIn("EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_UNKNOWN",
+                      self.codes(result))
+
+    def test_non_strict_peak_metrics_allow_unknown_channel_count(self):
+        result = self.inspect_logs(
+            require_audio=True, audio_channels=None,
+            audio_log="Overall\\nPeak level dB: -12")
+        self.assertTrue(result["passed"], result)
 
     def test_strict_peak_metrics_accept_complete_silent_channels(self):
         result = self.inspect_logs(
