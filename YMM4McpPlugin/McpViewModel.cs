@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Windows;
@@ -19,6 +20,10 @@ namespace YMM4McpPlugin
         private bool _allowAdvanced = Server.Settings.AllowAdvanced;
         private SettingsViewSnapshot _observedSettings = new(Server.Settings.Port,
             Server.Settings.AutoStart, Server.Settings.AllowAdvanced);
+        private static readonly string SettingsFilePath =
+            Path.Combine(McpSettings.DirectoryPath, "settings.json");
+        private string _observedFileFingerprint =
+            SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
 
         static McpViewModel()
         {
@@ -72,6 +77,8 @@ namespace YMM4McpPlugin
                     Server.Settings.AutoStart = candidate.AutoStart;
                     Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
                     _observedSettings = new(candidate.Port, candidate.AutoStart, candidate.AllowAdvanced);
+                    _observedFileFingerprint =
+                        SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
                     // Only clear a warning caused by corrupt settings. A failed
                     // listener start is not fixed merely by saving a settings file.
                     if (!string.IsNullOrEmpty(Server.Settings.LoadWarning))
@@ -79,12 +86,27 @@ namespace YMM4McpPlugin
                         if (_startupError == Server.Settings.LoadWarning) _startupError = "";
                         Server.Settings.LoadWarning = "";
                     }
+                },
+                diskUnchanged: () =>
+                {
+                    // A second YMM4 process may have changed settings.json
+                    // without updating this process's in-memory Server.Settings.
+                    // Check both the exact file and its decoded values.
+                    if (_observedFileFingerprint !=
+                        SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath))
+                        return false;
+                    var disk = McpSettings.Load();
+                    if (!string.IsNullOrEmpty(Server.Settings.LoadWarning))
+                        return !string.IsNullOrEmpty(disk.LoadWarning);
+                    return string.IsNullOrEmpty(disk.LoadWarning) &&
+                        _observedSettings.Matches(disk.Port, disk.AutoStart,
+                                                  disk.AllowAdvanced);
                 });
             if (!saved)
             {
                 SyncSettingsFromServer();
                 throw new InvalidOperationException(
-                    "別のツールウィンドウで設定が更新されました。最新の値を確認してから再設定してください");
+                    "別のウィンドウまたはYMM4プロセスで設定が更新されました。別プロセスの場合はYMM4を再起動して最新の値を確認してください");
             }
             Refresh();
         }
@@ -95,6 +117,8 @@ namespace YMM4McpPlugin
             AutoStart = Server.Settings.AutoStart;
             AllowAdvanced = Server.Settings.AllowAdvanced;
             _observedSettings = new(Port, AutoStart, AllowAdvanced);
+            _observedFileFingerprint =
+                SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
         }
 
         private void RunSafely(Action action)
