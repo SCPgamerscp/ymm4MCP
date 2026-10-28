@@ -118,15 +118,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("YukkuriMovieMaker.Controls.dll", script)
         self.assertIn("throw \"Official YMM4 Lite download/validation failed", script)
         self.assertIn("& ./ci/download-ymm4-lite.ps1", self.workflow)
-        self.assertIn("& ./ci/download-ymm4-lite.ps1", composed)
+        self.assertNotIn("& ./ci/download-ymm4-lite.ps1", composed)
         self.assertIn("& ./composed/ci/download-ymm4-lite.ps1", composed)
         self.assertNotIn("Invoke-WebRequest -Uri 'https://files.manjubox.net/", self.workflow)
         self.assertNotIn("Invoke-WebRequest -Uri 'https://files.manjubox.net/", composed)
 
 
     def test_composed_reference_download_has_wall_clock_deadline(self):
-        # A network read can hang well beyond the per-request TimeoutSec.
-        # Bound both the curated 15-PR build and the full 50-PR build.
+        # A network read can hang beyond per-request TimeoutSec. The full
+        # 50-PR Windows package is the sole composed build; the curated suite
+        # no longer repeats the same large external dependency.
         composed = (WORKFLOW.parent / "issue22-cross-pr-integration.yml").read_text(
             encoding="utf-8"
         )
@@ -138,7 +139,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 "        timeout-minutes: 12\n"
                 "        shell: pwsh\n"
             ),
-            2,
+            1,
         )
 
     def test_issue22_keyframe_composition_uses_same_order_as_all_pr_audit(self):
