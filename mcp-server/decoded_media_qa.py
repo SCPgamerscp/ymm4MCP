@@ -538,7 +538,12 @@ def _loudnorm_measurements(log):
                         for field in loudnorm_fields)
         try:
             record = json.loads(block, object_pairs_hook=_unique_object_pairs,
-                                parse_constant=_reject_nonfinite_json)
+                                parse_constant=_reject_nonfinite_json,
+                                parse_float=_finite_json_float)
+            # Loudnorm diagnostics are untrusted subprocess output too.
+            # Reject exponent-overflow and deeply nested unused fields rather
+            # than accepting a plausible input_i from a corrupted record.
+            _check_probe_depth(record)
         except (ValueError, TypeError) as exc:
             if candidate:
                 raise ValueError("malformed loudnorm measurement") from exc
@@ -564,6 +569,25 @@ def _loudnorm_measurements(log):
         numeric = float(raw)
         if not math.isfinite(numeric) or not lower <= numeric <= upper:
             raise ValueError("out-of-range loudnorm " + field)
+    # FFmpeg normally supplies these output-side measurements too. They are
+    # optional for older test fixtures, but a present invalid value must not
+    # be silently ignored while accepting input_i/input_tp as trustworthy.
+    for field, lower, upper in (("output_tp", -100, 30),
+                                ("output_lra", 0, 100),
+                                ("output_thresh", -100, 30),
+                                ("target_offset", -100, 100)):
+        if field not in record:
+            continue
+        raw = record[field]
+        if (type(raw) is not str or not re.fullmatch(
+                r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", raw)):
+            raise ValueError("invalid loudnorm " + field)
+        numeric = float(raw)
+        if not math.isfinite(numeric) or not lower <= numeric <= upper:
+            raise ValueError("out-of-range loudnorm " + field)
+    if ("normalization_type" in record
+            and record["normalization_type"] not in ("dynamic", "linear")):
+        raise ValueError("invalid loudnorm normalization_type")
     value = record["input_i"]
     if type(value) is not str or not re.fullmatch(
             r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value):
