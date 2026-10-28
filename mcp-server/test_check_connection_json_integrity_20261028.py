@@ -16,7 +16,11 @@ class StatusJsonIntegrityTests(unittest.TestCase):
         )
         client = MagicMock()
         client.__enter__.return_value = client
-        client.get.return_value = response
+        client.stream.return_value.__enter__.return_value = response
+        client.get.side_effect = lambda _url, headers: (
+            MagicMock(status_code=401) if headers.get("X-Ymm4-Token") != "secret"
+            else response
+        )
         with patch.object(check_connection, "connection_settings", return_value=(
                 "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
@@ -66,6 +70,51 @@ class StatusJsonIntegrityTests(unittest.TestCase):
             + b"[" * 200 + b'\\\"' + b"{" * 200 + b'"}'
         )
         self.assertEqual(self.check_body(body)["port"], 8765)
+
+    def test_utf16_escaped_quotes_cannot_hide_excessive_nesting(self):
+        # The byte-level scanner used to mistake UTF-16 NUL bytes for escaped
+        # characters, allowing deep JSON after an escaped quote.
+        text = ('{"status":"running","port":8765,'
+                '"extra":"escaped \\" quote","nested":'
+                + "[" * 129 + "0" + "]" * 129 + "}")
+        for encoding in ("utf-16", "utf-32"):
+            with self.subTest(encoding=encoding), self.assertRaisesRegex(ValueError, "深すぎ"):
+                self.check_body(text.encode(encoding))
+
+    def test_accepts_utf16_utf32_and_bom_json(self):
+        text = '{"status":"running","port":8765,"extra":"\\\" [[{{"}'
+        for encoding in ("utf-16", "utf-32", "utf-8-sig"):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(self.check_body(text.encode(encoding))["port"], 8765)
+
+    def test_stream_rejects_overlimit_without_consuming_remaining_chunks(self):
+        # The limit must apply while streaming, not after client.get buffers.
+        chunks = iter([b"x" * 8192] * 9)
+        response = MagicMock()
+        response.iter_bytes.return_value = chunks
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.stream.return_value.__enter__.return_value = response
+        with patch.object(check_connection, "connection_settings", return_value=(
+                "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \\
+             patch.object(check_connection.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "大きすぎ"):
+                check_connection.check()
+        response.iter_bytes.assert_called_once_with(chunk_size=8192)
+        self.assertEqual(next(chunks), b"x" * 8192)
+
+    def test_stream_enforces_total_response_deadline(self):
+        response = MagicMock()
+        response.iter_bytes.return_value = iter([b'{"status":"running","port":8765}'])
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.stream.return_value.__enter__.return_value = response
+        with patch.object(check_connection, "connection_settings", return_value=(
+                "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \\
+             patch.object(check_connection.httpx, "Client", return_value=client), \\
+             patch.object(check_connection.time, "monotonic", side_effect=[0.0, 11.0]):
+            with self.assertRaisesRegex(ValueError, "タイムアウト"):
+                check_connection.check()
 
     def test_accepts_normal_status_and_exact_size_boundary(self):
         body = b'{"status":"running","port":8765,"version":"4.56.1.1"}'
