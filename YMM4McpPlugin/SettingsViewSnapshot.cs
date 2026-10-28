@@ -1,3 +1,8 @@
+using System;
+using System.IO;
+using System.Security.Cryptography;
+using System.Threading;
+
 namespace YMM4McpPlugin
 {
     /// <summary>
@@ -9,23 +14,52 @@ namespace YMM4McpPlugin
         public bool Matches(int port, bool autoStart, bool allowAdvanced) =>
             Port == port && AutoStart == autoStart && AllowAdvanced == allowAdvanced;
     }
+
     /// <summary>
-    /// Serializes the compare-and-save sequence across YMM4 tool windows.
-    /// The persistence callback runs only when the observed settings still
-    /// match the shared state; an exception never counts as a successful save.
+    /// Serializes compare-and-save across windows and YMM4 processes.
+    /// The persisted file is checked while holding the named mutex so a
+    /// second updated YMM4 process cannot overwrite a newer settings save.
     /// </summary>
     internal static class SettingsViewSaveCoordinator
     {
         private static readonly object Gate = new();
+        private static readonly Mutex ProcessGate = new(false, @"Local\YMM4MCP.SettingsSave");
+
+        internal static string FileFingerprint(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                return Convert.ToHexString(SHA256.HashData(stream));
+            }
+            catch (FileNotFoundException) { return "<missing>"; }
+            catch (DirectoryNotFoundException) { return "<missing>"; }
+        }
 
         internal static bool TryCommit(SettingsViewSnapshot observed,
-            Func<SettingsViewSnapshot> readCurrent, Action persist)
+            Func<SettingsViewSnapshot> readCurrent, Action persist,
+            Func<bool>? diskUnchanged = null)
         {
-            lock (Gate)
+            bool acquired = false;
+            try
             {
-                if (!observed.Equals(readCurrent())) return false;
-                persist();
-                return true;
+                try { acquired = ProcessGate.WaitOne(TimeSpan.FromSeconds(10)); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired)
+                    throw new TimeoutException("別のYMM4プロセスが設定を保存中です");
+                lock (Gate)
+                {
+                    if (!observed.Equals(readCurrent()) ||
+                        (diskUnchanged != null && !diskUnchanged()))
+                        return false;
+                    persist();
+                    return true;
+                }
+            }
+            finally
+            {
+                if (acquired) ProcessGate.ReleaseMutex();
             }
         }
     }
