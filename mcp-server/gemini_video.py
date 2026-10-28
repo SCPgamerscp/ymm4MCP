@@ -25,6 +25,8 @@ import re
 import time
 from typing import Any, Optional
 
+import httpx
+
 # google-genai は遅延 import する(未インストールでもサーバー自体は起動できるように)
 _GENAI_IMPORT_ERROR: Optional[str] = None
 try:
@@ -170,8 +172,9 @@ def _video_signature(path: str) -> tuple[int, int, int, int]:
 
 def _transient_file_api_error(exc: Exception) -> bool:
     """Only retry temporary File API failures, never auth or bad requests."""
-    return (getattr(exc, "status_code", None) in (429, 500, 502, 503, 504)
-            or isinstance(exc, (TimeoutError, ConnectionError)))
+    return (getattr(exc, "code", None) in (429, 500, 502, 503, 504)
+            or getattr(exc, "status_code", None) in (429, 500, 502, 503, 504)
+            or isinstance(exc, (TimeoutError, ConnectionError, httpx.TransportError)))
 
 
 def _wait_file_active(client, file_obj, timeout_sec: int = 180):
@@ -180,6 +183,9 @@ def _wait_file_active(client, file_obj, timeout_sec: int = 180):
     deadline = time.monotonic() + timeout_sec
     consecutive_errors = 0
     while True:
+        # Do not initiate another network request after the overall deadline.
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Gemini File API polling timed out")
         try:
             f = client.files.get(name=name)
         except Exception as exc:
@@ -192,6 +198,10 @@ def _wait_file_active(client, file_obj, timeout_sec: int = 180):
             consecutive_errors += 1
             time.sleep(min(3 * (2 ** min(consecutive_errors - 1, 3)), remaining))
             continue
+        # Even an ACTIVE response is too late if the network call exceeded
+        # the polling budget; otherwise it can incorrectly certify stale QA.
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Gemini File API polling timed out")
         consecutive_errors = 0
         state = getattr(f.state, "name", str(f.state))
         if state == "ACTIVE":
