@@ -62,6 +62,17 @@ class LoudnormCandidateIntegrityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             qa._loudnorm_measurements(log)
 
+    def test_valid_measurement_plus_complete_auxiliary_only_block_rejected(self):
+        log = multiline() + "\n" + json.dumps({"output_tp": "-1.50"})
+        with self.assertRaises(ValueError):
+            qa._loudnorm_measurements(log)
+
+    def test_valid_measurement_plus_bad_separator_complete_block_rejected(self):
+        log = multiline() + '\n{\n  "input_i" = "-10.00"\n}'
+        with self.assertRaises(ValueError):
+            qa._loudnorm_measurements(log)
+
+
 
 if __name__ == "__main__":
     unittest.main()
