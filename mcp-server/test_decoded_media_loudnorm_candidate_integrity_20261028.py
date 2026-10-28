@@ -24,8 +24,8 @@ class LoudnormCandidateIntegrityTests(unittest.TestCase):
                          qa._loudnorm_measurements(json.dumps(MEASUREMENT)))
 
     def test_compact_measurement_with_ffmpeg_prefix_log(self):
-        log = "[Parsed_loudnorm_0 @ 0x123] measurements below\\n"
-        log += json.dumps(MEASUREMENT) + "\\n"
+        log = "[Parsed_loudnorm_0 @ 0x123] measurements below\n"
+        log += json.dumps(MEASUREMENT) + "\n"
         self.assertEqual((-20.0, -4.0), qa._loudnorm_measurements(log))
 
     def test_compact_invalid_optional_measurement_rejected(self):
@@ -34,31 +34,31 @@ class LoudnormCandidateIntegrityTests(unittest.TestCase):
             qa._loudnorm_measurements(json.dumps(record))
 
     def test_valid_measurement_plus_truncated_second_rejected(self):
-        log = multiline() + '\\n{\\n  "input_i": "-10.00",\\n'
+        log = multiline() + '\n{\n  "input_i": "-10.00",\n'
         with self.assertRaises(ValueError):
             qa._loudnorm_measurements(log)
 
     def test_valid_measurement_plus_truncated_compact_second_rejected(self):
-        log = multiline() + '\\n{"input_i": "-10.00",'
+        log = multiline() + '\n{"input_i": "-10.00",'
         with self.assertRaises(ValueError):
             qa._loudnorm_measurements(log)
 
     def test_valid_measurement_plus_orphaned_auxiliary_field_rejected(self):
-        log = multiline() + '\\n{\\n  "output_tp": "-1.50"'
+        log = multiline() + '\n{\n  "output_tp": "-1.50"'
         with self.assertRaises(ValueError):
             qa._loudnorm_measurements(log)
 
     def test_valid_measurement_plus_malformed_orphaned_field_rejected(self):
-        log = multiline() + '\\n"normalization_type" = "dynamic"'
+        log = multiline() + '\n"normalization_type" = "dynamic"'
         with self.assertRaises(ValueError):
             qa._loudnorm_measurements(log)
 
     def test_unrelated_log_lines_are_still_accepted(self):
-        log = "FFmpeg initialization\\n" + multiline() + "\\nfinished"
+        log = "FFmpeg initialization\n" + multiline() + "\nfinished"
         self.assertEqual((-20.0, -4.0), qa._loudnorm_measurements(log))
 
     def test_multiple_complete_measurements_still_rejected(self):
-        log = multiline() + "\\n" + json.dumps(MEASUREMENT)
+        log = multiline() + "\n" + json.dumps(MEASUREMENT)
         with self.assertRaises(ValueError):
             qa._loudnorm_measurements(log)
 
