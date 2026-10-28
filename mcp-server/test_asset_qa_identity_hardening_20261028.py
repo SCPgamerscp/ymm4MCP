@@ -68,6 +68,21 @@ class AssetQaIdentityHardeningTests(unittest.TestCase):
             with self.subTest(prefix=path[:3]), self.assertRaises(ValueError):
                 asset_qa.report(snapshot(missing=[source(path)]))
 
+    def test_rejects_overlong_native_filename_components(self):
+        for path in ("C:/media/" + "a" * 256 + ".mp4",
+                     "C:/media/" + "😀" * 128 + ".mp4",
+                     "/media/" + "a" * 256 + ".mp4",
+                     "/media/" + "あ" * 86 + ".mp4"):
+            with self.subTest(path_prefix=path[:10]), self.assertRaises(ValueError):
+                asset_qa.report(snapshot(missing=[source(path)]))
+
+    def test_accepts_boundary_length_filename_components(self):
+        for path in ("C:/media/" + "a" * 251 + ".mp4",
+                     "/media/" + "a" * 251 + ".mp4"):
+            with self.subTest(path_prefix=path[:10]):
+                result = asset_qa.report(snapshot(missing=[source(path)]))
+                self.assertFalse(result["passed"])
+
     def test_report_does_not_alias_missing_source_item_ids(self):
         original = source("C:/missing.mp4", "native:1")
         result = asset_qa.report(snapshot(missing=[original]))
