@@ -3,6 +3,12 @@
 import ntpath
 import re
 
+# Windows device names are aliases even when an extension is appended.
+_RESERVED_WINDOWS_NAME = re.compile(
+    r"(?i)^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$"
+)
+_INVALID_WINDOWS_CHARS = re.compile(r'[<>"|?*]')
+
 from jobs import is_absolute_media_path
 
 
@@ -14,18 +20,21 @@ def _valid_item_id(value: object) -> bool:
 
 
 def _ambiguous_windows_path(path: str) -> bool:
-    """Reject Win32 aliases that can identify another file or an ADS stream."""
+    """Reject Win32 aliases, device namespaces, and invalid file components."""
+    # Extended-length and Win32 device paths bypass normal filename rules.
+    if path.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+        return True
     drive, tail = ntpath.splitdrive(path)
     if not drive:
-        return False  # Do not apply Windows filename rules to POSIX paths.
-    # Win32 normally discards trailing dots/spaces from path components.
-    # ntpath.normpath does not, so duplicate-state detection could be bypassed.
-    # Preserve empty segments: collapsing repeated separators would turn
-    # C:/a//b into an apparently unambiguous path. The leading empty segment
-    # is expected for absolute drive and UNC paths; later empties are not.
+        return False  # POSIX filenames can legally contain Windows punctuation.
+    if not tail:
+        return True  # A UNC share root is not a media file.
+    # Keep empty segments rather than normalizing them away.
     parts = re.split(r"[\\/]", tail)
     return (":" in tail or any(
         not part or part in (".", "..") or part.endswith((".", " "))
+        or _INVALID_WINDOWS_CHARS.search(part)
+        or _RESERVED_WINDOWS_NAME.fullmatch(part)
         for part in parts[1:]))
 
 
@@ -62,6 +71,7 @@ def report(availability: dict) -> dict:
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
                 source["path"].strip() != source["path"] or
+                source["path"].endswith(("/", "\")) or
                 not is_absolute_media_path(source["path"]) or
                 _ambiguous_windows_path(source["path"])):
             raise ValueError("asset source entries require a valid path")
