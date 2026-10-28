@@ -1,4 +1,5 @@
 """Regression tests for bounded, stable Gemini File API video analysis."""
+import os
 import tempfile
 import unittest
 
@@ -68,6 +69,38 @@ class GeminiVideoUploadIntegrityTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("changed during Gemini analysis", result["error"])
         self.client.files.delete.assert_called_once_with(name="files/uploaded")
+
+    def test_same_size_upload_rewrite_with_restored_mtime_is_rejected(self):
+        before = self.video.stat()
+        def mutate(file):
+            self.video.write_bytes(b"modified video")
+            os.utime(self.video, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return SimpleNamespace(name="files/uploaded")
+        self.client.files.upload.side_effect = mutate
+        result = self.analyze()
+        self.assertFalse(result["success"])
+        self.assertIn("changed during Gemini upload", result["error"])
+        self.client.models.generate_content.assert_not_called()
+        self.client.files.delete.assert_called_once_with(name="files/uploaded")
+
+    def test_same_size_generation_rewrite_with_restored_mtime_is_rejected(self):
+        before = self.video.stat()
+        def mutate(**kwargs):
+            self.video.write_bytes(b"modified video")
+            os.utime(self.video, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return SimpleNamespace(text='{"summary":"ok","events":[]}')
+        self.client.models.generate_content.side_effect = mutate
+        result = self.analyze()
+        self.assertFalse(result["success"])
+        self.assertIn("changed during Gemini analysis", result["error"])
+        self.client.files.delete.assert_called_once_with(name="files/uploaded")
+
+    def test_unreadable_video_is_rejected_before_upload(self):
+        with patch.object(gemini_video, "_video_digest", side_effect=OSError("locked")):
+            result = self.analyze()
+        self.assertFalse(result["success"])
+        self.assertIn("Cannot fingerprint video", result["error"])
+        self.client.files.upload.assert_not_called()
 
     def test_unchanged_video_succeeds_and_upload_is_deleted(self):
         result = self.analyze()
