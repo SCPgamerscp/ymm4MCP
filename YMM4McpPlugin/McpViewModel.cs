@@ -92,8 +92,10 @@ namespace YMM4McpPlugin
                     // A second YMM4 process may have changed settings.json
                     // without updating this process's in-memory Server.Settings.
                     // Check both the exact file and its decoded values.
-                    if (_observedFileFingerprint !=
-                        SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath))
+                    var diskFingerprint =
+                        SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
+                    if (!SettingsViewSaveCoordinator.SameReadableFingerprint(
+                            _observedFileFingerprint, diskFingerprint))
                         return false;
                     var disk = McpSettings.Load();
                     if (!string.IsNullOrEmpty(Server.Settings.LoadWarning))
