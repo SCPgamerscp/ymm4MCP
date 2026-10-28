@@ -78,7 +78,7 @@ def _get_default_model() -> str:
                 model = config.get("default_model")
                 if _valid_model_id(model):
                     return model
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, UnicodeError, ValueError, RecursionError):
         pass
     return DEFAULT_GEMINI_MODEL
 
@@ -291,6 +291,31 @@ def _video_signature(path: str) -> tuple[int, int, int, int]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
 
+def _video_digest(path: str, signature: tuple[int, int, int, int]) -> bytes:
+    """Fingerprint a source video without buffering it in memory.
+
+    The metadata checks detect replacement during the digest pass. The digest
+    also detects same-size rewrites whose original mtime was restored.
+    """
+    if _video_signature(path) != signature:
+        raise OSError("video changed before checksum")
+    hasher = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    if _video_signature(path) != signature:
+        raise OSError("video changed while checksumming")
+    return hasher.digest()
+
+
+def _video_still_matches(path: str, signature: tuple[int, int, int, int],
+                         digest: bytes) -> bool:
+    try:
+        return _video_signature(path) == signature and _video_digest(path, signature) == digest
+    except OSError:
+        return False
+
+
 def _media_still_matches(snapshots: list[tuple[str, tuple[int, int, int, int], bytes]]) -> bool:
     """Recheck selected preview media after sampling and after model inference.
 
@@ -391,6 +416,13 @@ def analyze_video_file(
     if signature[2] <= 0 or signature[2] > MAX_VIDEO_UPLOAD_BYTES:
         return {"success": False, "error": "Video file is empty or exceeds the Gemini upload size limit"}
 
+    # The File API accepts a path and opens it independently. Keep a content
+    # fingerprint so same-size in-place rewrites cannot certify stale QA.
+    try:
+        video_digest = _video_digest(video_path, signature)
+    except OSError as exc:
+        return {"success": False, "error": f"Cannot fingerprint video: {exc}", "source": "file"}
+
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
     client = None
     uploaded = None
@@ -399,14 +431,14 @@ def analyze_video_file(
         uploaded = client.files.upload(file=video_path)
         # A file modified during upload may not match the local media that
         # the QA report will be attributed to. Never certify such a result.
-        if _video_signature(video_path) != signature:
+        if not _video_still_matches(video_path, signature, video_digest):
             return {"success": False, "error": "Video changed during Gemini upload", "source": "file"}
         active = _wait_file_active(client, uploaded)
         resp = client.models.generate_content(
             model=model,
             contents=[active, _build_prompt(instruction)],
         )
-        if _video_signature(video_path) != signature:
+        if not _video_still_matches(video_path, signature, video_digest):
             return {"success": False, "error": "Video changed during Gemini analysis", "source": "file"}
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
