@@ -1,4 +1,5 @@
 """Regression tests for status media-type integrity and total stream deadline (#22)."""
+import itertools
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +26,7 @@ class StatusMediaTypeAndDeadlineTests(unittest.TestCase):
             if clock is None:
                 result = check_connection.check()
             else:
-                with patch.object(check_connection.time, "monotonic", side_effect=clock):
+                with patch.object(check_connection.time, "monotonic", side_effect=itertools.chain(clock, itertools.repeat(clock[-1]))):
                     result = check_connection.check()
         return result, response
 
@@ -68,11 +69,11 @@ class StatusMediaTypeAndDeadlineTests(unittest.TestCase):
         # 8192-byte buffer would coalesce these trickled chunks indefinitely.
         chunks = [self.PAYLOAD[:15], self.PAYLOAD[15:]]
         with self.assertRaisesRegex(ValueError, "タイムアウト"):
-            self.probe(chunks=chunks, clock=[0.0, 1.0, 11.0])
+            self.probe(chunks=chunks, clock=[0.0, 1.0, 2.0, 3.0, 11.0])
 
     def test_accepts_timely_multiple_network_chunks(self):
         chunks = [self.PAYLOAD[:15], self.PAYLOAD[15:]]
-        result, response = self.probe(chunks=chunks, clock=[0.0, 1.0, 2.0])
+        result, response = self.probe(chunks=chunks, clock=[0.0, 1.0, 2.0, 3.0, 4.0])
         self.assertEqual(result["version"], "4.56.1.1")
         response.iter_bytes.assert_called_once_with()
 
