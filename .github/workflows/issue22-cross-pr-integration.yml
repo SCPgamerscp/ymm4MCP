@@ -76,7 +76,7 @@ jobs:
           # Windows runner as the YMM4 plugin and installer.
           Push-Location mcp-server
           try {
-            python -m unittest -q test_release_workflow test_connection_descriptor_integrity test_check_connection_version_integrity test_http_host_ipv6_aliases test_http_body_limit test_check_keyframe_compat
+            python -m unittest -q test_release_workflow test_connection_descriptor_integrity test_check_connection_version_integrity test_http_host_ipv6_aliases test_http_body_limit test_check_keyframe_compat test_check_keyframe_persistence
             if ($LASTEXITCODE -ne 0) { throw 'Composed Issue 22 Python tests failed' }
           }
           finally { Pop-Location }
