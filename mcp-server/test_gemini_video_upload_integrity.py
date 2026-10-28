@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 import httpx
+import requests
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
