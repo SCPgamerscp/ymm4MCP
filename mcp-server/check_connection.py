@@ -101,6 +101,21 @@ def check() -> dict:
             content_encoding = response.headers.get("content-encoding")
             if isinstance(content_encoding, str) and content_encoding.strip().lower() not in ("", "identity"):
                 raise ValueError("YMM4のステータス応答は圧縮できません")
+            # If the responder declares a media type, require JSON. An HTML
+            # error page or an incompatible charset must never pass as status.
+            # A missing Content-Type remains supported for older YMM4 hosts.
+            content_type = response.headers.get("content-type")
+            if content_type is not None:
+                parts = content_type.split(";")
+                if parts[0].strip().lower() != "application/json":
+                    raise ValueError("YMM4のステータスContent-TypeがJSONではありません")
+                if len(parts) > 2:
+                    raise ValueError("YMM4のステータスContent-Typeが不正です")
+                if len(parts) == 2:
+                    key, separator, value = parts[1].partition("=")
+                    if (not separator or key.strip().lower() != "charset"
+                            or value.strip().strip('"').lower() not in ("utf-8", "utf8")):
+                        raise ValueError("YMM4のステータスContent-Typeの文字コードが不正です")
             # Content-Length is optional for chunked responses. When present,
             # reject oversized, malformed, or inconsistent framing.
             length_header = response.headers.get("content-length")
@@ -122,7 +137,10 @@ def check() -> dict:
                 if declared_length > MAX_STATUS_JSON_BYTES:
                     raise ValueError("YMM4のステータスJSONが大きすぎます")
             body = bytearray()
-            for chunk in response.iter_bytes(chunk_size=8192):
+            # Do not request fixed-size chunks: HTTPX may buffer a trickle
+            # of tiny network reads until 8192 bytes arrive, bypassing the
+            # total deadline despite each read staying below its timeout.
+            for chunk in response.iter_bytes():
                 if time.monotonic() > deadline:
                     raise ValueError("YMM4のステータス応答がタイムアウトしました")
                 if len(body) + len(chunk) > MAX_STATUS_JSON_BYTES:
