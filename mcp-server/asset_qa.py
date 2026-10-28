@@ -3,6 +3,11 @@
 import ntpath
 import posixpath
 import re
+import unicodedata
+
+MAX_ITEM_ID_LENGTH = 256
+MAX_POSIX_PATH_LENGTH = 4096
+MAX_WINDOWS_PATH_LENGTH = 32767
 
 # Windows device names are aliases even when an extension is appended.
 _RESERVED_WINDOWS_NAME = re.compile(
@@ -16,7 +21,16 @@ _BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u20
 
 def _unsafe_controls(value: str) -> bool:
     return any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
+               or 0xd800 <= ord(char) <= 0xdfff
+               or (unicodedata.category(char) == "Cf" and char not in "\u200c\u200d")
                or char in _BIDI_CONTROLS for char in value)
+
+
+def _path_too_long(path: str) -> bool:
+    """Use native path code units, not Python's Unicode character count."""
+    if ntpath.splitdrive(path)[0]:
+        return len(path.encode("utf-16-le")) // 2 > MAX_WINDOWS_PATH_LENGTH
+    return len(path.encode("utf-8")) > MAX_POSIX_PATH_LENGTH
 
 
 def _invalid_windows_component(part: str) -> bool:
@@ -31,7 +45,7 @@ from jobs import is_absolute_media_path
 
 def _valid_item_id(value: object) -> bool:
     # Whitespace-padded IDs are ambiguous aliases, not distinct timeline items.
-    return (isinstance(value, str) and bool(value)
+    return (isinstance(value, str) and 0 < len(value) <= MAX_ITEM_ID_LENGTH
             and value.strip() == value
             and not _unsafe_controls(value))
 
@@ -104,6 +118,7 @@ def report(availability: dict) -> dict:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
                 source["path"].strip() != source["path"] or
                 _unsafe_controls(source["path"]) or
+                _path_too_long(source["path"]) or
                 (source["path"].endswith("/") or
                  (ntpath.splitdrive(source["path"])[0] and
                   source["path"].endswith("\\"))) or
@@ -133,12 +148,12 @@ def report(availability: dict) -> dict:
     issues = []
     for source in missing:
         issues.append({"code": "ASSET_MISSING", "severity": "error", "path": source["path"],
-                       "item_ids": source["item_ids"]})
+                       "item_ids": list(source["item_ids"])})
     if unknown:
-        issues.append({"code": "ASSET_SOURCE_UNKNOWN", "severity": "error", "item_ids": unknown})
+        issues.append({"code": "ASSET_SOURCE_UNKNOWN", "severity": "error", "item_ids": list(unknown)})
     for source in unchecked:
         issues.append({"code": "ASSET_CHECK_UNAVAILABLE", "severity": "error", "path": source["path"],
-                       "item_ids": source["item_ids"]})
+                       "item_ids": list(source["item_ids"])})
     if not complete and not issues:
         raise ValueError("incomplete asset check has no explanation")
     return {"success": True, "passed": not issues, "issues": issues,
