@@ -19,6 +19,8 @@ class FakeYmm4:
         self.posts = []
         self.revision = 1
         self.fail_set = None
+        self.external_change_after_failed_set = False
+        self.external_replace_after_failed_set = False
         self.bad_value = None
         self.fail_remove = None
         self.corrupt_original_on_remove = None
@@ -92,6 +94,14 @@ class FakeYmm4:
             self.frames[prop].append({"at": at, "value": value})
             self.revision += 1
             if prop == self.fail_set:
+                # The host can mutate and then report failure. Another editor
+                # may also modify this item before the probe can read it back.
+                if self.external_change_after_failed_set:
+                    self.frames["Opacity"][0]["value"] += 1
+                    self.revision += 1
+                if self.external_replace_after_failed_set:
+                    self.frames[prop][-1]["value"] += 50
+                    self.revision += 1
                 return httpx.Response(200, json={"success": False,
                                                   "error_code": "KEYFRAME_METHOD_UNAVAILABLE"})
         elif action == "remove":
@@ -226,6 +236,25 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
         self.assertEqual(len(fake.frames["Zoom"]), 1)
+
+    def test_failed_post_with_concurrent_unrelated_edit_refuses_cleanup(self):
+        fake = FakeYmm4()
+        fake.fail_set = "Zoom"
+        fake.external_change_after_failed_set = True
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*unacknowledged edit is ambiguous"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 1.25})
+
+    def test_failed_post_with_concurrent_replacement_refuses_cleanup(self):
+        fake = FakeYmm4()
+        fake.fail_set = "Zoom"
+        fake.external_replace_after_failed_set = True
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*unacknowledged edit is ambiguous"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.25})
 
     def test_readback_mismatch_cleans_up_and_fails(self):
         fake = FakeYmm4()
