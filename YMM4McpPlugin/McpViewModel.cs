@@ -53,25 +53,37 @@ namespace YMM4McpPlugin
 
         private void SaveSettings()
         {
-            if (IsRunning) throw new InvalidOperationException("設定変更前にサーバーを停止してください");
-            if (!_observedSettings.Matches(Server.Settings.Port, Server.Settings.AutoStart,
-                                           Server.Settings.AllowAdvanced))
+            var candidate = new McpSettings { Port = Port, AutoStart = AutoStart, AllowAdvanced = AllowAdvanced };
+            var saved = SettingsViewSaveCoordinator.TryCommit(
+                _observedSettings,
+                () => new SettingsViewSnapshot(Server.Settings.Port, Server.Settings.AutoStart,
+                                               Server.Settings.AllowAdvanced),
+                () =>
+                {
+                    // Check and persist while holding the same gate for all tool
+                    // windows. Otherwise two windows can both pass the stale-view
+                    // check before either has updated the shared settings.
+                    if (IsRunning)
+                        throw new InvalidOperationException("設定変更前にサーバーを停止してください");
+                    candidate.Save();
+                    Server.Settings.Port = candidate.Port;
+                    Server.Settings.AutoStart = candidate.AutoStart;
+                    Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
+                    _observedSettings = new(candidate.Port, candidate.AutoStart, candidate.AllowAdvanced);
+                    // Only clear a warning caused by corrupt settings. A failed
+                    // listener start is not fixed merely by saving a settings file.
+                    if (!string.IsNullOrEmpty(Server.Settings.LoadWarning))
+                    {
+                        if (_startupError == Server.Settings.LoadWarning) _startupError = "";
+                        Server.Settings.LoadWarning = "";
+                    }
+                });
+            if (!saved)
             {
-                // Another tool window saved newer values. Never overwrite them
-                // with a stale view; show the latest settings before retrying.
                 SyncSettingsFromServer();
                 throw new InvalidOperationException(
                     "別のツールウィンドウで設定が更新されました。最新の値を確認してから再設定してください");
             }
-            var candidate = new McpSettings { Port = Port, AutoStart = AutoStart, AllowAdvanced = AllowAdvanced };
-            candidate.Save();
-            Server.Settings.Port = candidate.Port;
-            Server.Settings.AutoStart = candidate.AutoStart;
-            Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
-            _observedSettings = new(candidate.Port, candidate.AutoStart, candidate.AllowAdvanced);
-            // Successful persistence resolves an earlier corrupt-settings warning.
-            Server.Settings.LoadWarning = "";
-            _startupError = "";
             Refresh();
         }
 
