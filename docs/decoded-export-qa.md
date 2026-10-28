@@ -50,6 +50,18 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 {"action":"qa_gate","decoded_export_check":{"path":"C:/Videos/final.mp4","expected_video_codec":"h264","expected_audio_codec":"aac","max_black_seconds":2,"max_silence_seconds":3,"max_freeze_seconds":4,"require_audio_peak_metrics":true,"full_decode":true,"full_signal_scan":true}}
 ```
 
+## オプション：全音声トラックの統合ラウドネス（LUFS）検証
+
+`min_integrated_lufs` / `max_integrated_lufs`（-70〜10 LUFS）を指定すると、FFmpeg `loudnorm` の**正規化前入力** `input_i` を、音声トラックごとに**全尺**で測定します。単一サンプルのピークdBFSでは分からない、完成動画全体の音量感の過小・過大を検出するための品質ゲートです。
+
+`full_decode:true` が必須です。各トラックの追加フルパスが必要なので、全尺デコードと共有する15分の実行予算内で動作します。予算超過、FFmpegエラー、測定JSON欠落、`-inf` など測定不能な値は**不合格**にし、音量が適切だったと誤判定しません。音声トラックがない場合も不合格です。既定では測定を行わず、既存のQA挙動は変わりません。
+
+```json
+{"action":"get_info","sub_action":"decoded_export_qa","path":"C:/Videos/final.mp4","full_decode":true,"min_integrated_lufs":-24,"max_integrated_lufs":-12}
+```
+
+結果の `integrated_loudness` は `[{"stream_ordinal":0,"integrated_lufs":-18.5}]` の形式です。閾値違反は `EXPORT_LOUDNESS_TOO_QUIET` / `EXPORT_LOUDNESS_TOO_LOUD`、測定失敗は `EXPORT_LOUDNESS_FAILED` / `EXPORT_LOUDNESS_UNVERIFIABLE` / `EXPORT_LOUDNESS_TIMEOUT`（すべてerror）です。`qa_gate.decoded_export_check` からも指定できます。LUFSは映像全体の音量基準であり、**セリフとBGMを別々に識別した相対音量評価やTrue Peakの保証ではありません**。
+
 ## オプション：全トラックの末尾までの継続確認
 
 音声トラックはBGMなどの演出で動画より早く終了することがあるため、`EXPORT_STREAM_ENDS_EARLY` は既定で**警告**です。音声を含めた全ストリームが動画の末尾まで続くことを完成条件とする場合、`require_tracks_to_end:true` を指定してください。映像・音声の各トラックがコンテナ尺より**1秒超**短いと `EXPORT_STREAM_ENDS_EARLY`（error）になり、必要なストリーム時刻メタデータを取得できない場合は `EXPORT_STREAM_TAIL_UNVERIFIABLE`（error）になります。短いBGM・SEなどを別トラックとして含む作品では指定しないでください。
