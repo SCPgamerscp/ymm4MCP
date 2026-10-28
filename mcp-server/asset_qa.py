@@ -20,10 +20,13 @@ def _ambiguous_windows_path(path: str) -> bool:
         return False  # Do not apply Windows filename rules to POSIX paths.
     # Win32 normally discards trailing dots/spaces from path components.
     # ntpath.normpath does not, so duplicate-state detection could be bypassed.
-    parts = re.split(r"[\\/]+", tail)
+    # Preserve empty segments: collapsing repeated separators would turn
+    # C:/a//b into an apparently unambiguous path. The leading empty segment
+    # is expected for absolute drive and UNC paths; later empties are not.
+    parts = re.split(r"[\\/]", tail)
     return (":" in tail or any(
-        part not in ("", ".", "..") and part.endswith((".", " "))
-        for part in parts))
+        not part or part in (".", "..") or part.endswith((".", " "))
+        for part in parts[1:]))
 
 
 def report(availability: dict) -> dict:
