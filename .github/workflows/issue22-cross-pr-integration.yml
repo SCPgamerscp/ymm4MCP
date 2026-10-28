@@ -61,7 +61,7 @@ jobs:
             git merge --no-ff --no-edit "refs/remotes/pr/${number}"
           done
           git status --short
-       - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
+      - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
         shell: pwsh
         run: |
           python -m pip install -r mcp-server/requirements.txt
