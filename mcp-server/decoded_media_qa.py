@@ -527,9 +527,22 @@ def _loudnorm_measurements(log):
     """Read original integrated LUFS and inter-sample true peak (dBTP)."""
     # FFmpeg emits the input measurements in a final JSON object. Reject
     # missing, duplicate, or nonfinite values rather than inventing loudness.
+    # FFmpeg normally prints a multiline JSON object, but compact JSON
+    # produced by wrappers or newer builds is equally valid measurement data.
     blocks = re.findall(r"(?ms)^[ \t]*\{[ \t]*\n.*?^[ \t]*\}[ \t]*$", log)
+    blocks += re.findall(r"(?m)^[ \t]*\{[^\r\n]*\}[ \t]*$", log)
     measurements = []
     loudnorm_fields = ("input_i", "input_tp", "input_lra", "input_thresh", "output_i")
+    # A truncated second measurement has no closing brace and therefore
+    # cannot appear in blocks. It must not be ignored after a valid first
+    # measurement: that would certify an ambiguous or corrupted FFmpeg log.
+    remainder = log
+    for block in blocks:
+        remainder = remainder.replace(block, "", 1)
+    if re.search(r'"(?:input_i|input_tp|input_lra|input_thresh|output_i|'
+                 r'output_tp|output_lra|output_thresh|target_offset|'
+                 r'normalization_type)"\s*(?::|=|$)', remainder, re.MULTILINE):
+        raise ValueError("incomplete loudnorm measurement")
     for block in blocks:
         # An invalid second measurement must not disappear merely because a
         # different (valid) loudnorm JSON block was also emitted. Ignore
