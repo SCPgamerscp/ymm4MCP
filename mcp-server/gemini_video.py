@@ -266,6 +266,17 @@ def _extract_json(text: str) -> dict:
                     isinstance(end, bool) or not isinstance(end, (int, float))
                     or not math.isfinite(end) or end < start):
                 raise ValueError(f"events[{index}].end_sec must not precede time_sec")
+            # Optional fields are optional for compatibility, but present
+            # values must match the documented response schema.
+            for field in ("type", "label", "description"):
+                if field in event and not isinstance(event[field], str):
+                    raise ValueError(f"events[{index}].{field} must be text")
+            if "audio" in event and event["audio"] is not None and not isinstance(event["audio"], str):
+                raise ValueError(f"events[{index}].audio must be text or null")
+            if "importance" in event and (
+                    type(event["importance"]) is not int
+                    or not 1 <= event["importance"] <= 5):
+                raise ValueError(f"events[{index}].importance must be an integer in 1..5")
         # Gemini can return valid events out of order. Preserve relative order
         # for ties while guaranteeing the chronological contract for callers.
         parsed["events"].sort(key=lambda event: event["time_sec"])
