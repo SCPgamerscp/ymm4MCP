@@ -121,8 +121,8 @@ class GeminiPreviewInputSafetyTests(unittest.TestCase):
             {"file": "a.png", "index": 0, "timeMs": 0,
              "frame": 0, "width": 1920, "height": 1080},
         ]
-        with patch.object(gemini_video, "_client", return_value=client), \\
-             patch.object(gemini_video, "genai_types", SimpleNamespace(Part=Part)):
+        with (patch.object(gemini_video, "_client", return_value=client),
+              patch.object(gemini_video, "genai_types", SimpleNamespace(Part=Part))):
             result = gemini_video.analyze_frames_dir(
                 str(self.root), frames_meta=metadata)
         self.assertTrue(result["success"], result)
