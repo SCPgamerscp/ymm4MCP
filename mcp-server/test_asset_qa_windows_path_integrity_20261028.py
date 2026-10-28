@@ -63,6 +63,20 @@ class AssetQaWindowsPathIntegrityTests(unittest.TestCase):
             "/tmp/clip/",
         ))
 
+    def test_rejects_posix_dot_and_parent_segments(self):
+        self.assert_rejected((
+            "/tmp/./clip.mp4",
+            "/tmp/../clip.mp4",
+            "/tmp/media/../clip.wav",
+        ))
+
+    def test_rejects_posix_repeated_interior_separators(self):
+        self.assert_rejected((
+            "/tmp//clip.mp4",
+            "/tmp///clip.mp4",
+            "/tmp/media//clip.wav",
+        ))
+
     def test_preserves_valid_names_and_posix_punctuation(self):
         for path in (
             "C:/My Assets/clip.mp4",
@@ -71,6 +85,7 @@ class AssetQaWindowsPathIntegrityTests(unittest.TestCase):
             "\\\\server\\share\\voice clip.wav",
             "/tmp/clip?draft.mp4",
             "/tmp/clip:take.wav",
+            "/tmp/.hidden/clip.mp4",
             "/tmp/clip\\",
         ):
             with self.subTest(path=path):
