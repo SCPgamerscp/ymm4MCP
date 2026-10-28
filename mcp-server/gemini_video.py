@@ -18,6 +18,7 @@ APIキー:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -220,6 +221,27 @@ def _video_signature(path: str) -> tuple[int, int, int, int]:
     """Detect replacement or mutation of the file being analyzed."""
     info = os.stat(path)
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def _media_still_matches(snapshots: list[tuple[str, tuple[int, int, int, int], bytes]]) -> bool:
+    """Recheck selected preview media after sampling and after model inference.
+
+    Stat alone cannot detect an in-place rewrite that restores the timestamp.
+    Compare both file identity and a streaming digest of the exact bytes sent.
+    """
+    for path, original, digest in snapshots:
+        try:
+            if _video_signature(path) != original:
+                return False
+            hasher = hashlib.sha256()
+            with open(path, "rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            if _video_signature(path) != original or hasher.digest() != digest:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _transient_file_api_error(exc: Exception) -> bool:
@@ -440,6 +462,7 @@ def analyze_frames_dir(
         client = _client()
         total_payload_bytes = 0
         analyzed_images = 0
+        media_snapshots: list[tuple[str, tuple[int, int, int, int], bytes]] = []
         for e in entries:
             path = _safe_frame_path(frames_dir, e["file"])
             if path is None:
@@ -450,12 +473,19 @@ def analyze_frames_dir(
             if os.path.getsize(path) > MAX_FRAME_IMAGE_BYTES:
                 return {"success": False, "error": "PNG frame exceeds the upload size limit",
                         "source": "frames_dir"}
+            frame_signature = _video_signature(path)
             with open(path, "rb") as fh:
                 img_bytes = fh.read(MAX_FRAME_IMAGE_BYTES + 1)
             if (len(img_bytes) > MAX_FRAME_IMAGE_BYTES
                     or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Frame payload exceeds the upload size limit",
                         "source": "frames_dir"}
+            if (_video_signature(path) != frame_signature
+                    or len(img_bytes) != frame_signature[2]):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame changed while being read"}
+            media_snapshots.append(
+                (path, frame_signature, hashlib.sha256(img_bytes).digest()))
             total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
             analyzed_images += 1
@@ -483,6 +513,7 @@ def analyze_frames_dir(
             if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
                 return {"success": False, "error": "Audio exceeds the upload size limit",
                         "source": "frames_dir"}
+            audio_signature = _video_signature(audio_path)
             with open(audio_path, "rb") as fh:
                 wav_bytes = fh.read(MAX_AUDIO_BYTES + 1)
             if (len(wav_bytes) > MAX_AUDIO_BYTES
@@ -494,6 +525,12 @@ def analyze_frames_dir(
                     or wav_bytes[8:12] != b"WAVE"):
                 return {"success": False, "error": "Requested audio is not a RIFF/WAVE file",
                         "source": "frames_dir"}
+            if (_video_signature(audio_path) != audio_signature
+                    or len(wav_bytes) != audio_signature[2]):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Requested audio changed while being read"}
+            media_snapshots.append(
+                (audio_path, audio_signature, hashlib.sha256(wav_bytes).digest()))
             total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
             contents.append(genai_types.Part.from_text(
@@ -506,7 +543,13 @@ def analyze_frames_dir(
             + _build_prompt(instruction)
         )))
 
+        if not _media_still_matches(media_snapshots):
+            return {"success": False, "source": "frames_dir",
+                    "error": "Preview media changed before Gemini analysis"}
         resp = client.models.generate_content(model=model, contents=contents)
+        if not _media_still_matches(media_snapshots):
+            return {"success": False, "source": "frames_dir",
+                    "error": "Preview media changed during Gemini analysis"}
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
             return {"success": False, "error": parsed["_parse_error"], "source": "frames_dir"}
