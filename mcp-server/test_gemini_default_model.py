@@ -60,6 +60,12 @@ class BundledGeminiModelTests(unittest.TestCase):
                     {"default_model": model}).encode("utf-8")),
                     gemini_video.DEFAULT_GEMINI_MODEL)
 
+    def test_deeply_nested_config_cannot_crash_model_initialization(self):
+        # json.loads can raise RecursionError even for a <64 KiB file.
+        for raw in (b"[" * 60000, b'{"metadata":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}"):
+            with self.subTest(length=len(raw)):
+                self.assertEqual(self.configured(raw), gemini_video.DEFAULT_GEMINI_MODEL)
+
     def test_utf8_bom_config_is_accepted(self):
         self.assertEqual(self.configured(b"\xef\xbb\xbf" +
                          b'{"default_model": "gemini-3.8-flash"}'),
