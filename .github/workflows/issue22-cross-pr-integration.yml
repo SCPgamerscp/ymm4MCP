@@ -61,15 +61,7 @@ jobs:
             git merge --no-ff --no-edit "refs/remotes/pr/${number}"
           done
           git status --short
-      - name: Archive the exact composed source for cross-platform export QA
-        shell: bash
-        run: git archive --format=tar --output=issue22-composed.tar HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue22-composed-source
-          path: issue22-composed.tar
-          if-no-files-found: error
-      - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
+       - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
         shell: pwsh
         run: |
           python -m pip install -r mcp-server/requirements.txt
@@ -136,25 +128,23 @@ jobs:
           Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, UI port-change E2E, and YMM4 4.56.1.1 keyframe E2E.'
 
   composed-real-export-qa:
-    # Run only after the same composed revision passes the Windows plugin
-    # build. The archive is produced by the integration job; no second merge
-    # against moving PR heads can silently test different source revisions.
-    # Real export QA is meaningful only when the curated regressions AND the
-    # full open-PR Windows package both passed. Avoid a second, flaky download
-    # of the official YMM4 Lite ZIP in the curated job.
-    needs: [setup-cross-pr-integration, all-open-prs-windows-package]
+    # Run real decoded-media QA on the EXACT all-open-PR source that passed
+    # Windows packaging and Python regressions. The curated Issue 22/140
+    # checks are an additional gate, not the source of this final verification.
+    # Never re-fetch moving PR heads or test a different source revision.
+    needs: [setup-cross-pr-integration, all-open-prs-windows-package, all-open-prs-python-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: issue22-composed-source
-      - name: Restore composed source
+          name: all-open-prs-composed-source
+      - name: Restore exact all-open-PR source
         shell: bash
         run: |
           set -euo pipefail
           mkdir composed
-          tar -xf issue22-composed.tar -C composed
+          tar -xf all-open-prs-composed.tar -C composed
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -177,9 +167,6 @@ jobs:
           ffprobe -version | head -n 1
       - name: Install composed MCP dependencies
         run: python -m pip install -r composed/mcp-server/requirements.txt
-      - name: Run all composed Python regression tests
-        working-directory: composed
-        run: python -m unittest discover -s mcp-server -p 'test_*.py' -q
       - name: Run real decoded-export MP4 and stream-tail smoke tests (not mocks)
         working-directory: composed/mcp-server
         run: python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration test_decoded_media_required_tail_20261028
@@ -338,14 +325,18 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Test all composed keyframe regression projects
+      - name: Run every standalone C# regression project from the full open-PR tree
         shell: pwsh
         run: |
-          $projects = @(Get-ChildItem -Path composed/tests -Recurse -Filter 'Keyframe*.csproj' -File)
-          if ($projects.Count -lt 5) { throw "Expected keyframe regression projects; found $($projects.Count)" }
+          # Keyframe-only checks missed settings, rollback, export and transport
+          # regressions from other PRs. Every standalone *.Tests.csproj must
+          # run against the exact composed source before packaging is green.
+          $projects = @(Get-ChildItem -Path composed/tests -Recurse -Filter '*.Tests.csproj' -File | Sort-Object FullName)
+          if ($projects.Count -lt 11) { throw "Expected at least 11 C# regression projects; found $($projects.Count)" }
           foreach ($project in $projects) {
+            Write-Output "Running composed regression: $($project.FullName)"
             dotnet run --project $project.FullName --configuration Release
-            if ($LASTEXITCODE -ne 0) { throw "Failed keyframe test: $($project.FullName)" }
+            if ($LASTEXITCODE -ne 0) { throw "Failed composed C# regression: $($project.FullName)" }
           }
       - name: Regression-test interrupted and corrupt official reference downloads
         shell: pwsh
