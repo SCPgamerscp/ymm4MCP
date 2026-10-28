@@ -8,19 +8,24 @@ import check_connection
 
 
 class StatusJsonIntegrityTests(unittest.TestCase):
+    @staticmethod
+    def fake_client(response):
+        client = MagicMock()
+        client.__enter__.return_value = client
+        wrong = MagicMock()
+        wrong.__enter__.return_value = MagicMock(status_code=401)
+        right = MagicMock()
+        right.__enter__.return_value = response
+        client.stream.side_effect = [wrong, right]
+        return client
+
     def check_body(self, body: bytes):
         response = httpx.Response(
             200,
             content=body,
             request=httpx.Request("GET", "http://127.0.0.1:8765/api/status"),
         )
-        client = MagicMock()
-        client.__enter__.return_value = client
-        client.stream.return_value.__enter__.return_value = response
-        client.get.side_effect = lambda _url, headers: (
-            MagicMock(status_code=401) if headers.get("X-Ymm4-Token") != "secret"
-            else response
-        )
+        client = self.fake_client(response)
         with patch.object(check_connection, "connection_settings", return_value=(
                 "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
@@ -92,9 +97,7 @@ class StatusJsonIntegrityTests(unittest.TestCase):
         chunks = iter([b"x" * 8192] * 10)
         response = MagicMock()
         response.iter_bytes.return_value = chunks
-        client = MagicMock()
-        client.__enter__.return_value = client
-        client.stream.return_value.__enter__.return_value = response
+        client = self.fake_client(response)
         with patch.object(check_connection, "connection_settings", return_value=(
                 "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
@@ -106,9 +109,7 @@ class StatusJsonIntegrityTests(unittest.TestCase):
     def test_stream_enforces_total_response_deadline(self):
         response = MagicMock()
         response.iter_bytes.return_value = iter([b'{"status":"running","port":8765}'])
-        client = MagicMock()
-        client.__enter__.return_value = client
-        client.stream.return_value.__enter__.return_value = response
+        client = self.fake_client(response)
         with patch.object(check_connection, "connection_settings", return_value=(
                 "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client), \
