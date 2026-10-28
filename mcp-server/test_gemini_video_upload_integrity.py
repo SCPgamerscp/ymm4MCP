@@ -1,6 +1,8 @@
 """Regression tests for bounded, stable Gemini File API video analysis."""
 import tempfile
 import unittest
+
+import httpx
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -9,9 +11,10 @@ import gemini_video
 
 
 class FileApiError(Exception):
-    def __init__(self, status_code):
-        super().__init__(f"HTTP {status_code}")
-        self.status_code = status_code
+    """Match google.genai.errors.APIError: HTTP status is exposed as code."""
+    def __init__(self, code):
+        super().__init__(f"HTTP {code}")
+        self.code = code
 
 
 class GeminiVideoUploadIntegrityTests(unittest.TestCase):
@@ -99,12 +102,44 @@ class GeminiFilePollingRetryTests(unittest.TestCase):
     def test_retry_respects_wall_clock_deadline(self):
         self.client.files.get.side_effect = FileApiError(503)
         with patch.object(gemini_video.time, "monotonic",
-                          side_effect=[0, 9.5, 10.1]), \
+                          side_effect=[0, 0, 9.5, 10.1]), \
              patch.object(gemini_video.time, "sleep") as sleep:
             with self.assertRaises(TimeoutError):
                 gemini_video._wait_file_active(self.client, self.uploaded, timeout_sec=10)
         sleep.assert_called_once_with(0.5)
+        self.assertEqual(self.client.files.get.call_count, 1)
+
+    def test_active_response_after_deadline_is_rejected(self):
+        self.client.files.get.return_value = SimpleNamespace(
+            state=SimpleNamespace(name="ACTIVE"))
+        with patch.object(gemini_video.time, "monotonic",
+                          side_effect=[0, 0, 10.1]), \
+             patch.object(gemini_video.time, "sleep") as sleep:
+            with self.assertRaisesRegex(TimeoutError, "polling timed out"):
+                gemini_video._wait_file_active(self.client, self.uploaded, timeout_sec=10)
+        self.assertEqual(self.client.files.get.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_transport_error_retried_but_bad_request_not_retried(self):
+        self.client.files.get.side_effect = [
+            httpx.ConnectError("temporary network failure"),
+            SimpleNamespace(state=SimpleNamespace(name="ACTIVE")),
+        ]
+        with patch.object(gemini_video.time, "monotonic", return_value=0), \
+             patch.object(gemini_video.time, "sleep") as sleep:
+            self.assertEqual(
+                gemini_video._wait_file_active(self.client, self.uploaded).state.name,
+                "ACTIVE")
+        sleep.assert_called_once_with(3)
         self.assertEqual(self.client.files.get.call_count, 2)
+
+        self.client.files.get.reset_mock()
+        self.client.files.get.side_effect = FileApiError(400)
+        with patch.object(gemini_video.time, "sleep") as sleep:
+            with self.assertRaises(FileApiError):
+                gemini_video._wait_file_active(self.client, self.uploaded)
+        self.assertEqual(self.client.files.get.call_count, 1)
+        sleep.assert_not_called()
 
 
 if __name__ == "__main__":
