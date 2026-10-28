@@ -23,7 +23,7 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
                     "status": "running", "port": 8765, "success": True
                 }
                 accepted.headers = {}
-        accepted.iter_bytes.return_value = [json.dumps(accepted.json.return_value).encode("utf-8")]
+                accepted.iter_bytes.return_value = [json.dumps(accepted.json.return_value).encode("utf-8")]
                 wrong = MagicMock()
                 wrong.__enter__.return_value = rejected
                 right = MagicMock()
