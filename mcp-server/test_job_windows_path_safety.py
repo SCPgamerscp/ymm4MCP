@@ -36,6 +36,18 @@ class WindowsJobPathSafetyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     jobs.validate_export_request({"path": path})
 
+    def test_rejects_unicode_superscript_com_lpt_devices(self):
+        for stem in ("COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³"):
+            for path in (f"C:/Videos/{stem}.mp4",
+                         f"\\\\nas\\share\\{stem}.mp4"):
+                with self.subTest(path=path):
+                    self.assertFalse(jobs.is_absolute_media_path(path))
+                    with self.assertRaises(ValueError):
+                        jobs.validate_export_request({"path": path})
+            with self.subTest(stem=stem), self.assertRaises(ValueError):
+                jobs.validate_project_path({"path": f"C:/projects/{stem}.ymmp"})
+        self.assertTrue(jobs.is_absolute_media_path("C:/Videos/COM10.mp4"))
+
     def test_project_paths_share_same_file_safety_boundary(self):
         for path in ("C:/projects/NUL.ymmp", "C:/projects/../edit.ymmp",
                      r"\\.\NUL\edit.ymmp", r"\\nas\share\CON.ymmp"):
