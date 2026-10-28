@@ -42,7 +42,7 @@ class GeminiPreviewCompletenessTests(unittest.TestCase):
         client = MagicMock()
         client.models.generate_content.return_value = SimpleNamespace(
             text='{"summary":"ok","events":[]}')
-        with patch.object(gemini_video, "_client", return_value=client), \\
+        with patch.object(gemini_video, "_client", return_value=client), \
              patch.object(gemini_video, "genai_types", SimpleNamespace(Part=Part)):
             result = gemini_video.analyze_frames_dir(str(self.folder), max_images=3)
         self.assertTrue(result["success"], result)
@@ -66,7 +66,7 @@ class GeminiPreviewCompletenessTests(unittest.TestCase):
         client = MagicMock()
         client.models.generate_content.return_value = SimpleNamespace(
             text='{"summary":"ok","events":[]}')
-        with patch.object(gemini_video, "_client", return_value=client), \\
+        with patch.object(gemini_video, "_client", return_value=client), \
              patch.object(gemini_video, "genai_types", SimpleNamespace(Part=Part)):
             result = gemini_video.analyze_frames_dir(str(self.folder), max_images=1)
         self.assertTrue(result["success"], result)
