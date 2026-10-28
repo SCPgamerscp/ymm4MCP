@@ -9,7 +9,15 @@ class StatusVersionIntegrityTests(unittest.TestCase):
     def check_payload(self, payload):
         client = MagicMock()
         client.__enter__.return_value = client
-        client.get.return_value.json.return_value = payload
+        rejected = MagicMock(status_code=401)
+        accepted = MagicMock(status_code=200)
+        accepted.json.return_value = payload
+        # Standalone #244 makes only the positive request; when #228 is
+        # composed first, the negative authentication probe must also work.
+        # Select by token, not call order, to test both compositions.
+        client.get.side_effect = lambda _url, headers: (
+            accepted if headers.get("X-Ymm4-Token") == "secret" else rejected
+        )
         with patch.object(check_connection, "connection_settings", return_value=(
                 "http://127.0.0.1:8765/api", {"X-Ymm4-Token": "secret"})), \
              patch.object(check_connection.httpx, "Client", return_value=client):
@@ -17,7 +25,6 @@ class StatusVersionIntegrityTests(unittest.TestCase):
 
     def test_rejects_control_characters_and_direction_overrides(self):
         for version in ("4.56\\nFAKE", "4.56\\x1b[31m", "4.56\\u202e", "4.56\\u2066"):
-            # Escape sequences above are converted to actual control chars.
             version = version.encode("ascii", errors="backslashreplace").decode("unicode_escape")
             with self.subTest(version=repr(version)), self.assertRaisesRegex(ValueError, "バージョン"):
                 self.check_payload({"status": "running", "port": 8765, "version": version})
