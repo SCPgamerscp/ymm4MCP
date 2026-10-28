@@ -22,6 +22,8 @@ namespace YMM4McpPlugin
     /// </summary>
     internal static class SettingsViewSaveCoordinator
     {
+        internal const string UnreadableFingerprint = "<unreadable>";
+
         private static readonly object Gate = new();
         private static readonly Mutex ProcessGate = new(false, @"Local\YMM4MCP.SettingsSave");
 
@@ -35,7 +37,18 @@ namespace YMM4McpPlugin
             }
             catch (FileNotFoundException) { return "<missing>"; }
             catch (DirectoryNotFoundException) { return "<missing>"; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The file exists but its state cannot be verified. Never
+                // mistake this for a missing file or a matching fingerprint.
+                return UnreadableFingerprint;
+            }
         }
+
+        internal static bool SameReadableFingerprint(string observed, string current) =>
+            observed != UnreadableFingerprint &&
+            current != UnreadableFingerprint &&
+            string.Equals(observed, current, StringComparison.Ordinal);
 
         internal static bool TryCommit(SettingsViewSnapshot observed,
             Func<SettingsViewSnapshot> readCurrent, Action persist,
