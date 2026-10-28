@@ -83,6 +83,17 @@ class AssetQaIdentityAndLimitsTests(unittest.TestCase):
                         unchecked=[self.source(path)] if state == "unchecked" else [],
                         count=1 if state == "missing" else 0))
 
+    def test_rejects_terminal_posix_dot_segments(self):
+        # A final dot component aliases a directory, not a media file.
+        # Exercise both report categories so neither bypasses validation.
+        for path in ("/tmp/.", "/tmp/..", "/tmp/media/.", "/tmp/media/.."):
+            for state in ("missing", "unchecked"):
+                with self.subTest(path=path, state=state), self.assertRaises(ValueError):
+                    asset_qa.report(self.snapshot(
+                        missing=[self.source(path)] if state == "missing" else [],
+                        unchecked=[self.source(path)] if state == "unchecked" else [],
+                        count=1 if state == "missing" else 0))
+
     def test_preserves_valid_win32_and_posix_paths(self):
         for path in ("C:/My Assets/clip.mp4",
                      "\\\\server\\share\\voice clip.wav",
