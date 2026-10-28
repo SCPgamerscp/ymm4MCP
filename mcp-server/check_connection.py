@@ -60,6 +60,9 @@ def check() -> dict:
     # A positive response alone does not prove the endpoint enforces auth.
     invalid_token = ("0" if token[0] != "0" else "1") + token[1:]
     invalid_headers = {**headers, "X-Ymm4-Token": invalid_token}
+    # Request an uncompressed response so HTTPX never expands a compressed
+    # payload before the streaming size limit can be enforced.
+    status_headers = {**headers, "Accept-Encoding": "identity"}
     url = base + "/status"
     # Both probes stay on loopback; ambient proxies must never see the token.
     # Stream before buffering so an unexpected local responder cannot force
@@ -75,8 +78,24 @@ def check() -> dict:
                     "YMM4の認証が有効であることを確認できません"
                     "（不正なトークンへの応答がHTTP 401ではありません）"
                 )
-        with client.stream("GET", url, headers=headers) as response:
+        with client.stream("GET", url, headers=status_headers) as response:
             response.raise_for_status()
+            # Do not allow gzip/deflate to inflate an arbitrarily large
+            # response inside HTTPX before our byte-count check runs.
+            content_encoding = response.headers.get("content-encoding")
+            if isinstance(content_encoding, str) and content_encoding.strip().lower() not in ("", "identity"):
+                raise ValueError("YMM4のステータス応答は圧縮できません")
+            # Content-Length is optional for chunked responses. When present,
+            # reject oversized, malformed, or inconsistent framing.
+            length_header = response.headers.get("content-length")
+            declared_length = None
+            if length_header is not None:
+                if (not isinstance(length_header, str) or not length_header.isascii()
+                        or not length_header.isdigit() or len(length_header) > 5):
+                    raise ValueError("YMM4のステータスContent-Lengthが不正です")
+                declared_length = int(length_header)
+                if declared_length > MAX_STATUS_JSON_BYTES:
+                    raise ValueError("YMM4のステータスJSONが大きすぎます")
             body = bytearray()
             for chunk in response.iter_bytes(chunk_size=8192):
                 if time.monotonic() > deadline:
@@ -84,6 +103,8 @@ def check() -> dict:
                 if len(body) + len(chunk) > MAX_STATUS_JSON_BYTES:
                     raise ValueError("YMM4のステータスJSONが大きすぎます")
                 body.extend(chunk)
+            if declared_length is not None and len(body) != declared_length:
+                raise ValueError("YMM4のステータスContent-Lengthが応答サイズと一致しません")
     # json.loads(bytes) detects UTF-8/16/32. Decode with the same rules
     # before counting nesting; scanning raw UTF-16 bytes misses escapes.
     raw = bytes(body)
