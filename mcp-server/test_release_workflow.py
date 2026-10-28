@@ -28,6 +28,26 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                       self.workflow)
         self.assertNotIn('Compress-Archive -Path mcp-server', self.workflow)
 
+    def test_installer_smoke_uses_published_zip_for_fresh_and_upgrade_paths(self):
+        # CI must install what users download, not a different working-tree
+        # directory. Test both first install and a later re-extraction.
+        smoke = self.workflow.split(
+            "      - name: Smoke-test one-click MCP server setup\\n", 1
+        )[1].split("      - uses: actions/upload-artifact@v4", 1)[0]
+        self.assertIn("Get-ChildItem -LiteralPath artifacts -Filter 'YMM4McpServer-*.zip'",
+                      smoke)
+        self.assertEqual(smoke.count(
+            "Expand-Archive -LiteralPath $serverPackage[0].FullName"), 2)
+        self.assertIn("$extracted = Join-Path $extractedRoot 'mcp-server'", smoke)
+        self.assertIn("& (Join-Path $extracted 'install.cmd')", smoke)
+        self.assertIn("Remove-Item -LiteralPath $extractedRoot -Recurse -Force",
+                      smoke)
+        self.assertIn("$upgrade = Join-Path $upgradeRoot 'mcp-server'", smoke)
+        self.assertIn("& (Join-Path $upgrade 'install.cmd')", smoke)
+        self.assertIn("Join-Path $upgrade 'connection.json'", smoke)
+        self.assertNotIn("Copy-Item -LiteralPath 'mcp-server'", smoke)
+        self.assertNotIn('cmd.exe /c "mcp-server\\\\install.cmd"', smoke)
+
     def test_release_requires_both_test_and_package_jobs(self):
         self.assertIn("needs: [package, python-tests]", self.release)
         self.assertIn("group: ymm4mcp-release", self.release)
