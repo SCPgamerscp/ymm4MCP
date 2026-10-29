@@ -1,5 +1,7 @@
 """Plan bounded Volume keyframes around the current voice spans."""
 
+import math
+
 from editing import finite_number, integer
 
 
@@ -65,16 +67,19 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
 
 def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float) -> bool:
     """Verify the complete curve, including the unchanged original start key."""
-    if (not isinstance(revision, str) or not revision or
+    if (not isinstance(revision, str) or not 1 <= len(revision) <= 256 or
+            revision != revision.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in revision) or
             not isinstance(report, dict) or report.get("success") is not True or
             "error" in report or "error_code" in report or
-            report.get("revision") != revision or not isinstance(report.get("animations"), list)):
+            report.get("revision") != revision or not isinstance(report.get("animations"), list) or
+            len(report["animations"]) > 256):
         return False
     volume = [a for a in report["animations"] if isinstance(a, dict) and a.get("prop") == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
     # abs(actual - NaN) >= tolerance is False for *every* actual value.
-    if not isinstance(points, list) or isinstance(base_volume, bool) or not isinstance(base_volume, (int, float)):
+    if (not isinstance(points, list) or len(points) > 2000 or
+            isinstance(base_volume, bool) or not isinstance(base_volume, (int, float))):
         return False
     try:
         base_volume = finite_number(base_volume, "base_volume")
@@ -89,10 +94,12 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             if at in expected or isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
                 return False
             expected[at] = finite_number(raw_value, "keyframe.value")
+            if expected[at] <= 0:
+                return False
         expected.setdefault(0, base_volume)
     except (ValueError, OverflowError):
         return False
-    if not isinstance(found, list) or len(found) != len(expected):
+    if not isinstance(found, list) or len(found) > 2001 or len(found) != len(expected):
         return False
     seen = set()
     for key in found:
@@ -103,7 +110,8 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             value = finite_number(key["value"], "keyframe.value")
         except (ValueError, OverflowError):
             return False
-        if at in seen or at not in expected or abs(value - expected[at]) >= 1e-6:
+        if (at in seen or at not in expected or value <= 0 or
+                not math.isclose(value, expected[at], rel_tol=1e-9, abs_tol=0.0)):
             return False
         seen.add(at)
     return True
