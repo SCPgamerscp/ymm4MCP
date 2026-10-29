@@ -431,6 +431,8 @@ def combine_qa_reports(structural, checks, criteria):
         has_errors = any(i["severity"] == "error" for i in report["issues"])
         if report["passed"] == has_errors:
             raise ValueError(f"{source} passed status disagrees with its error issues")
+    if set(checks) != set(criteria):
+        raise ValueError("QA check sources must match their criteria entries")
     errors = sum(i["severity"] == "error" for i in problems)
     warnings = sum(i["severity"] == "warning" for i in problems)
     digest = hashlib.sha256(json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
