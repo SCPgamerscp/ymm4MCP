@@ -296,6 +296,12 @@ def _valid_frame_index(value: Any) -> bool:
     return type(value) is int and 0 <= value <= 2_147_483_647
 
 
+def _file_snapshot(info) -> tuple:
+    """Capture file identity and metadata to detect mid-QA replacements."""
+    return (info.st_dev, info.st_ino, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
 def analyze_frames_dir(
     frames_dir: str,
     frames_meta: Optional[list[dict]] = None,
@@ -394,6 +400,10 @@ def analyze_frames_dir(
             entries.sort(key=lambda e: e["timeMs"])
         elif all(has_frame):
             entries.sort(key=lambda e: e["frame"])
+        elif all("index" in e for e in entries):
+            # Without frame/time metadata, capture indices are authoritative.
+            # Filename sorting can reverse the actual capture order.
+            entries.sort(key=lambda e: e["index"])
         else:
             entries.sort(key=lambda e: _frame_filename_key(e["file"]))
         # The exporter's capture index is chronological. Even individually
@@ -447,6 +457,7 @@ def analyze_frames_dir(
     # metadata. A broken unselected PNG must not yield a successful QA result.
     seen_capture_paths = set()
     seen_capture_file_ids = set()
+    preflight_snapshots = {}
     for e in entries:
         path = _safe_frame_path(frames_dir, e["file"])
         if path is None:
@@ -472,6 +483,10 @@ def analyze_frames_dir(
                 return {"success": False, "source": "frames_dir",
                         "error": "capture contains duplicate physical PNG frames"}
             seen_capture_file_ids.add(file_id)
+        # Preserve the identity and metadata of every frame checked during
+        # preflight. Selected files must still be the same immutable capture
+        # when their bytes are later read for the Gemini request.
+        preflight_snapshots[canonical] = _file_snapshot(info)
         # Keep the existing size-check seam used by preflight regression tests.
         try:
             size = os.path.getsize(path)
@@ -511,11 +526,25 @@ def analyze_frames_dir(
                 # problem while still returning success; never silently skip.
                 return {"success": False, "source": "frames_dir",
                         "error": "Selected PNG frame is missing or outside export directory"}
-            if os.path.getsize(path) > MAX_FRAME_IMAGE_BYTES:
-                return {"success": False, "error": "PNG frame exceeds the upload size limit",
-                        "source": "frames_dir"}
-            with open(path, "rb") as fh:
+            canonical = os.path.normcase(path)
+            expected = preflight_snapshots.get(canonical)
+            if expected is None:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame changed after preflight"}
+            # O_NOFOLLOW prevents a last-component symlink swap where supported;
+            # fstat and path stat verify the actual opened file and its contents.
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as fh:
+                before = _file_snapshot(os.fstat(fh.fileno()))
+                if before != expected:
+                    return {"success": False, "source": "frames_dir",
+                            "error": "Selected PNG frame changed after preflight"}
                 img_bytes = fh.read(MAX_FRAME_IMAGE_BYTES + 1)
+                after = _file_snapshot(os.fstat(fh.fileno()))
+            if (after != expected or _file_snapshot(os.stat(path)) != expected):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame changed during upload preparation"}
             if not img_bytes:
                 return {"success": False, "error": "Selected PNG frame is empty",
                         "source": "frames_dir"}
