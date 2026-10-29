@@ -165,5 +165,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         )
 
 
+    def test_composed_candidate_is_reusable_without_publishing_a_release(self):
+        # The full open-PR build is not useful for #22/#140 live acceptance if
+        # its .ymme disappears when the runner exits. The downloadable
+        # candidate must contain BOTH packages and exclude local credentials.
+        composed = (WORKFLOW.parent / "issue22-cross-pr-integration.yml").read_text(
+            encoding="utf-8"
+        )
+        windows = composed.split("  all-open-prs-windows-package:", 1)[1]
+        self.assertIn("Validate and bundle disposable all-PR acceptance candidate", windows)
+        self.assertIn("YMM4McpPlugin-$version.ymme", windows)
+        self.assertIn("YMM4McpServer-$version.zip", windows)
+        self.assertIn("[IO.Compression.ZipFile]::CreateFromDirectory(", windows)
+        self.assertIn("Unexpected composed .ymme contents", windows)
+        self.assertIn("Missing candidate file", windows)
+        self.assertIn("Sensitive or ephemeral files in candidate ZIP", windows)
+        self.assertIn("connection\\.json|settings\\.local\\.json", windows)
+        self.assertIn("name: all-open-prs-disposable-acceptance", windows)
+        self.assertIn("if-no-files-found: error", windows)
+        self.assertIn("retention-days: 7", windows)
+        self.assertNotIn("gh release create", windows)
+        self.assertNotIn("git push", windows)
+
+
 if __name__ == "__main__":
     unittest.main()
