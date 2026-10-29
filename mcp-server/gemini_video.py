@@ -303,14 +303,19 @@ def _file_snapshot(info) -> tuple:
 
 
 def _wav_chunk_error(data: bytes) -> Optional[str]:
-    """Check RIFF chunk boundaries and the presence of usable audio data.
+    """Validate the RIFF/WAVE audio layout before treating it as captured QA.
 
-    A RIFF/WAVE envelope without a fmt or nonempty data chunk is not an
-    audio capture and must not be treated as a completed audio QA sample.
+    A plausible RIFF envelope is not enough: an invalid format, impossible
+    sample layout, or truncated sample frame must not pass as observed audio.
+    Only uncompressed PCM / IEEE float (including their extensible forms)
+    can be interpreted reliably as an inline audio/wav payload.
     """
-    offset = 12  # Caller has already checked the RIFF/WAVE envelope.
+    offset = 12  # Caller already checked RIFF/WAVE and the declared length.
     found_fmt = False
     found_data = False
+    block_align = None
+    pcm_guid = bytes.fromhex("0100000000001000800000aa00389b71")
+    float_guid = bytes.fromhex("0300000000001000800000aa00389b71")
     while offset < len(data):
         if len(data) - offset < 8:
             return "Requested audio has a truncated WAV chunk header"
@@ -320,12 +325,53 @@ def _wav_chunk_error(data: bytes) -> Optional[str]:
         if end > len(data) or end + (size & 1) > len(data):
             return "Requested audio has a truncated WAV chunk"
         if kind == b"fmt ":
-            if found_fmt or size < 16:
-                return "Requested audio has a duplicate or invalid WAV fmt chunk"
+            if found_fmt or found_data or size < 16:
+                return "Requested audio has a duplicate, misplaced or invalid WAV fmt chunk"
+            fmt = data[offset + 8:end]
+            format_tag = int.from_bytes(fmt[0:2], "little")
+            channels = int.from_bytes(fmt[2:4], "little")
+            sample_rate = int.from_bytes(fmt[4:8], "little")
+            byte_rate = int.from_bytes(fmt[8:12], "little")
+            block_align = int.from_bytes(fmt[12:14], "little")
+            sample_bits = int.from_bytes(fmt[14:16], "little")
+            if size != 16:
+                if size < 18:
+                    return "Requested audio has a truncated WAV fmt extension"
+                extension_size = int.from_bytes(fmt[16:18], "little")
+                if size != 18 + extension_size:
+                    return "Requested audio has an inconsistent WAV fmt extension length"
+            if format_tag == 0xFFFE:  # WAVE_FORMAT_EXTENSIBLE
+                if size < 40 or int.from_bytes(fmt[16:18], "little") < 22:
+                    return "Requested audio has an invalid extensible WAV fmt chunk"
+                subtype = fmt[24:40]
+                if subtype == pcm_guid:
+                    format_tag = 1
+                elif subtype == float_guid:
+                    format_tag = 3
+                else:
+                    return "Requested audio uses an unsupported extensible WAV codec"
+                valid_bits = int.from_bytes(fmt[18:20], "little")
+                if not 1 <= valid_bits <= sample_bits:
+                    return "Requested audio has invalid extensible WAV valid bits"
+            if format_tag not in (1, 3):
+                return "Requested audio uses an unsupported WAV codec"
+            if (not 1 <= channels <= 32 or not 1 <= sample_rate <= 768_000):
+                return "Requested audio has invalid WAV channel count or sample rate"
+            supported_bits = (8, 16, 24, 32) if format_tag == 1 else (32, 64)
+            if sample_bits not in supported_bits:
+                return "Requested audio has unsupported WAV sample precision"
+            expected_align = channels * (sample_bits // 8)
+            if (block_align != expected_align
+                    or byte_rate != sample_rate * expected_align):
+                return "Requested audio has inconsistent WAV block alignment or byte rate"
             found_fmt = True
         elif kind == b"data":
             if found_data or size == 0:
                 return "Requested audio has a duplicate or empty WAV data chunk"
+            if not found_fmt:
+                return "Requested audio has a WAV data chunk before fmt"
+            if size % block_align:
+                return "Requested audio has a partial WAV sample frame"
             found_data = True
         offset = end + (size & 1)
     if not found_fmt or not found_data:
@@ -658,6 +704,14 @@ def analyze_frames_dir(
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
             return {"success": False, "error": parsed["_parse_error"], "source": "frames_dir"}
+        # A prompt warning alone does not prevent model hallucinations. Never
+        # certify an audio event when the caller supplied images but no audio.
+        if audio_path is None and any(
+                str(event.get("type", "")).strip().casefold() == "sound"
+                or event.get("audio") not in (None, "")
+                for event in parsed["events"]):
+            return {"success": False, "source": "frames_dir",
+                    "error": "Gemini reported audio without a supplied audio track"}
         return {
             **parsed,
             "success": True,
