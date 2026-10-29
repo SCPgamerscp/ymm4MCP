@@ -79,6 +79,29 @@ class MetadataFreeCaptureTests(unittest.TestCase):
         error = self.reject()
         self.assertIn("duplicate resolved", error)
 
+    def test_truncated_or_appended_wav_is_rejected_before_model_call(self):
+        (self.root / "a.png").write_bytes(b"synthetic-a")
+        audio = self.root / "sound.wav"
+        client = MagicMock()
+        part = SimpleNamespace(
+            from_bytes=lambda **kwargs: kwargs["data"],
+            from_text=lambda **kwargs: kwargs["text"])
+        for content in (
+            b"RIFF" + (100).to_bytes(4, "little") + b"WAVE",
+            b"RIFF" + (4).to_bytes(4, "little") + b"WAVEextra",
+            b"RIFF" + (3).to_bytes(4, "little") + b"WAVE",
+        ):
+            with self.subTest(content=content):
+                audio.write_bytes(content)
+                with patch.object(gemini_video, "_client", return_value=client), \\
+                     patch.object(gemini_video, "genai_types",
+                                  SimpleNamespace(Part=part)):
+                    result = gemini_video.analyze_frames_dir(
+                        str(self.root), audio_path=str(audio))
+                self.assertFalse(result["success"], result)
+                self.assertIn("RIFF/WAVE size", result["error"])
+        client.models.generate_content.assert_not_called()
+
     def test_distinct_regular_frames_are_accepted(self):
         (self.root / "a.png").write_bytes(b"synthetic-a")
         (self.root / "b.png").write_bytes(b"synthetic-b")
