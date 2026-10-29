@@ -434,13 +434,31 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         # number of timeline items changes. That is progress, not a stalled edit.
         return report.get("item_count"), sorted(canonical(issue) for issue in report["issues"])
 
+    def error_identity(issue):
+        """Track new hard failures even when other repairs raise the QA score.
+
+        A stable item ID distinguishes separate failures with the same code.
+        When the host cannot provide IDs, use code/source rather than unstable
+        timeline indices; frame moves alone must not imply a new failure.
+        """
+        ids = issue.get("item_ids") or []
+        return (issue["code"], issue.get("source"),
+                tuple(sorted(ids)) if ids else None)
+
+    def introduces_new_error(previous, latest):
+        previous_errors = {error_identity(issue) for issue in previous["issues"]
+                           if issue["severity"] == "error"}
+        return any(error_identity(issue) not in previous_errors
+                   for issue in latest["issues"] if issue["severity"] == "error")
+
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
     if not current["passed"]:
         if max_seconds is not None and elapsed_seconds >= max_seconds:
             reason = "TIME_LIMIT_REACHED"
         elif max_api_calls is not None and api_calls >= max_api_calls:
             reason = "API_LIMIT_REACHED"
-        elif history and (metrics[-1][1] > metrics[-2][1] or
+        elif history and (introduces_new_error(history[-1], current) or
+                          metrics[-1][1] > metrics[-2][1] or
                           metrics[-1][3] > metrics[-2][3] or
                           scores[-1] < scores[-2] or
                           (scores[-1] == scores[-2] and
