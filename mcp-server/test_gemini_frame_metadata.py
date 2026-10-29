@@ -34,13 +34,16 @@ class GeminiFrameMetadataTests(unittest.TestCase):
                 self.temp.name, frames_meta=[{"file": "0001.png", **metadata}])
         return result, labels
 
-    def test_invalid_times_and_frame_labels_are_not_forwarded(self):
+    def test_invalid_times_and_frame_labels_fail_before_upload(self):
+        # A declared but invalid capture timestamp/frame must not be treated
+        # as a complete QA result or silently downgraded to unknown labels.
         for time_ms in (True, -1, "1000", float("nan"), float("inf"), 10 ** 500):
             with self.subTest(time_ms=time_ms):
                 result, labels = self.analyze({"timeMs": time_ms, "frame": "bad\nframe"})
-                self.assertTrue(result["success"])
-                self.assertIn("時刻 = ?, frame=?", labels[0])
-                self.assertNotIn("bad\nframe", labels[0])
+                self.assertFalse(result["success"], result)
+                self.assertIn("inconsistent", result["error"])
+                self.assertEqual(labels, [])
+        self.client.models.generate_content.assert_not_called()
 
     def test_valid_time_and_frame_are_preserved(self):
         result, labels = self.analyze({"timeMs": 1500, "frame": 45})
