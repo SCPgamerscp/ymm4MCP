@@ -105,6 +105,28 @@ class SceneEvidenceSummaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "continuation requires"):
             with_coverage(index)
 
+    def test_rejects_invalid_unknown_media_type_evidence(self):
+        for kind in (123, True, "", " ", "x" * 129, "VideoItem\\n"):
+            with self.subTest(kind=kind):
+                index = {"scenes": [{"start_frame": 0, "end_frame": 20,
+                                    "items": [{"type": kind}]}]}
+                with self.assertRaisesRegex(ValueError, "item type"):
+                    with_coverage(index)
+
+    def test_rejects_malformed_unknown_item_visible_ranges(self):
+        for evidence in (
+            {"visible_start_frame": 0},
+            {"visible_end_frame": 20},
+            {"visible_start_frame": True, "visible_end_frame": 20},
+            {"visible_start_frame": 0, "visible_end_frame": 20.0},
+            {"visible_start_frame": 20, "visible_end_frame": 20},
+        ):
+            with self.subTest(evidence=evidence):
+                index = {"scenes": [{"start_frame": 0, "end_frame": 20,
+                                    "items": [{"type": "Unknown", **evidence}]}]}
+                with self.assertRaisesRegex(ValueError, "visible range"):
+                    with_coverage(index)
+
     def test_rejects_out_of_range_layer(self):
         for bad in (-1, MAX_FRAME + 1):
             with self.subTest(bad=bad):
