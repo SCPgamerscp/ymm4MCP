@@ -30,7 +30,7 @@ class PNGIntegrityTests(unittest.TestCase):
 
     def test_corrupt_ancillary_crc_is_rejected(self):
         raw = _png()
-        ancillary = bytearray(_chunk(b"tEXt", b"Comment\\x00safe"))
+        ancillary = bytearray(_chunk(b"tEXt", b"Comment\x00safe"))
         ancillary[-1] ^= 1
         with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
             _decode(raw[:33] + ancillary + raw[33:])
@@ -59,7 +59,7 @@ class PNGIntegrityTests(unittest.TestCase):
         self.assertEqual(raw[37:41], b"IDAT")
         compressed = raw[41:41 + idat_length]
         altered = (raw[:33] + _chunk(b"IDAT", compressed[:4])
-                   + _chunk(b"tEXt", b"Comment\\x00safe")
+                   + _chunk(b"tEXt", b"Comment\x00safe")
                    + _chunk(b"IDAT", compressed[4:]) + _chunk(b"IEND", b""))
         with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
             _decode(altered)
