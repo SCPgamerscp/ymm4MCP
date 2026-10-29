@@ -112,6 +112,13 @@ namespace YMM4McpPlugin
             }
         }
 
+        // Checkpoint backups must belong to the same still-saved project at
+        // both capture and publication time. A project switch or unsaved edit
+        // during an asynchronous copy must invalidate the backup.
+        internal static bool IsStableSavedProject(
+            string? expected, string? current, bool? isSaved) =>
+            isSaved is true && SameProject(expected, current);
+
         // Checkpoint records are restored from JSON. Never allow a forged
         // BackupPath to delete files outside the private checkpoint directory.
         internal static bool IsOwnedBackupPath(string? path, string backupDirectory)
