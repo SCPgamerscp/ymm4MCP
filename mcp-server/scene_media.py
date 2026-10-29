@@ -30,7 +30,7 @@ def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
 
 
 def _scene_range(scene: dict) -> tuple[int, int]:
-    start, end = scene["start_frame"], scene["end_frame"]
+    start, end = scene.get("start_frame"), scene.get("end_frame")
     if (type(start) is not int or type(end) is not int or
             start < 0 or end > MAX_FRAME or end <= start):
         raise ValueError("scene range must have bounded integer frames and positive duration")
@@ -44,7 +44,7 @@ def _spans(scene: dict, names: tuple[str, ...], start: int, end: int) -> list[tu
             raise ValueError("scene item must be an object")
         if not is_known_item_type(item.get("type"), names):
             continue
-        left, right = item["visible_start_frame"], item["visible_end_frame"]
+        left, right = item.get("visible_start_frame"), item.get("visible_end_frame")
         if type(left) is not int or type(right) is not int or right <= left:
             raise ValueError("visible item range must have integer frames and positive duration")
         # Items may extend beyond a scene, but cannot cover frames outside it.
