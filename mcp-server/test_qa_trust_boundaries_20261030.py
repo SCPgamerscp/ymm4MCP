@@ -52,7 +52,7 @@ class QaTrustBoundaryTests(unittest.TestCase):
                 self.combine([{"code": "BLACK_FRAME", "severity": "error", **issue}])
 
     def test_visual_frame_pair_must_be_strict_integer(self):
-        for start, end in ((0, 0), (4, 3), (True, 10), (-1, 5), (0, 2.5),
+        for start, end in ((4, 3), (True, 10), (-1, 5), (0, 2.5),
                            (0, editing.MAX_FRAME + 1)):
             with self.subTest(start=start, end=end), self.assertRaisesRegex(
                     ValueError, "frame interval"):
@@ -70,8 +70,13 @@ class QaTrustBoundaryTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["frame_range"], [0, 10])
         self.assertEqual(editing.evaluate_qa_gate(result)["reason_code"], "QA_ISSUES_REMAIN")
 
+    def test_single_frame_visual_interval_supported(self):
+        result = self.combine([{"code": "BLACK_FRAME", "severity": "error",
+                                "start_frame": 12, "end_frame": 12}])
+        self.assertEqual(result["issues"][0]["frame_range"], [12, 12])
+
     def test_external_frame_range_rejects_malformed_bounds(self):
-        for span in ([0, 0], [True, 4], [3], [1, "5"]):
+        for span in ([3, 2], [True, 4], [3], [1, "5"]):
             with self.subTest(span=span), self.assertRaisesRegex(ValueError, "frame_range"):
                 self.combine([{"code": "CLIPPING", "severity": "error",
                                "frame_range": span}], source="audio")
