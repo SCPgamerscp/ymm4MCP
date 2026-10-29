@@ -142,31 +142,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             1,
         )
 
-    def test_issue22_keyframe_composition_uses_same_order_as_all_pr_audit(self):
-        # A stale, hand-picked order merged #228/#229 before #219 and
-        # conflicted in package-ymme.yml, even though the numeric 50-PR
-        # composition passed. Keep the release subset deterministic.
-        import re
+    def test_issue22_keyframe_checks_use_audited_all_pr_archive(self):
+        # Avoid a stale hand-picked list that can re-merge historical PRs
+        # into a second tree different from the packaged/tested candidate.
         composed = (WORKFLOW.parent / "issue22-cross-pr-integration.yml").read_text(
             encoding="utf-8"
         )
-        match = re.search(
-            r"^\s*for number in ((?:\d+\s+)*\d+); do$",
-            composed,
-            flags=re.MULTILINE,
-        )
-        self.assertIsNotNone(match, "Missing curated integration PR loop")
-        numbers = [int(value) for value in match.group(1).split()]
-        self.assertEqual(numbers, sorted(set(numbers)), "PR order must be ascending and unique")
-        self.assertTrue(
-            {218, 219, 221, 228, 229, 234, 241, 243, 244, 248,
-             251, 254, 255, 257, 259, 260}.issubset(set(numbers)),
-            "Do not omit setup, keyframe, export-QA or job-snapshot integration PRs",
-        )
-        # The triggering PR revision must remain pinned, not a moving head.
+        curated = composed.split("  setup-cross-pr-integration:", 1)[1].split(
+            "  composed-real-export-qa:", 1
+        )[0]
+        self.assertIn("needs: audit-open-pr-merge-compatibility", curated)
+        self.assertIn("name: all-open-prs-composed-source", curated)
+        self.assertIn("tar -xf all-open-prs-composed.tar -C composed", curated)
+        self.assertIn("working-directory: composed", curated)
+        self.assertNotIn("for number in ", curated)
+        self.assertNotIn("git merge", curated)
+        # The triggering PR revision remains pinned in the one audit.
         self.assertIn("EVENT_PR_HEAD_SHA", composed)
         self.assertIn(
-            'git fetch --no-tags origin "$EVENT_PR_HEAD_SHA:refs/remotes/pr/${number}"',
+            'refspec="${EVENT_PR_HEAD_SHA}:refs/remotes/audit-pr/${number}"',
             composed,
         )
 
