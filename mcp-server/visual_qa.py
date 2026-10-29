@@ -2,9 +2,71 @@
 
 import base64
 import binascii
+import zlib
 from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
+
+from editing import MAX_FRAME
+
+
+def _validate_png_container(raw: bytes) -> None:
+    """Reject malformed PNG chunks before Pillow discards their metadata.
+
+    Pillow can decode the pixels of a PNG even when an ancillary chunk has a
+    corrupt CRC or arbitrary bytes follow IEND. Neither is a trustworthy
+    single-frame preview from YMM4.
+    """
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("invalid PNG signature")
+    offset = 8
+    chunk_count = 0
+    seen_ihdr = seen_idat = seen_iend = idat_finished = False
+    seen_plte = False
+    while offset < len(raw):
+        chunk_count += 1
+        if chunk_count > 4096 or len(raw) - offset < 12:
+            raise ValueError("invalid PNG chunk count or header")
+        length = int.from_bytes(raw[offset:offset + 4], "big")
+        kind = raw[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if end > len(raw):
+            raise ValueError("truncated PNG chunk")
+        expected_crc = int.from_bytes(raw[offset + 8 + length:end], "big")
+        if zlib.crc32(raw[offset + 4:offset + 8 + length]) != expected_crc:
+            raise ValueError("PNG chunk CRC mismatch")
+        if not seen_ihdr:
+            if kind != b"IHDR" or length != 13:
+                raise ValueError("PNG must begin with IHDR")
+            seen_ihdr = True
+        elif kind == b"IHDR":
+            raise ValueError("duplicate PNG IHDR")
+        # Unknown critical chunks can change how the pixels are interpreted.
+        # Pillow may skip them, so reject before using the image for QA.
+        if any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in kind):
+            raise ValueError("invalid PNG chunk type")
+        if kind[2] & 0x20:
+            raise ValueError("invalid PNG reserved chunk type")
+        if (kind[0] & 0x20) == 0 and kind not in (b"IHDR", b"PLTE", b"IDAT", b"IEND"):
+            raise ValueError("unknown critical PNG chunk")
+        if kind == b"PLTE":
+            if seen_plte or seen_idat:
+                raise ValueError("PNG PLTE must be unique and precede IDAT")
+            seen_plte = True
+        if kind == b"IDAT":
+            if idat_finished:
+                raise ValueError("nonconsecutive PNG IDAT chunks")
+            seen_idat = True
+        elif seen_idat:
+            idat_finished = True
+        if kind == b"IEND":
+            if length != 0 or not seen_idat or end != len(raw):
+                raise ValueError("invalid PNG end")
+            seen_iend = True
+            break
+        offset = end
+    if not seen_iend:
+        raise ValueError("PNG is missing IEND")
 
 
 def thumbnail(image_b64: str) -> bytes:
@@ -14,6 +76,7 @@ def thumbnail(image_b64: str) -> bytes:
         raw = base64.b64decode(image_b64, validate=True)
         if len(raw) > 10_000_000:
             raise ValueError("preview image is too large")
+        _validate_png_container(raw)
         with Image.open(BytesIO(raw)) as image:
             if image.format != "PNG" or image.width * image.height > 32_000_000:
                 raise ValueError("preview must be a PNG of at most 32 megapixels")
@@ -60,9 +123,9 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     """Only mark observed frames; gaps between samples are never called exact boundaries."""
     if not isinstance(samples, list) or not 1 <= len(samples) <= 40:
         raise ValueError("samples must contain 1..40 captures")
-    if isinstance(step_frames, bool) or not isinstance(step_frames, int) or step_frames < 1:
+    if isinstance(step_frames, bool) or not isinstance(step_frames, int) or not 1 <= step_frames <= MAX_FRAME:
         raise ValueError("step_frames must be positive")
-    if isinstance(min_static_frames, bool) or not isinstance(min_static_frames, int) or min_static_frames < 1:
+    if isinstance(min_static_frames, bool) or not isinstance(min_static_frames, int) or not 1 <= min_static_frames <= MAX_FRAME:
         raise ValueError("min_static_frames must be positive")
     if not isinstance(black_as_error, bool) or not isinstance(white_as_error, bool):
         raise ValueError("black_as_error and white_as_error must be boolean")
@@ -70,7 +133,7 @@ def inspect(samples: list[tuple[int, bytes]], *, step_frames: int,
     for sample in samples:
         if (not isinstance(sample, tuple) or len(sample) != 2 or
                 isinstance(sample[0], bool) or not isinstance(sample[0], int) or
-                sample[0] <= last_frame or not isinstance(sample[1], bytes) or
+                sample[0] <= last_frame or sample[0] > MAX_FRAME or not isinstance(sample[1], bytes) or
                 len(sample[1]) != 64 * 36 * 3):
             raise ValueError("samples must have ascending frames and complete RGB thumbnails")
         last_frame = sample[0]

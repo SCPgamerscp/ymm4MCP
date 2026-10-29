@@ -1,0 +1,18 @@
+name: Project backup integrity
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify project snapshot integrity and failure cleanup
+        run: dotnet run --project tests/ProjectBackup.Tests/ProjectBackup.Tests.csproj --configuration Release

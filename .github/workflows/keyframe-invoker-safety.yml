@@ -1,0 +1,22 @@
+name: Keyframe invoker safety tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/KeyframeMethodInvoker.cs'
+      - 'tests/KeyframeInvokerSafety.Tests/**'
+      - '.github/workflows/keyframe-invoker-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keyframe-invoker-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/KeyframeInvokerSafety.Tests/KeyframeInvokerSafety.Tests.csproj --configuration Release

@@ -79,6 +79,9 @@ namespace YMM4McpPlugin
         {
             UpdateJob(job, "running", phase: "prepare", progress: 5, message: "出力パイプラインを探索中",
                 checkpoint: new { output_path = outputPath, format });
+            // The timeout covers native invocation AND file verification, not just
+            // the period after a native asynchronous export has returned.
+            var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
             // overwrite=true may leave the previous export at this path until the new encode starts.
             // A stable old file must never be reported as this job's completed output.
             (long length, DateTime lastWriteUtc)? previousOutput = null;
@@ -104,16 +107,16 @@ namespace YMM4McpPlugin
                 message: "書き出しを開始しました: " + started.method,
                 checkpoint: new { output_path = outputPath, method = started.method, target = started.target });
 
-            if (started.task != null)
+            if (started.task != null &&
+                !await ExportTaskDeadline.WaitForCompletion(started.task, deadline, token))
             {
-                var finished = await Task.WhenAny(started.task, Task.Delay(Timeout.Infinite, token));
-                token.ThrowIfCancellationRequested();
-                if (started.task.IsFaulted)
-                    throw started.task.Exception?.InnerException ?? started.task.Exception!;
-                await started.task;
+                UpdateJob(job, "failed", phase: "timeout",
+                    message: "書き出し処理が制限時間内に完了しませんでした",
+                    error: "timeout_seconds=" + timeoutSeconds, errorCode: "EXPORT_TIMEOUT",
+                    result: new { output_path = outputPath, invoked = started.method });
+                return;
             }
 
-            var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
             long lastSize = -1;
             int stable = 0;
             bool outputWasRemoved = false;

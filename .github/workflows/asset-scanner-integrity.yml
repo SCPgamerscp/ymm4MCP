@@ -1,0 +1,18 @@
+name: Asset scanner integrity
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  asset-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify bounded asset search and hash freshness
+        run: dotnet run --project tests/AssetScannerIntegrity.Tests/AssetScannerIntegrity.Tests.csproj --configuration Release

@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from http_host_validation import parse_allowed_hosts
+from http_body_limit import RequestBodyLimit
 
 
 def create_http_app(mcp_server, close_client):
@@ -43,6 +44,7 @@ def create_http_app(mcp_server, close_client):
             await manager.handle_request(scope, receive, send)
 
     application = Starlette(routes=[Route("/mcp", Endpoint(), methods=["GET", "POST", "DELETE"])], lifespan=lifespan)
+    limited_application = RequestBodyLimit(application)
 
     class AuthenticatedApplication:
         async def __call__(self, scope, receive, send):
@@ -69,7 +71,7 @@ def create_http_app(mcp_server, close_client):
                         any(name.lower() == b"origin" for name, _ in scope["headers"])):
                     await JSONResponse({"error": "TLS required; browser origins are not supported"}, status_code=403)(scope, receive, send)
                     return
-            await application(scope, receive, send)
+            await limited_application(scope, receive, send)
 
     return AuthenticatedApplication()
 

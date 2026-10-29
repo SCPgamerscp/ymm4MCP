@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 
 namespace YMM4McpPlugin
 {
@@ -19,6 +20,207 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("binding id and item_id must be nonempty, unambiguous identifiers");
             if (!seenLogicalIds.Add(logicalId))
                 throw new ArgumentException("duplicate logical binding id: " + logicalId);
+        }
+
+        // Reconcile may extend a partially applied plan, or replace a bound item
+        // that has been deleted. Never remap a binding while its old native item
+        // still exists, and never persist a binding to a nonexistent item.
+        internal static bool CompatibleBindingUpdate(
+            IEnumerable<(string Id, string ItemId, string? Revision)> previous,
+            IEnumerable<(string Id, string ItemId, string? Revision)> proposed,
+            IReadOnlyCollection<string>? liveItemIds)
+        {
+            if (previous == null || proposed == null || liveItemIds == null)
+                return false;
+            var live = new HashSet<string>(liveItemIds, StringComparer.Ordinal);
+            if (live.Count != liveItemIds.Count || live.Any(string.IsNullOrWhiteSpace))
+                return false;
+            var incoming = new Dictionary<string, (string ItemId, string? Revision)>(StringComparer.Ordinal);
+            var claimedItems = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in proposed)
+            {
+                if (!live.Contains(item.ItemId) || !claimedItems.Add(item.ItemId)
+                    || !incoming.TryAdd(item.Id, (item.ItemId, item.Revision)))
+                    return false;
+            }
+            var oldIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in previous)
+            {
+                if (!oldIds.Add(item.Id)) return false;
+                if (live.Contains(item.ItemId))
+                {
+                    if (!incoming.TryGetValue(item.Id, out var next)
+                        || !string.Equals(next.ItemId, item.ItemId, StringComparison.Ordinal)
+                        || !string.Equals(next.Revision, item.Revision, StringComparison.Ordinal))
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        // Persisted edits.json is untrusted input, even if normal API writes were
+        // validated. Never restore malformed or ambiguous idempotency bindings.
+        internal static bool ValidStoredBindingRecord(
+            string? key, string? planHash,
+            IEnumerable<(string? Id, string? ItemId)>? items)
+        {
+            if (string.IsNullOrWhiteSpace(key) || key.Length > 128 || key.Trim() != key
+                || planHash == null || planHash.Length is < 16 or > 128
+                || items == null)
+                return false;
+            var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+            var nativeIds = new HashSet<string>(StringComparer.Ordinal);
+            int count = 0;
+            foreach (var (id, itemId) in items)
+            {
+                if (++count > MaxBindings || id == null || itemId == null
+                    || !nativeIds.Add(itemId))
+                    return false;
+                try { ValidateBinding(id, itemId, logicalIds); }
+                catch (ArgumentException) { return false; }
+            }
+            return true;
+        }
+
+        // A checkpoint is only safe to use when every native item can be identified
+        // uniquely. An empty list is valid for a genuinely empty timeline.
+        internal static void ValidateSnapshotItemIds(IEnumerable<string> itemIds)
+        {
+            if (itemIds == null) throw new ArgumentException("checkpoint item ids are missing");
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in itemIds)
+            {
+                if (string.IsNullOrWhiteSpace(id) || id.Trim() != id ||
+                    id.Any(char.IsControl) || !seen.Add(id))
+                    throw new ArgumentException("checkpoint item ids are missing, malformed, or duplicated");
+            }
+        }
+
+        // Rollback deletes items. Never apply a checkpoint to an unknown,
+        // unsaved, or different project even when timeline IDs happen to match.
+        internal static bool SameProject(string? expected, string? current)
+        {
+            if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(current))
+                return false;
+            try
+            {
+                return string.Equals(Path.GetFullPath(expected), Path.GetFullPath(current),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        }
+
+        // Checkpoint backups must belong to the same still-saved project at
+        // both capture and publication time. A project switch or unsaved edit
+        // during an asynchronous copy must invalidate the backup.
+        internal static bool IsStableSavedProject(
+            string? expected, string? current, bool? isSaved) =>
+            isSaved is true && SameProject(expected, current);
+
+        // Checkpoint records are restored from JSON. Never allow a forged
+        // BackupPath to delete files outside the private checkpoint directory.
+        internal static bool IsOwnedBackupPath(string? path, string backupDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(backupDirectory))
+                return false;
+            try
+            {
+                string full = Path.GetFullPath(path);
+                string parent = Path.GetDirectoryName(full) ?? "";
+                string name = Path.GetFileName(full);
+                return string.Equals(parent, Path.GetFullPath(backupDirectory),
+                           StringComparison.OrdinalIgnoreCase) &&
+                       name.StartsWith("cp_", StringComparison.Ordinal) &&
+                       name.EndsWith(".ymmp", StringComparison.OrdinalIgnoreCase) &&
+                       name.Length is >= 16 and <= 72 &&
+                       name[3..^5].All(char.IsLetterOrDigit) &&
+                       name[3..^5].All(ch => ch <= 127);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        }
+
+        // Do not prune the file currently opened by the editor. If the active
+        // project cannot be identified, preserve the backup rather than risk
+        // deleting a live project document.
+        internal static bool CanPruneBackup(string? path, string backupDirectory, string? currentProject) =>
+            !string.IsNullOrWhiteSpace(currentProject) &&
+            IsOwnedBackupPath(path, backupDirectory) &&
+            !SameProject(path, currentProject);
+
+        // Bind a restorable backup to the bytes that were actually copied. An
+        // external edit (even with preserved size and timestamps) invalidates it.
+        internal static string ComputeBackupSha256(string path)
+        {
+            using var stream = File.OpenRead(path);
+            return Convert.ToHexString(SHA256.HashData(stream));
+        }
+
+        internal static bool IsValidBackupSha256(string? hash) =>
+            hash is { Length: 64 } && hash.All(ch =>
+                (ch >= '0' && ch <= '9') ||
+                (ch >= 'a' && ch <= 'f') ||
+                (ch >= 'A' && ch <= 'F'));
+
+        // A full restore opens a saved checkpoint backup as a separate project.
+        // Never open an arbitrary path supplied by a persisted checkpoint index,
+        // a backup for a different project, an empty file, or a reparse point.
+        internal static bool IsRestorableBackup(
+            string? path, string backupDirectory, string? checkpointId,
+            string? checkpointProject, string? currentProject, string? expectedSha256)
+        {
+            if (string.IsNullOrWhiteSpace(checkpointId) ||
+                !IsValidBackupSha256(expectedSha256) ||
+                !IsOwnedBackupPath(path, backupDirectory) ||
+                !SameProject(checkpointProject, currentProject))
+                return false;
+            try
+            {
+                if (!string.Equals(Path.GetFileName(path),
+                        checkpointId + ".ymmp", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                var attributes = File.GetAttributes(path!);
+                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                    return false;
+                return new FileInfo(path!).Length > 0 &&
+                    string.Equals(ComputeBackupSha256(path!), expectedSha256,
+                        StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                       ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        }
+
+        // Hash the source before and after the copy, and verify the published
+        // backup. If the source changes during copying, never publish a backup
+        // that could be mistaken for a consistent project snapshot.
+        internal static string CopyBackupVerified(string source, string destination)
+        {
+            string before = ComputeBackupSha256(source);
+            try
+            {
+                CopyBackupAtomically(source, destination);
+                string copied = ComputeBackupSha256(destination);
+                string after = ComputeBackupSha256(source);
+                if (!string.Equals(before, copied, StringComparison.Ordinal) ||
+                    !string.Equals(after, copied, StringComparison.Ordinal))
+                    throw new IOException("project file changed while copying checkpoint backup");
+                return copied;
+            }
+            catch
+            {
+                try { File.Delete(destination); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                throw;
+            }
         }
 
         // A failed copy must never leave a file with the final .ymmp backup name.
