@@ -23,6 +23,16 @@ def _insert(raw, name, payload):
     return raw[:33] + _chunk(name, payload) + raw[33:]
 
 
+def _icc_profile(size, fill=b"D"):
+    profile = bytearray(fill * size)
+    profile[:4] = size.to_bytes(4, "big")
+    profile[16:20] = b"RGB "
+    profile[20:24] = b"XYZ "
+    profile[36:40] = b"acsp"
+    profile[128:132] = b"\\x00" * 4
+    return bytes(profile)
+
+
 class CumulativeMetadataBudgetTests(unittest.TestCase):
     def invalid(self, raw):
         with self.assertRaises(ValueError):
@@ -60,7 +70,7 @@ class CumulativeMetadataBudgetTests(unittest.TestCase):
                       b"Title\x00\x01\x00ja\x00\x00" +
                       zlib.compress(b"C" * 400_000))
         raw = _insert(raw, b"iCCP",
-                      b"Profile\x00\x00" + zlib.compress(b"D" * 400_000))
+                      b"Profile\x00\x00" + zlib.compress(_icc_profile(400_000)))
         visual_qa._validate_png_container(raw)
 
 
