@@ -137,6 +137,34 @@ namespace YMM4McpPlugin
             }
         }
 
+        // A full restore opens a saved checkpoint backup as a separate project.
+        // Never open an arbitrary path supplied by a persisted checkpoint index,
+        // a backup for a different project, an empty file, or a reparse point.
+        internal static bool IsRestorableBackup(
+            string? path, string backupDirectory, string? checkpointId,
+            string? checkpointProject, string? currentProject)
+        {
+            if (string.IsNullOrWhiteSpace(checkpointId) ||
+                !IsOwnedBackupPath(path, backupDirectory) ||
+                !SameProject(checkpointProject, currentProject))
+                return false;
+            try
+            {
+                if (!string.Equals(Path.GetFileName(path),
+                        checkpointId + ".ymmp", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                var attributes = File.GetAttributes(path!);
+                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                    return false;
+                return new FileInfo(path!).Length > 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                       ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        }
+
         // A failed copy must never leave a file with the final .ymmp backup name.
         internal static void CopyBackupAtomically(string source, string destination)
         {
