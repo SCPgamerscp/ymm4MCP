@@ -433,7 +433,8 @@ def analyze_frames_dir(
                 return {"success": False, "source": "frames_dir",
                         "error": "frames_meta contains duplicate physical PNG frames"}
             seen_capture_file_ids.add(file_id)
-        size = info.st_size
+        # Keep the existing size-check seam used by preflight regression tests.
+        size = os.path.getsize(path)
         if size == 0:
             return {"success": False, "source": "frames_dir",
                     "error": "PNG frame is empty"}
