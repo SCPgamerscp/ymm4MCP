@@ -31,8 +31,11 @@ namespace YMM4McpPlugin
             foreach (var frame in frames)
                 if (frame < 0 || !unique.Add(frame)) return false;
 
-            if (action == "clear") return frames.Count == 0;
-            if (action == "remove") return !unique.Contains(at);
+            // A native remove can drop a frame while leaving its value behind.
+            // Never acknowledge a removal with a misaligned collection.
+            bool aligned = values.Count == frames.Count || values.Count == frames.Count + 1;
+            if (action == "clear") return frames.Count == 0 && values.Count <= 1;
+            if (action == "remove") return !unique.Contains(at) && aligned;
             if (action != "set" || !requested.HasValue ||
                 !double.IsFinite(requested.Value)) return false;
 
