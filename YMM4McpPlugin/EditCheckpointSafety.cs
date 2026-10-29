@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 
 namespace YMM4McpPlugin
 {
@@ -144,14 +145,29 @@ namespace YMM4McpPlugin
             }
         }
 
+        // Bind a restorable backup to the bytes that were actually copied. An
+        // external edit (even with preserved size and timestamps) invalidates it.
+        internal static string ComputeBackupSha256(string path)
+        {
+            using var stream = File.OpenRead(path);
+            return Convert.ToHexString(SHA256.HashData(stream));
+        }
+
+        internal static bool IsValidBackupSha256(string? hash) =>
+            hash is { Length: 64 } && hash.All(ch =>
+                (ch >= '0' && ch <= '9') ||
+                (ch >= 'a' && ch <= 'f') ||
+                (ch >= 'A' && ch <= 'F'));
+
         // A full restore opens a saved checkpoint backup as a separate project.
         // Never open an arbitrary path supplied by a persisted checkpoint index,
         // a backup for a different project, an empty file, or a reparse point.
         internal static bool IsRestorableBackup(
             string? path, string backupDirectory, string? checkpointId,
-            string? checkpointProject, string? currentProject)
+            string? checkpointProject, string? currentProject, string? expectedSha256)
         {
             if (string.IsNullOrWhiteSpace(checkpointId) ||
+                !IsValidBackupSha256(expectedSha256) ||
                 !IsOwnedBackupPath(path, backupDirectory) ||
                 !SameProject(checkpointProject, currentProject))
                 return false;
@@ -163,12 +179,39 @@ namespace YMM4McpPlugin
                 var attributes = File.GetAttributes(path!);
                 if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
                     return false;
-                return new FileInfo(path!).Length > 0;
+                return new FileInfo(path!).Length > 0 &&
+                    string.Equals(ComputeBackupSha256(path!), expectedSha256,
+                        StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                        ArgumentException or NotSupportedException)
             {
                 return false;
+            }
+        }
+
+        // Hash the source before and after the copy, and verify the published
+        // backup. If the source changes during copying, never publish a backup
+        // that could be mistaken for a consistent project snapshot.
+        internal static string CopyBackupVerified(string source, string destination)
+        {
+            string before = ComputeBackupSha256(source);
+            try
+            {
+                CopyBackupAtomically(source, destination);
+                string copied = ComputeBackupSha256(destination);
+                string after = ComputeBackupSha256(source);
+                if (!string.Equals(before, copied, StringComparison.Ordinal) ||
+                    !string.Equals(after, copied, StringComparison.Ordinal))
+                    throw new IOException("project file changed while copying checkpoint backup");
+                return copied;
+            }
+            catch
+            {
+                try { File.Delete(destination); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                throw;
             }
         }
 
