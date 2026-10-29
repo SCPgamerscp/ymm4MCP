@@ -184,4 +184,43 @@ Check(!Verified("clear", 0, null, Array.Empty<int>(), new[] { 1.0, 2.5 }),
 Check(!Verified("clear", 0, null, new[] { 10 }, new[] { 1.0, 2.5 }),
     "native clear leaving frames must fail");
 
+// Host reflection readback must never silently discard malformed entries.
+// Previously ReadFrameList/ReadValueList skipped them, which could make a
+// partially corrupted native animation look like a successful edit.
+static void RejectObserved(Action read, string reason)
+{
+    try { read(); }
+    catch (InvalidOperationException) { return; }
+    throw new Exception("Unsafe keyframe readback was accepted: " + reason);
+}
+var observedFrames = KeyframeMutationVerification.ParseObservedFrames(new object[] { 0, 12 });
+Check(observedFrames.SequenceEqual(new[] { 0, 12 }),
+    "valid host frames must preserve their order and count");
+var observedValues = KeyframeMutationVerification.ParseObservedValues(
+    new object[] { new { Value = 1.25 }, new { Value = 2.5 } },
+    entry => entry.GetType().GetProperty("Value")?.GetValue(entry));
+Check(observedValues.SequenceEqual(new[] { 1.25, 2.5 }),
+    "wrapped host values must preserve their order and count");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedFrames(
+    new object?[] { 0, null, 12 }), "null frame must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedFrames(
+    new object[] { 0, "not-a-frame", 12 }), "malformed frame must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedFrames(
+    new object[] { 0, -1, 12 }), "negative frame must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
+    new object?[] { 1.0, null, 2.0 }, entry => entry),
+    "null value must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
+    new object[] { 1.0, "invalid", 2.0 }, entry => entry),
+    "malformed value must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
+    new object[] { 1.0, double.NaN, 2.0 }, entry => entry),
+    "NaN value must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
+    new object[] { 1.0, double.PositiveInfinity, 2.0 }, entry => entry),
+    "infinite value must not disappear");
+RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
+    new object[] { 1.0 }, entry => null),
+    "unreadable wrapped value must not disappear");
+
 Console.WriteLine("Keyframe selector and mutation readback safety tests passed");
