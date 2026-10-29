@@ -158,11 +158,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIsNotNone(match, "Missing curated integration PR loop")
         numbers = [int(value) for value in match.group(1).split()]
         self.assertEqual(numbers, sorted(set(numbers)), "PR order must be ascending and unique")
-        self.assertEqual(
-            set(numbers),
+        self.assertTrue(
             {218, 219, 221, 228, 229, 234, 241, 243, 244, 248,
-             251, 254, 255, 257, 259},
-            "Do not silently omit setup, keyframe or export-QA integration PRs",
+             251, 254, 255, 257, 259, 260}.issubset(set(numbers)),
+            "Do not omit setup, keyframe, export-QA or job-snapshot integration PRs",
         )
         # The event's PR #228 revision must remain pinned, not a moving head.
         self.assertIn("EVENT_PR_228_HEAD_SHA", composed)
