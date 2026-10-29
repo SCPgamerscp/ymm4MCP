@@ -111,9 +111,14 @@ class GeminiFrameOrderIntegrityTests(unittest.TestCase):
         self.assertIn("RIFF/WAVE", result["error"])
         self.client.models.generate_content.assert_not_called()
 
-    def test_valid_wav_header_is_accepted(self):
+    def test_complete_wav_is_accepted(self):
+        import wave
         audio = self.folder / "sound.wav"
-        audio.write_bytes(b"RIFF\x04\x00\x00\x00WAVE")
+        with wave.open(str(audio), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(8000)
+            wav.writeframes(bytes(2))
         result = self.analyze(audio_path=str(audio))
         self.assertTrue(result["success"])
         self.client.models.generate_content.assert_called_once()
