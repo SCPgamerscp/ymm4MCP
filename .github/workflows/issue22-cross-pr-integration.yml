@@ -349,3 +349,61 @@ jobs:
             throw "Expected one nonempty .ymme, found $($packages.Count)"
           }
           Write-Output "All-open-PR package built (not published): $($packages[0].Name)"
+      - name: Validate and bundle disposable all-PR acceptance candidate (#22/#140)
+        shell: pwsh
+        run: |
+          # The all-PR .ymme used to vanish with the runner. Preserve the exact
+          # audited candidate for a human YMM4 4.56.1.1 installation test.
+          # This is an Actions artifact, NEVER a public GitHub Release.
+          $version = (dotnet msbuild composed/YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Cannot determine a safe candidate version: $version"
+          }
+          $ymmePath = "composed/artifacts/YMM4McpPlugin-$version.ymme"
+          if (-not (Test-Path -LiteralPath $ymmePath -PathType Leaf)) {
+            throw "Missing composed plugin package: $ymmePath"
+          }
+          $ymme = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ymmePath).Path)
+          try {
+            $actual = @($ymme.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName })
+            $expected = @('YMM4McpPlugin/YMM4McpPlugin.dll', 'YMM4McpPlugin/YMM4McpPlugin.deps.json')
+            if (@(Compare-Object $expected $actual).Count -ne 0) {
+              throw "Unexpected composed .ymme contents: $($actual -join ', ')"
+            }
+          }
+          finally { $ymme.Dispose() }
+          # The source tree is a git archive of the audited merge, not the
+          # runner workspace. Keep the same mcp-server/ prefix as the Release ZIP.
+          $serverPath = "composed/artifacts/YMM4McpServer-$version.zip"
+          if (Test-Path -LiteralPath $serverPath) { throw "Candidate ZIP already exists: $serverPath" }
+          [IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path -LiteralPath composed/mcp-server).Path,
+            $serverPath, [IO.Compression.CompressionLevel]::Optimal, $true)
+          $server = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $serverPath).Path)
+          try {
+            $paths = @($server.Entries | ForEach-Object { $_.FullName })
+            foreach ($required in @(
+              'mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/install.cmd',
+              'mcp-server/check_connection.py', 'mcp-server/requirements.txt',
+              'mcp-server/skills/ymm4-jikkyou/SKILL.md'
+            )) {
+              if ($paths -notcontains $required) { throw "Missing candidate file: $required" }
+            }
+            $forbidden = @($paths | Where-Object {
+              $_ -match '(?i)(^|/)(connection\.json|settings\.local\.json|\.env(\.[^/]*)?|\.venv|__pycache__)(/|$)|\.pyc$'
+            })
+            if ($forbidden.Count -gt 0) {
+              throw "Sensitive or ephemeral files in candidate ZIP: $($forbidden -join ', ')"
+            }
+          }
+          finally { $server.Dispose() }
+          Write-Output "Disposable all-open-PR candidate ready: $ymmePath and $serverPath"
+      - uses: actions/upload-artifact@v4
+        with:
+          # Explicitly not a tag/Release; expires after seven days.
+          name: all-open-prs-disposable-acceptance
+          path: |
+            composed/artifacts/YMM4McpPlugin-*.ymme
+            composed/artifacts/YMM4McpServer-*.zip
+          if-no-files-found: error
+          retention-days: 7
