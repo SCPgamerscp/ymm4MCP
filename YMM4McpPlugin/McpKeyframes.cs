@@ -189,19 +189,22 @@ namespace YMM4McpPlugin
             }
             else
             {
-                foreach (var iv in rawItems)
-                {
-                    var info = ReadItemInfo(iv);
-                    if (info.frame == frame && info.layer == layer)
+                // Do not stop at the first coordinate match: YMM4 can have
+                // multiple overlapping items on the same frame/layer.
+                var match = KeyframeSelectorSafety.FindUniqueCoordinateItem(
+                    rawItems, frame, layer, iv =>
                     {
-                        if (KeyframeSelectorSafety.IsAmbiguousMatch(target, info.item))
-                            return (null, 0, 0, Failure("ITEM_COORDINATES_AMBIGUOUS",
-                                "同じframe/layerに複数のアイテムがあります。item_idで指定してください"));
-                        target = info.item;
-                        foundFrame = info.frame;
-                        foundLayer = info.layer;
-                        break;
-                    }
+                        var info = ReadItemInfo(iv);
+                        return (info.item, info.frame, info.layer);
+                    });
+                if (match.ambiguous)
+                    return (null, 0, 0, Failure("ITEM_COORDINATES_AMBIGUOUS",
+                        "同じframe/layerに複数のアイテムがあります。item_idで指定してください"));
+                target = match.item;
+                if (target != null)
+                {
+                    foundFrame = frame;
+                    foundLayer = layer;
                 }
             }
             if (target == null)
