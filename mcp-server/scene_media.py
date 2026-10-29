@@ -5,6 +5,7 @@ import re
 from editing import MAX_FRAME
 
 MAX_SCENE_ITEMS = 50_000
+MAX_TOTAL_SCENE_ITEMS = 100_000
 MAX_SCENES = 200
 
 
@@ -60,12 +61,22 @@ def with_coverage(index: dict) -> dict:
             or not 1 <= len(index["scenes"]) <= MAX_SCENES):
         raise ValueError("scene index requires 1..200 scenes")
     seen_ids = set()
+    assigned_item_ids = set()
+    previous_end = 0
+    total_scene_items = 0
     for scene in index["scenes"]:
         if not isinstance(scene, dict):
             raise ValueError("scene must be an object")
+        start, end = _scene_range(scene)
+        if start < previous_end:
+            raise ValueError("scene ranges must be ordered and non-overlapping")
+        previous_end = end
         items = scene.get("items")
         if not isinstance(items, list) or len(items) > MAX_SCENE_ITEMS:
             raise ValueError("scene items must be a bounded array")
+        total_scene_items += len(items)
+        if total_scene_items > MAX_TOTAL_SCENE_ITEMS:
+            raise ValueError("scene index exceeds aggregate item budget")
         item_ids = set()
         for item in items:
             if not isinstance(item, dict):
@@ -75,6 +86,7 @@ def with_coverage(index: dict) -> dict:
                 if not _safe_identifier(identity, 256) or identity in item_ids:
                     raise ValueError("scene item IDs must be distinct nonempty strings")
                 item_ids.add(identity)
+                assigned_item_ids.add(identity)
             if "frame" in item or "end_frame" in item:
                 frame, source_end = item.get("frame"), item.get("end_frame")
                 if (type(frame) is not int or type(source_end) is not int or
@@ -87,6 +99,22 @@ def with_coverage(index: dict) -> dict:
                         visible_end != min(end, source_end) or
                         type(visible_start) is not int or type(visible_end) is not int):
                     raise ValueError("scene visible range contradicts source item")
+            if "relative_start_frame" in item or "relative_end_frame" in item:
+                visible_start = item.get("visible_start_frame")
+                visible_end = item.get("visible_end_frame")
+                relative_start = item.get("relative_start_frame")
+                relative_end = item.get("relative_end_frame")
+                if (type(visible_start) is not int or type(visible_end) is not int or
+                        type(relative_start) is not int or type(relative_end) is not int or
+                        relative_start != visible_start - start or
+                        relative_end != visible_end - start):
+                    raise ValueError("scene relative item range contradicts visible range")
+            if "crosses_boundary" in item:
+                boundary = item["crosses_boundary"]
+                if (type(boundary) is not bool or
+                        "frame" not in item or "end_frame" not in item or
+                        boundary != (frame < start or source_end > end)):
+                    raise ValueError("scene boundary flag contradicts source item")
         if "item_count" in scene and (type(scene["item_count"]) is not int or
                                        scene["item_count"] != len(items)):
             raise ValueError("scene item_count does not match item evidence")
@@ -95,6 +123,16 @@ def with_coverage(index: dict) -> dict:
             if not _safe_identifier(identifier, 64) or identifier in seen_ids:
                 raise ValueError("scene IDs must be distinct nonempty strings")
             seen_ids.add(identifier)
+    if "item_count" in index or "unassigned_item_ids" in index:
+        unassigned = index.get("unassigned_item_ids")
+        total = index.get("item_count")
+        if (type(total) is not int or total < 0 or
+                not isinstance(unassigned, list) or
+                any(not _safe_identifier(identity, 256) for identity in unassigned) or
+                len(set(unassigned)) != len(unassigned) or
+                assigned_item_ids.intersection(unassigned) or
+                total != len(assigned_item_ids) + len(unassigned)):
+            raise ValueError("scene index item count or unassigned identities are inconsistent")
     # Unknown host item types are excluded rather than assumed to provide a picture.
     categories = {"visual": ("videoitem", "imageitem", "textitem", "tachieitem",
                              "tachiefaceitem", "faceitem"),
