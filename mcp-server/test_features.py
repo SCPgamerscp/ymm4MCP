@@ -80,7 +80,8 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual((result["reason_code"], result["suggested_action"]),
                          ("QA_REGRESSED", "consider_checkpoint_rollback"))
         self.assertEqual(editing.evaluate_qa_gate(failed, [failed])["reason_code"], "QA_STALLED")
-        changed = {**failed, "issues": [{"code": "OTHER", "severity": "error"}]}
+        changed_issues = [{"code": "OTHER", "severity": "error"}]
+        changed = {**failed, "issues": changed_issues, "problems": changed_issues}
         self.assertEqual(editing.evaluate_qa_gate(changed, [failed], max_repairs=1)["reason_code"],
                          "REPAIR_LIMIT_REACHED")
         self.assertEqual(editing.evaluate_qa_gate(failed, max_seconds=30, elapsed_seconds=30)["reason_code"],
