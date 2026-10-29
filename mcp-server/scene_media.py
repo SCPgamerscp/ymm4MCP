@@ -161,6 +161,18 @@ def with_coverage(index: dict) -> dict:
         for item in items:
             if not isinstance(item, dict):
                 raise ValueError("scene item must be an object")
+            kind = item.get("type")
+            if (kind is not None and
+                    (not isinstance(kind, str) or not kind.strip() or
+                     len(kind) > 128 or any(ord(c) < 32 or 127 <= ord(c) <= 159
+                                            for c in kind))):
+                raise ValueError("scene item type must be a bounded readable string")
+            # Validate unknown item spans too: excluding their type from QA
+            # must not allow malformed evidence to bypass integrity checks.
+            if "visible_start_frame" in item or "visible_end_frame" in item:
+                left, right = item.get("visible_start_frame"), item.get("visible_end_frame")
+                if type(left) is not int or type(right) is not int or right <= left:
+                    raise ValueError("scene item visible range must be valid")
             if "item_id" in item:
                 identity = item["item_id"]
                 if not _safe_identifier(identity, 256) or identity in item_ids:
