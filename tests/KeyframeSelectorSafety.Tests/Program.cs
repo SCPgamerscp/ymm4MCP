@@ -126,6 +126,47 @@ Check(KeyframeMutationVerification.HasObservableChange(
 Check(!KeyframeMutationVerification.HasObservableChange(
         new[] { 0 }, new[] { 1.0 }, new[] { 0 }, new[] { 1.0 }),
     "unchanged native failures must not spuriously advance revisions");
+// The requested key can be correct even when the host corrupts other keys.
+static bool Preserved(string action, int at, int[] beforeFrames, double[] beforeValues,
+    int[] afterFrames, double[] afterValues)
+    => KeyframeMutationVerification.PreservesUnrelatedKeys(
+        action, at, beforeFrames, beforeValues, afterFrames, afterValues);
+Check(Preserved("set", 10, Array.Empty<int>(), new[] { 1.0 },
+        new[] { 10 }, new[] { 1.0, 2.5 }),
+    "new key insertion must preserve implicit base value");
+Check(Preserved("set", 10, new[] { 0, 10, 20 }, new[] { 1.0, 2.0, 3.0 },
+        new[] { 0, 10, 20 }, new[] { 1.0, 2.5, 3.0 }),
+    "editing a key may change only the requested value");
+Check(Preserved("remove", 10, new[] { 0, 10, 20 }, new[] { 1.0, 2.0, 3.0 },
+        new[] { 0, 20 }, new[] { 1.0, 3.0 }),
+    "removal must preserve other explicit key values");
+Check(Preserved("remove", 10, new[] { 10, 20 }, new[] { 1.0, 2.0, 3.0 },
+        new[] { 20 }, new[] { 1.0, 3.0 }),
+    "removal must preserve implicit start value");
+Check(!Preserved("set", 10, new[] { 0, 10 }, new[] { 1.0, 2.0 },
+        new[] { 0, 10 }, new[] { 99.0, 2.5 }),
+    "native success must not overwrite a different key");
+Check(!Preserved("remove", 10, new[] { 0, 10, 20 }, new[] { 1.0, 2.0, 3.0 },
+        new[] { 0 }, new[] { 1.0 }),
+    "native removal must not delete an unrelated key");
+Check(!Preserved("set", 10, new[] { 0 }, new[] { 1.0 },
+        new[] { 0, 10, 20 }, new[] { 1.0, 2.5, 9.0 }),
+    "native insertion must not introduce unrelated keys");
+Check(!Preserved("set", 10, new[] { 0 }, new[] { 1.0 },
+        new[] { 0, 10 }, new[] { 1.0 }),
+    "a frame-only partial insertion must fail preservation");
+Check(!Preserved("set", 10, new[] { 0 }, new[] { 1.0 },
+        new[] { 0, 10, 10 }, new[] { 1.0, 2.5, 2.5 }),
+    "duplicate frame layout must fail preservation");
+Check(!Preserved("set", 10, new[] { 0 }, new[] { 1.0 },
+        new[] { 0, 10 }, new[] { 0.5, 1.0, 2.5 }),
+    "implicit start combined with explicit zero must fail as ambiguous");
+Check(Preserved("set", 10, new[] { 20 }, new[] { 1.0, 3.0 },
+        new[] { 0, 10, 20 }, new[] { 1.0, 2.5, 3.0 }),
+    "logical values may survive a change from implicit to explicit start layout");
+Check(Preserved("clear", 0, new[] { 0, 10 }, new[] { 1.0, 2.5 },
+        Array.Empty<int>(), Array.Empty<double>()),
+    "clear intentionally removes all unrelated keys");
 Check(Verified("remove", 10, null, new[] { 0 }, new[] { 1.0 }),
     "native removal must confirm frame absence");
 Check(!Verified("remove", 10, null, new[] { 0, 10 }, new[] { 1.0, 2.5 }),
