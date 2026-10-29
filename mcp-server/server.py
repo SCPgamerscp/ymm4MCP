@@ -623,7 +623,8 @@ async def run_bgm_ducking(args: dict) -> dict:
     if (not isinstance(snapshot, dict) or
             ("success" in snapshot and snapshot["success"] is not True) or
             "error" in snapshot or "error_code" in snapshot or
-            not isinstance(snapshot.get("items"), list)):
+            not isinstance(snapshot.get("items"), list) or
+            len(snapshot["items"]) > 10000):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
     matches = [i for i in snapshot["items"] if isinstance(i, dict) and i.get("item_id") == item_id]
     if len(matches) > 1:
@@ -693,6 +694,9 @@ async def run_bgm_ducking(args: dict) -> dict:
             "error" in state or "error_code" in state or
             state.get("revision") != revision):
         return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
+    # A keyframe response for another item must never authorize a mutation.
+    if "item_id" in state and state["item_id"] != item_id:
+        return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
     if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
         return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
     animations = [a for a in state["animations"]
@@ -747,6 +751,7 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {**conflict, "error_code": "BGM_DUCKING_" + conflict["error_code"],
                 "applied": [], "backup_path": backup}
     applied = []
+    seen_revisions = {revision}
     for point in points:
         payload = {"item_id": item_id, "expected_revision": revision,
                    "prop": "Volume", "action": "set", **point}
@@ -767,10 +772,20 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
-        if changed["revision"] == revision:
+        # The host includes these fields. If supplied, they must identify the
+        # exact operation that was requested, not another timeline item/key.
+        if (("item_id" in changed and changed["item_id"] != item_id) or
+                ("prop" in changed and changed["prop"] != "Volume") or
+                ("action" in changed and changed["action"] != "set") or
+                ("at" in changed and changed["at"] != point["at"])):
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
+        if changed["revision"] in seen_revisions:
+            return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
+                    "applied": applied, "details": changed, "backup_path": backup,
+                    "outcome_unknown": True}
+        seen_revisions.add(changed["revision"])
         applied.append(point)
         revision = changed["revision"]
     try:
@@ -779,7 +794,8 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_UNKNOWN",
                 "error": str(exc), "applied": applied, "backup_path": backup,
                 "outcome_unknown": True}
-    if not ducking.verify_keyframes(checked, revision, points, baseline):
+    if not ducking.verify_keyframes(checked, revision, points, baseline,
+                                    expected_item_id=item_id):
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_FAILED",
                 "applied": applied, "backup_path": backup, "details": checked}
     return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
