@@ -140,6 +140,34 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["success"])
         self.assertTrue(result["dry_run"])
 
+    async def test_backup_must_not_alias_active_project(self):
+        project = {"success": True, "isSaved": True,
+                   "projectPath": "C:\\\\PROJECT\\\\CP.YMMP"}
+        with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS, project])),
+              patch.object(server, "ymm4_post", AsyncMock(return_value=BACKUP)) as post,
+              patch.object(server.quality_guard, "verify_snapshot",
+                           new_callable=AsyncMock) as guard):
+            result = await server.dispatch({
+                "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_BACKUP_REQUIRED")
+        self.assertEqual(post.await_count, 1)
+        guard.assert_not_awaited()
+
+    async def test_malformed_snapshot_guard_response_stops_mutations(self):
+        for conflict in (False, [], {"error_code": None}, {"unexpected": True}):
+            with (self.subTest(conflict=repr(conflict)),
+                  patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                      ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                  patch.object(server, "ymm4_post", AsyncMock(return_value=BACKUP)) as post,
+                  patch.object(server.quality_guard, "verify_snapshot",
+                               AsyncMock(return_value=conflict))):
+                result = await server.dispatch({
+                    "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+            self.assertEqual(result["error_code"], "BGM_DUCKING_SNAPSHOT_UNKNOWN")
+            self.assertEqual(result["backup_path"], BACKUP["backup_path"])
+            self.assertEqual(result["applied"], [])
+            self.assertEqual(post.await_count, 1)
+
     async def _apply(self, mutation_responses, *, final_readback=None):
         gets = [ITEMS, KEYS, {"success": True, "isSaved": True}]
         if final_readback is not None:
