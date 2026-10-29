@@ -50,6 +50,28 @@ class HostBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["error_code"], "BGM_REVISION_UNAVAILABLE")
                 self.assertEqual(get.await_count, 1)
 
+    async def test_stale_expected_revision_prevents_keyframe_reads(self):
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)) as get:
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "expected_revision": "old-r1"})
+        self.assertEqual(result["error_code"], "REVISION_CONFLICT")
+        self.assertEqual(get.await_count, 1)
+
+    async def test_malformed_expected_revision_is_rejected(self):
+        for expected in (" r1", "r1\\x00", "x" * 257):
+            with (self.subTest(expected=repr(expected)),
+                  patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)) as get):
+                with self.assertRaises(ValueError):
+                    await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                           "expected_revision": expected})
+                self.assertEqual(get.await_count, 1)
+
+    async def test_matching_expected_revision_still_plans(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "expected_revision": "r1"})
+        self.assertTrue(result["success"])
+
     async def test_invalid_host_voice_id_blocks_planning(self):
         for bad_id in (" voice:1", "voice:1\x00", "x" * 1025):
             items = {"items": [BGM, {**VOICE, "item_id": bad_id}]}
