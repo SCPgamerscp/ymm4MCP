@@ -41,7 +41,7 @@ namespace YMM4McpPlugin
             {
                 // File.Exists can return false for access-denied errors, which
                 // would incorrectly auto-start with defaults. Read directly.
-                var settings = JsonSerializer.Deserialize<McpSettings>(File.ReadAllText(SettingsPath))
+                var settings = JsonSerializer.Deserialize<McpSettings>(SettingsFileSafety.ReadValidated(SettingsPath))
                     ?? throw new InvalidDataException("MCP設定ファイルが空です");
                 settings.Validate();
                 return settings;
@@ -73,9 +73,7 @@ namespace YMM4McpPlugin
         {
             Validate();
             PrepareDirectory();
-            string temp = SettingsPath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(this));
-            File.Move(temp, SettingsPath, true);
+            SettingsFileSafety.WriteAtomic(SettingsPath, JsonSerializer.Serialize(this));
         }
     }
 }

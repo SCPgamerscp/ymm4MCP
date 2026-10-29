@@ -1,0 +1,23 @@
+name: Export invocation policy regression
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/ExportInvocationPolicy.cs'
+      - 'tests/ExportInvocationPolicy.Tests/**'
+      - '.github/workflows/export-invocation-policy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run export invocation regression tests
+        run: dotnet run --project tests/ExportInvocationPolicy.Tests/ExportInvocationPolicy.Tests.csproj --configuration Release

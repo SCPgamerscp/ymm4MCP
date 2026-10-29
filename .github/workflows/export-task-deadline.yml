@@ -1,0 +1,24 @@
+name: Export task deadline regression
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/McpExport.cs'
+      - 'YMM4McpPlugin/ExportTaskDeadline.cs'
+      - 'tests/ExportTaskDeadline.Tests/**'
+      - '.github/workflows/export-task-deadline.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-deadline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run export task deadline regression tests
+        run: dotnet run --project tests/ExportTaskDeadline.Tests/ExportTaskDeadline.Tests.csproj --configuration Release

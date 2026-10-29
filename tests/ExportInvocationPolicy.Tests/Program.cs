@@ -23,6 +23,29 @@ Check(!ExportInvocationPolicy.MatchesFormat("OutputExoCommand", "mp4"),
     "MP4 must not invoke an EXO command");
 Check(ExportInvocationPolicy.MatchesFormat("OutputMovie", "mp4"),
     "A generic movie exporter remains available for MP4");
+Check(ExportInvocationPolicy.MatchesFormat("OutputSavingMp4", "mp4"),
+    "Saving must not be misclassified as AVI");
+Check(ExportInvocationPolicy.MatchesFormat("OutputSavingWav", "wav"),
+    "Saving must not be misclassified as AVI for WAV");
+Check(ExportInvocationPolicy.MatchesFormat("OutputWavingMp4", "mp4"),
+    "Waving must not be misclassified as WAV");
+Check(!ExportInvocationPolicy.MatchesFormat("OutputAVIFile", "mp4"),
+    "An explicit AVI exporter must not be used for MP4");
+Check(!ExportInvocationPolicy.MatchesFormat("OutputWavFile", "mp4"),
+    "An explicit WAV exporter must not be used for MP4");
+Check(!ExportInvocationPolicy.MatchesFormat("OutputMovie", "wav"),
+    "A generic video exporter must not be used for WAV");
+Check(ExportInvocationPolicy.MatchesFormat("OutputMovieWav", "wav"),
+    "An explicitly WAV-capable movie exporter remains available");
+Check(ExportInvocationPolicy.AcceptsPath(Method(nameof(ExportMethods.OutputWithFormat), typeof(string), typeof(string)), "mp4"),
+    "A path plus format method must remain supported");
+Check(ExportInvocationPolicy.AcceptsPath(Method(nameof(ExportMethods.OutputWithOutputFormat), typeof(string), typeof(string)), "mp4"),
+    "A path plus outputFormat method must remain supported");
+Check(!ExportInvocationPolicy.AcceptsPath(Method(nameof(ExportMethods.OutputWithPreset), typeof(string), typeof(string)), "mp4"),
+    "A second preset path must not receive the format string");
+Check(!ExportInvocationPolicy.AcceptsPath(Method(nameof(ExportMethods.OutputWithDirectory), typeof(string), typeof(string)), "mp4"),
+    "A second output directory must not receive the format string");
+
 Check(ExportInvocationPolicy.HasDialogOnlyMethod(
     [Method(nameof(ExportMethods.OutputExoFile)), Method(nameof(ExportMethods.OutputMp4File))], "mp4"),
     "A matching parameterless method requires a dialog");
@@ -44,4 +67,8 @@ class ExportMethods
     public void OutputMp4File(string path) { }
     public void OutputWavFile(string path) { }
     public void OutputAsync(string path) { }
+    public void OutputWithFormat(string path, string format) { }
+    public void OutputWithOutputFormat(string path, string outputFormat) { }
+    public void OutputWithPreset(string path, string presetPath) { }
+    public void OutputWithDirectory(string path, string outputDirectory) { }
 }

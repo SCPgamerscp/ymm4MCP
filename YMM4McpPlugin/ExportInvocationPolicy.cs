@@ -9,14 +9,37 @@ namespace YMM4McpPlugin
     {
         private static readonly string[] FormatNames = { "Exo", "Mp4", "Wav", "Avi", "Mov", "Mkv", "Webm" };
 
+        // Format names must be whole CamelCase/acronym tokens. Substrings such as
+        // "avi" in "Saving" or "wav" in "Waving" are not export formats.
+        private static bool HasFormatToken(string name, string format)
+        {
+            for (int i = 0; i <= name.Length - format.Length; i++)
+            {
+                if (!name.AsSpan(i, format.Length).Equals(format.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (i > 0 && char.IsLetterOrDigit(name[i - 1]) && !char.IsUpper(name[i]))
+                    continue;
+                int end = i + format.Length;
+                if (end < name.Length && char.IsLower(name[end]))
+                    continue;
+                return true;
+            }
+            return false;
+        }
+
         internal static bool MatchesFormat(string name, string requestedFormat)
         {
+            // "Movie" is a generic video exporter, not a MOV exporter and not
+            // an audio-only WAV exporter.
+            if (requestedFormat.Equals("wav", StringComparison.OrdinalIgnoreCase)
+                && name.Contains("Movie", StringComparison.OrdinalIgnoreCase)
+                && !HasFormatToken(name, "Wav"))
+                return false;
             foreach (var formatName in FormatNames)
             {
-                // "Movie" is a generic video name, not the MOV container.
                 if (formatName == "Mov" && name.Contains("Movie", StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (name.Contains(formatName, StringComparison.OrdinalIgnoreCase)
+                if (HasFormatToken(name, formatName)
                     && !formatName.Equals(requestedFormat, StringComparison.OrdinalIgnoreCase))
                     return false;
             }
@@ -29,7 +52,12 @@ namespace YMM4McpPlugin
             var parameters = method.GetParameters();
             return (parameters.Length == 1 || parameters.Length == 2)
                 && parameters[0].ParameterType == typeof(string)
-                && (parameters.Length == 1 || parameters[1].ParameterType == typeof(string));
+                // A second string argument is only safe when it is a format
+                // selector. Passing "mp4" as a preset/output-directory path is unsafe.
+                && (parameters.Length == 1 ||
+                    (parameters[1].ParameterType == typeof(string)
+                     && new[] { "format", "fileFormat", "outputFormat", "containerFormat", "extension" }
+                         .Contains(parameters[1].Name, StringComparer.OrdinalIgnoreCase)));
         }
 
         // Match the MCP server's idempotency-key contract.  Internal whitespace is
