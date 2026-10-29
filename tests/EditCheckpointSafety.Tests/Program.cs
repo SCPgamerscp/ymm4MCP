@@ -149,6 +149,40 @@ Check(!EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "cp_1234567
 Check(!EditCheckpointSafety.IsOwnedBackupPath(null, ownedDir),
     "null backup path accepted for deletion");
 
+// Full rollback is opt-in and may only open an owned, nonempty backup for
+// the same saved project. A forged persisted BackupPath must never be opened.
+string restoreDir = Path.Combine(Path.GetTempPath(), "ymm4-restore-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(restoreDir);
+try
+{
+    const string checkpointId = "cp_12345678";
+    const string project = "C:\\video\\project.ymmp";
+    string backup = Path.Combine(restoreDir, checkpointId + ".ymmp");
+    File.WriteAllText(backup, "{\\\"project\\\":true}");
+    Check(EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project),
+        "valid owned backup must be restorable");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, "cp_87654321", project, project),
+        "a checkpoint must not restore another checkpoint's backup");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project,
+            "C:\\video\\different.ymmp"), "a backup must not restore into a different project");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, null, project),
+        "unknown source project must reject restore");
+    Check(!EditCheckpointSafety.IsRestorableBackup(
+            Path.Combine(restoreDir, "..", "outside", checkpointId + ".ymmp"),
+            restoreDir, checkpointId, project, project),
+        "restore must reject paths outside the private backup directory");
+    File.WriteAllText(backup, "");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project),
+        "empty backups must not be opened");
+    File.Delete(backup);
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project),
+        "missing backups must not be opened");
+}
+finally
+{
+    Directory.Delete(restoreDir, recursive: true);
+}
+
 string root = Path.Combine(Path.GetTempPath(), "ymm4-checkpoint-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try
