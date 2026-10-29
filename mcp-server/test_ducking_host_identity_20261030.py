@@ -142,7 +142,7 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_backup_must_not_alias_active_project(self):
         project = {"success": True, "isSaved": True,
-                   "projectPath": "C:\\\\PROJECT\\\\CP.YMMP"}
+                   "projectPath": "C:\\\\BACKUP\\\\CP.YMMP"}
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS, project])),
               patch.object(server, "ymm4_post", AsyncMock(return_value=BACKUP)) as post,
               patch.object(server.quality_guard, "verify_snapshot",
