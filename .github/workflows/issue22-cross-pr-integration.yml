@@ -160,7 +160,9 @@ jobs:
     # hand-picked 15-PR release composition. No remote ref is ever updated.
     # A conflicting PR is skipped so the remaining PRs can still be checked;
     # the summary explicitly states this is NOT a guarantee of mergeability.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 259
+    # Run the all-open-PR integration gate for every pull request update.
+    # Restricting this to #259 leaves newer PRs with only isolated CI and
+    # silently reuses a stale composition when their heads change.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
