@@ -73,8 +73,13 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
     return [{"at": at, "value": value} for at, value in sorted(points.items())]
 
 
-def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float) -> bool:
-    """Verify the complete curve, including the unchanged original start key."""
+def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float,
+                     *, expected_item_id: str | None = None) -> bool:
+    """Verify the complete curve and, when provided, the host item identity."""
+    if (expected_item_id is not None and
+            (not valid_identifier(expected_item_id) or
+             not isinstance(report, dict) or report.get("item_id") != expected_item_id)):
+        return False
     if (not valid_identifier(revision, max_length=256) or
             not isinstance(report, dict) or report.get("success") is not True or
             "error" in report or "error_code" in report or
