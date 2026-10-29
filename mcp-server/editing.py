@@ -377,12 +377,13 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             reason = "TIME_LIMIT_REACHED"
         elif max_api_calls is not None and api_calls >= max_api_calls:
             reason = "API_LIMIT_REACHED"
-        elif history and (scores[-1] < scores[-2] or
+        elif history and (metrics[-1][1] > metrics[-2][1] or
+                          scores[-1] < scores[-2] or
                           (scores[-1] == scores[-2] and
                            metrics[-1][1:] > metrics[-2][1:])):
-            # Scores bottom out at zero after five errors. Without comparing
-            # counts, a repair that introduces more errors at that floor can
-            # silently continue instead of triggering rollback guidance.
+            # Error escalation is unsafe even when clearing many warnings
+            # increases the weighted score. Also catch regressions at the
+            # score floor where the numeric score cannot fall further.
             reason = "QA_REGRESSED"
         else:
             repeated = 1
