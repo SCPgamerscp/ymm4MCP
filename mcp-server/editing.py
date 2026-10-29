@@ -5,6 +5,29 @@ import math
 from collections import Counter
 
 MAX_FRAME = 2_147_483_647
+MAX_QA_ISSUES = 1000
+
+
+def _bounded_qa_issues(issues):
+    """Keep QA gate reports usable without silently accepting truncated failures."""
+    if len(issues) <= MAX_QA_ISSUES:
+        return issues
+    omitted = len(issues) - (MAX_QA_ISSUES - 1)
+    return issues[:MAX_QA_ISSUES - 1] + [{
+        "code": "QA_ISSUES_TRUNCATED", "severity": "error",
+        "omitted_count": omitted,
+        "message": f"{omitted} additional QA issues were omitted; inspect the source reports",
+    }]
+
+
+def _require_json_safe_issues(issues, source):
+    """Reject non-JSON and non-finite evidence before storing QA history."""
+    try:
+        json.dumps(issues, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{source} issues must contain JSON-safe finite values") from exc
+
+
 
 
 def integer(value, name, minimum=0, maximum=MAX_FRAME):
@@ -271,6 +294,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                                  "expected": selector, "matches": matches,
                                  "item_ids": _item_ids(items, matches)})
 
+    problems = _bounded_qa_issues(problems)
     error_count = sum(problem["severity"] == "error" for problem in problems)
     warning_count = sum(problem["severity"] == "warning" for problem in problems)
     criteria = {"expected": expected, "duration": duration, "include_gaps": include_gaps,
@@ -318,6 +342,7 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         score = finite_number(report.get("score"), "score")
         if not 0 <= score <= 100 or not isinstance(report.get("issues"), list) or len(report["issues"]) > 1000:
             raise ValueError("validate reports require a 0..100 score and at most 1000 issues")
+        _require_json_safe_issues(report["issues"], "validate report")
         has_errors = False
         errors = warnings = 0
         for issue in report["issues"]:
@@ -422,6 +447,7 @@ def combine_qa_reports(structural, checks, criteria):
                 not isinstance(report.get("passed"), bool) or not isinstance(report.get("issues"), list) or \
                 len(report["issues"]) > 1000:
             raise ValueError(f"{source} did not return a complete QA report")
+        _require_json_safe_issues(report["issues"], f"{source} QA")
         for issue in report["issues"]:
             if (not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or
                     not issue["code"] or issue.get("severity") not in ("error", "warning") or
@@ -453,11 +479,16 @@ def combine_qa_reports(structural, checks, criteria):
                 raise ValueError(f"{source} summary disagrees with issue severities")
     if set(checks) != set(criteria):
         raise ValueError("QA check sources must match their criteria entries")
+    problems = _bounded_qa_issues(problems)
     errors = sum(i["severity"] == "error" for i in problems)
     warnings = sum(i["severity"] == "warning" for i in problems)
-    digest = hashlib.sha256(json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
-                                     sort_keys=True, ensure_ascii=False, separators=(",", ":"),
-                                     allow_nan=False).encode("utf-8")).hexdigest()
+    try:
+        criteria_json = json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
+                                   sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                                   allow_nan=False)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("QA criteria must be JSON-safe and finite") from exc
+    digest = hashlib.sha256(criteria_json.encode("utf-8")).hexdigest()
     return {**structural, "passed": errors == 0, "valid": errors == 0,
             "score": max(0, 100 - errors * 20 - warnings * 5),
             "issue_count": len(problems), "summary": {"errors": errors, "warnings": warnings},
