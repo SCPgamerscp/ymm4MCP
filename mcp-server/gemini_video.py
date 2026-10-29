@@ -185,6 +185,9 @@ def analyze_video_file(
     if (not isinstance(video_path, str) or not video_path.strip()
             or any(ord(char) < 32 or ord(char) == 127 for char in video_path)):
         return {"success": False, "error": "video_path must be a nonempty path without control characters"}
+    if event_instruction is not None and not _valid_event_instruction(event_instruction):
+        return {"success": False, "source": "file",
+                "error": "event_instruction must be valid text of at most 32768 characters"}
     ok, msg = is_available()
     if not ok:
         return {"success": False, "error": msg}
@@ -223,6 +226,13 @@ def analyze_video_file(
                 pass
 
 
+def _valid_event_instruction(value: Any) -> bool:
+    """Reject unbounded or non-UTF-8-encodable user-supplied Gemini prompts."""
+    return (isinstance(value, str) and len(value) <= 32_768
+            and not any(ord(ch) == 0 or 0xD800 <= ord(ch) <= 0xDFFF
+                        for ch in value))
+
+
 def _valid_capture_png_name(name: Any) -> bool:
     """Accept only unambiguous Windows-exportable PNG basenames.
 
@@ -232,7 +242,11 @@ def _valid_capture_png_name(name: Any) -> bool:
     if (not isinstance(name, str) or not name or len(name) > 255
             or name.strip() != name or not name.lower().endswith(".png")
             or any(ord(ch) < 32 or ord(ch) == 127
-                   or ch in '<>:"/\\|?*' for ch in name)):
+                   or ch in '<>:"/\\|?*'
+                   or 0xD800 <= ord(ch) <= 0xDFFF
+                   or ord(ch) in (0x061C, 0x200E, 0x200F)
+                   or 0x202A <= ord(ch) <= 0x202E
+                   or 0x2066 <= ord(ch) <= 0x206F for ch in name)):
         return False
     stem = name.split(".", 1)[0].upper()
     return stem not in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} and not (
@@ -322,11 +336,7 @@ def analyze_frames_dir(
 
     # A caller-supplied QA instruction must not create an unbounded prompt
     # or carry malformed Unicode into the Gemini request.
-    if event_instruction is not None and (
-            not isinstance(event_instruction, str)
-            or len(event_instruction) > 32_768
-            or any(0xD800 <= ord(ch) <= 0xDFFF or ord(ch) == 0
-                   for ch in event_instruction)):
+    if event_instruction is not None and not _valid_event_instruction(event_instruction):
         return {"success": False, "source": "frames_dir",
                 "error": "event_instruction must be valid text of at most 32768 characters"}
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
@@ -564,11 +574,21 @@ def analyze_frames_dir(
                 text="↑これは上記フレーム区間全体の音声です。画像の時刻と対応付けて音響イベントを解析してください。"))
 
         # 指示プロンプト
-        contents.append(genai_types.Part.from_text(text=(
+        media_description = (
             "上記は、ある動画区間を時刻順にサンプリングした連番フレーム画像"
-            "(各画像の直後にその時刻を示すラベルあり)と、その区間の音声です。\n\n"
-            + _build_prompt(instruction)
-        )))
+            "(各画像の直後にその時刻を示すラベルあり)"
+        )
+        if audio_path is not None:
+            media_description += "と、その区間の音声です。"
+        else:
+            media_description += "です。音声データは提供されていません。"
+        prompt = media_description + "\n\n" + _build_prompt(instruction)
+        if audio_path is None:
+            prompt += (
+                "\n\n重要: 音声データがないため、BGM・効果音・声・無音などの"
+                "音響イベントを観測したと推測して報告しないでください。"
+            )
+        contents.append(genai_types.Part.from_text(text=prompt))
 
         resp = client.models.generate_content(model=model, contents=contents)
         parsed = _extract_json(getattr(resp, "text", "") or "")
