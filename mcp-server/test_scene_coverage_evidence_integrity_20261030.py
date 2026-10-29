@@ -97,16 +97,18 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
         result = with_coverage({"scenes": [scene([good])]})
         self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
         for changed in ({"visible_end_frame": 19}, {"visible_start_frame": 1},
-                        {"end_frame": 19}, {"frame": 1},
-                        {"end_frame": 21}):
-            # A source extending beyond the scene is valid only when the
-            # visible range equals its clipped intersection.
+                        {"end_frame": 19}, {"frame": 1}):
             item = {**good, **changed}
-            if changed == {"end_frame": 21}:
-                continue
             with self.subTest(changed=changed), self.assertRaisesRegex(
                     ValueError, "contradicts source"):
                 with_coverage({"scenes": [scene([item])]})
+
+    def test_source_range_clipped_at_scene_boundary_is_valid(self):
+        item = {"item_id": "v", "type": "VideoItem", "frame": 5,
+                "end_frame": 30, "visible_start_frame": 5,
+                "visible_end_frame": 20}
+        result = with_coverage({"scenes": [scene([item])]})
+        self.assertEqual(result["scenes"][0]["visual_covered_frames"], 15)
 
     def test_source_range_requires_complete_valid_integer_fields(self):
         good = {"item_id": "v", "type": "VideoItem", "frame": 0,
