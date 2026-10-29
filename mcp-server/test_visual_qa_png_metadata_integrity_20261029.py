@@ -42,7 +42,7 @@ def profile(space=b"RGB ", tags=()):
 
 
 def iccp(raw, data):
-    return insert(raw, b"iCCP", b"Profile\\x00\\x00".replace(b"\\x00", b"\x00") +
+    return insert(raw, b"iCCP", b"Profile\x00\x00" +
                   zlib.compress(data))
 
 
