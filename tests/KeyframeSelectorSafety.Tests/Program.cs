@@ -130,8 +130,16 @@ Check(Verified("remove", 10, null, new[] { 0 }, new[] { 1.0 }),
     "native removal must confirm frame absence");
 Check(!Verified("remove", 10, null, new[] { 0, 10 }, new[] { 1.0, 2.5 }),
     "native no-op removal must fail");
+Check(!Verified("remove", 10, null, new[] { 0 }, new[] { 1.0, 2.5, 3.0 }),
+    "native remove that leaves orphaned values must fail");
+Check(Verified("remove", 10, null, new[] { 0 }, new[] { 1.0, 2.5 }),
+    "native remove may preserve an implicit starting value");
 Check(Verified("clear", 0, null, Array.Empty<int>(), new[] { 1.0 }),
     "cleared frames may retain the base value");
+Check(Verified("clear", 0, null, Array.Empty<int>(), Array.Empty<double>()),
+    "cleared frames may remove all values");
+Check(!Verified("clear", 0, null, Array.Empty<int>(), new[] { 1.0, 2.5 }),
+    "native clear leaving orphaned values must fail");
 Check(!Verified("clear", 0, null, new[] { 10 }, new[] { 1.0, 2.5 }),
     "native clear leaving frames must fail");
 
