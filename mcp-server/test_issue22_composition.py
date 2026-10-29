@@ -20,6 +20,19 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = WORKFLOW.read_text(encoding="utf-8-sig")
 
+    def test_integration_gate_runs_for_any_open_pr_update(self):
+        # A PR-only gate for #259 silently skips combined CI when another
+        # open PR (#262/#263 etc.) is updated. Every PR event must be audited
+        # against the current open-PR set, while manual dispatch stays valid.
+        self.assertIn("  pull_request:", self.source)
+        self.assertIn("  workflow_dispatch:", self.source)
+        audit = self.source.split(
+            "  audit-open-pr-merge-compatibility:", 1
+        )[1].split("  all-open-prs-python-integration:", 1)[0]
+        self.assertNotRegex(audit, r"(?m)^    if:.*pull_request\\.number")
+        self.assertNotIn("github.event.pull_request.number == ", audit)
+        self.assertIn('gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"', audit)
+
     def test_pull_request_uses_triggering_head_sha(self):
         audit = self.source.split(
             "  audit-open-pr-merge-compatibility:", 1
