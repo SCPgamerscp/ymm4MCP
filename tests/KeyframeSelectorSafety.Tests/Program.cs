@@ -82,4 +82,48 @@ var inspected = KeyframeSelectorSafety.FindUniqueCoordinateItem(
 Check(inspected.ambiguous && count == 2,
     "selection must inspect beyond the first match and stop after proving ambiguity");
 
-Console.WriteLine("Keyframe selector safety tests passed");
+// Verify the actual mutation result, not just whether a reflected method
+// returned normally. Native YMM4 methods can silently ignore a request.
+static bool Verified(string action, int at, double? requested,
+    int[] frames, double[] values, double? fallback = null)
+    => KeyframeMutationVerification.Confirm(action, at, requested, frames, values, fallback);
+
+Check(KeyframeMutationVerification.IsInItemRange(0, 30), "first frame is in range");
+Check(KeyframeMutationVerification.IsInItemRange(29, 30), "last visible frame is in range");
+Check(!KeyframeMutationVerification.IsInItemRange(30, 30), "end-exclusive frame must be rejected");
+Check(!KeyframeMutationVerification.IsInItemRange(-1, 30), "negative frame must be rejected");
+Check(!KeyframeMutationVerification.IsInItemRange(0, 0), "unknown item duration must fail closed");
+Check(Verified("set", 0, 1.25, Array.Empty<int>(), new[] { 1.25 }),
+    "default-only animation must confirm a changed starting value");
+Check(Verified("set", 0, 1.25, Array.Empty<int>(), Array.Empty<double>(), 1.25),
+    "default-only host property without Values must remain supported");
+Check(!Verified("set", 0, 1.25, Array.Empty<int>(), Array.Empty<double>(), 2.0),
+    "a no-op native setter must not claim success");
+Check(!Verified("set", 10, 1.25, Array.Empty<int>(), new[] { 1.25 }),
+    "native add with no frame must fail readback");
+Check(Verified("set", 10, 2.5, new[] { 10 }, new[] { 1.0, 2.5 }),
+    "implicit start + inserted frame must confirm the correct value");
+Check(Verified("set", 0, 1.0, new[] { 10 }, new[] { 1.0, 2.5 }),
+    "implicit start frame zero must be readable");
+Check(Verified("set", 10, 2.5, new[] { 0, 10 }, new[] { 1.0, 2.5 }),
+    "explicit start layout must be readable");
+Check(!Verified("set", 10, 2.5, new[] { 10 }, new[] { 1.0, 3.0 }),
+    "a wrong value must fail even when the frame exists");
+Check(!Verified("set", 10, 2.5, new[] { 10 }, new[] { 1.0 }),
+    "partial native insertion without a new value must fail");
+Check(!Verified("set", 10, 2.5, new[] { 10, 10 }, new[] { 1.0, 2.5 }),
+    "duplicate frame indices must not be acknowledged");
+Check(Verified("set", 10, 1.25, new[] { 10 }, new[] { 1.0, (double)(float)1.25 }),
+    "float-backed animation values must be accepted");
+Check(!Verified("set", 10, double.NaN, new[] { 10 }, new[] { 1.0, 1.25 }),
+    "non-finite requested value must fail");
+Check(Verified("remove", 10, null, new[] { 0 }, new[] { 1.0 }),
+    "native removal must confirm frame absence");
+Check(!Verified("remove", 10, null, new[] { 0, 10 }, new[] { 1.0, 2.5 }),
+    "native no-op removal must fail");
+Check(Verified("clear", 0, null, Array.Empty<int>(), new[] { 1.0 }),
+    "cleared frames may retain the base value");
+Check(!Verified("clear", 0, null, new[] { 10 }, new[] { 1.0, 2.5 }),
+    "native clear leaving frames must fail");
+
+Console.WriteLine("Keyframe selector and mutation readback safety tests passed");

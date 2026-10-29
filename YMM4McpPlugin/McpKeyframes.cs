@@ -128,6 +128,14 @@ namespace YMM4McpPlugin
                 if (anim == null)
                     return Failure("KEYFRAME_UNSUPPORTED", "プロパティ '" + prop + "' はAnimationではありません");
 
+                // Do not create a key beyond the item's visible duration.
+                // The host can otherwise accept a frame which will not survive
+                // a project save/reload or which targets another time span.
+                if (action == "set" && !KeyframeMutationVerification.IsInItemRange(
+                        relativeFrame, ReadItemInfo(item).length))
+                    return Failure("KEYFRAME_OUT_OF_RANGE",
+                        "キーフレーム位置がアイテムの長さの範囲外です。0以上、Length未満を指定してください");
+
                 // KeyFrames belongs to the timeline item and is shared across
                 // its animations.  Bind a detached Animation before adding a
                 // nonzero keyframe; do not replace an existing binding.
@@ -148,6 +156,14 @@ namespace YMM4McpPlugin
                     changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
                 if (!changed)
                     return Failure("KEYFRAME_METHOD_UNAVAILABLE", "YMM4のAnimation/KeyFrames APIを呼べませんでした。inspectで署名を確認してください");
+                // A reflected native method can return successfully without
+                // changing the requested frame/value. Never acknowledge that
+                // as a successful edit or advance the item's revision.
+                if (!KeyframeMutationVerification.Confirm(
+                        action, relativeFrame, value, ReadFrameList(anim),
+                        ReadValueList(anim), TryGetDefaultValue(anim)))
+                    return Failure("KEYFRAME_READBACK_MISMATCH",
+                        "YMM4が操作成功を返しましたが、キーフレームの読戻しが一致しません。再試行前にinspectで状態を確認してください");
                 MarkItemChanged(item);
                 var vm = GetMainViewModel();
                 if (vm != null)

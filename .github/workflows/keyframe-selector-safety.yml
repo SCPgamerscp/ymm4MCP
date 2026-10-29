@@ -14,5 +14,5 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Verify strict GET selectors and ambiguous coordinates
+      - name: Verify selectors, frame bounds and native mutation readback
         run: dotnet run --project tests/KeyframeSelectorSafety.Tests/KeyframeSelectorSafety.Tests.csproj --configuration Release
