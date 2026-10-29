@@ -67,7 +67,7 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
         self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
 
     def test_rejects_duplicate_or_invalid_scene_ids(self):
-        for invalid in ("", " ", "x" * 65, None):
+        for invalid in ("", " ", "x" * 65, None, "line\\nfeed", "bidi\\u202e"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
                     ValueError, "scene IDs"):
                 with_coverage({"scenes": [scene(id=invalid)]})
@@ -131,7 +131,7 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
             with_coverage({"scenes": [scene([one, dict(one)])]})
 
     def test_rejects_invalid_item_identity_when_supplied(self):
-        for invalid in ("", " ", "x" * 257, None, True):
+        for invalid in ("", " ", "x" * 257, None, True, "line\\nfeed", "bidi\\u202e"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
                     ValueError, "scene item IDs"):
                 with_coverage({"scenes": [scene([{**video(), "item_id": invalid}])]})
