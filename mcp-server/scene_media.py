@@ -8,6 +8,15 @@ MAX_SCENE_ITEMS = 50_000
 MAX_SCENES = 200
 
 
+def _safe_identifier(value, limit):
+    return (isinstance(value, str) and bool(value.strip()) and len(value) <= limit
+            and not any((code := ord(char)) < 32 or 127 <= code <= 159
+                        or code in (0x061C, 0x200E, 0x200F)
+                        or 0x202A <= code <= 0x202E
+                        or 0x2066 <= code <= 0x2069
+                        for char in value))
+
+
 def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
     """Match the exact CLR type name, optionally with namespace/nesting qualifiers."""
     # An empty or malformed namespace component must not spoof a known
@@ -63,8 +72,7 @@ def with_coverage(index: dict) -> dict:
                 raise ValueError("scene item must be an object")
             if "item_id" in item:
                 identity = item["item_id"]
-                if (not isinstance(identity, str) or not identity.strip() or
-                        len(identity) > 256 or identity in item_ids):
+                if not _safe_identifier(identity, 256) or identity in item_ids:
                     raise ValueError("scene item IDs must be distinct nonempty strings")
                 item_ids.add(identity)
             if "frame" in item or "end_frame" in item:
@@ -84,8 +92,7 @@ def with_coverage(index: dict) -> dict:
             raise ValueError("scene item_count does not match item evidence")
         if "id" in scene:
             identifier = scene["id"]
-            if (not isinstance(identifier, str) or not identifier.strip() or
-                    len(identifier) > 64 or identifier in seen_ids):
+            if not _safe_identifier(identifier, 64) or identifier in seen_ids:
                 raise ValueError("scene IDs must be distinct nonempty strings")
             seen_ids.add(identifier)
     # Unknown host item types are excluded rather than assumed to provide a picture.
