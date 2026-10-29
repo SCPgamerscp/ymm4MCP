@@ -11,6 +11,19 @@ from PIL import Image, UnidentifiedImageError
 from editing import MAX_FRAME
 
 
+def _inflate_png_metadata(data: bytes, limit: int = 2_000_000) -> bytes:
+    """Decode ancillary zlib streams without accepting bombs or trailing bytes."""
+    try:
+        decoder = zlib.decompressobj()
+        decoded = decoder.decompress(data, limit + 1)
+        if (len(decoded) > limit or not decoder.eof or
+                decoder.unused_data or decoder.unconsumed_tail):
+            raise ValueError("invalid compressed PNG metadata")
+        return decoded
+    except zlib.error as exc:
+        raise ValueError("invalid compressed PNG metadata") from exc
+
+
 def _valid_png_keyword(keyword: bytes) -> bool:
     """PNG Latin-1 keyword: 1..79 printable bytes, with no edge/double spaces."""
     return (1 <= len(keyword) <= 79 and
@@ -149,14 +162,7 @@ def _validate_png_container(raw: bytes) -> None:
                     not sep or not _valid_png_keyword(keyword) or
                     len(remainder) < 2 or remainder[0] != 0):
                 raise ValueError("invalid PNG ICC profile metadata")
-            try:
-                decoder = zlib.decompressobj()
-                profile = decoder.decompress(remainder[1:], 2_000_001)
-                if (len(profile) > 2_000_000 or not decoder.eof or
-                        decoder.unused_data or decoder.unconsumed_tail):
-                    raise ValueError("invalid PNG ICC profile compression")
-            except zlib.error as exc:
-                raise ValueError("invalid PNG ICC profile compression") from exc
+            _inflate_png_metadata(remainder[1:])
             seen_iccp = True
         if kind == b"pHYs":
             if (seen_phys or seen_idat or length != 9 or
@@ -183,6 +189,38 @@ def _validate_png_container(raw: bytes) -> None:
             if len(remainder) <= 1 or (len(remainder) - 1) % entry_size:
                 raise ValueError("invalid PNG suggested palette entries")
             splt_names.add(keyword)
+        if kind == b"tEXt":
+            keyword, sep, text = payload.partition(b"\x00")
+            if (not sep or not _valid_png_keyword(keyword) or
+                    len(text) > 2_000_000):
+                raise ValueError("invalid PNG Latin-1 text metadata")
+        if kind == b"zTXt":
+            keyword, sep, remainder = payload.partition(b"\x00")
+            if (not sep or not _valid_png_keyword(keyword) or
+                    len(remainder) < 2 or remainder[0] != 0):
+                raise ValueError("invalid PNG compressed text metadata")
+            _inflate_png_metadata(remainder[1:])
+        if kind == b"iTXt":
+            keyword, sep, remainder = payload.partition(b"\x00")
+            if (not sep or not _valid_png_keyword(keyword) or
+                    len(remainder) < 4 or remainder[0] not in (0, 1) or
+                    remainder[1] != 0):
+                raise ValueError("invalid PNG international text header")
+            language, sep, remainder_text = remainder[2:].partition(b"\x00")
+            translated, translated_sep, encoded_text = remainder_text.partition(b"\x00")
+            if (not sep or not translated_sep or
+                    any(not (65 <= ch <= 90 or 97 <= ch <= 122 or
+                             48 <= ch <= 57 or ch == 45) for ch in language)):
+                raise ValueError("invalid PNG international text language")
+            try:
+                translated.decode("utf-8")
+                decoded = (_inflate_png_metadata(encoded_text)
+                           if remainder[0] else encoded_text)
+                if len(decoded) > 2_000_000:
+                    raise ValueError("oversized PNG international text")
+                decoded.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("invalid PNG international text UTF-8") from exc
         if kind == b"IDAT":
             if idat_finished:
                 raise ValueError("nonconsecutive PNG IDAT chunks")
