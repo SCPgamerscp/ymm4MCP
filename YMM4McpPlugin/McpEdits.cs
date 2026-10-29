@@ -333,6 +333,7 @@ namespace YMM4McpPlugin
             }
             string? projectPath = captured.ProjectPath;
             string? backupPath = null;
+            string? backupSha256 = null;
             string? backupWarning = null;
             if (backup)
             {
@@ -349,7 +350,7 @@ namespace YMM4McpPlugin
                     {
                         Directory.CreateDirectory(CheckpointBackupDir);
                         backupPath = Path.Combine(CheckpointBackupDir, id + ".ymmp");
-                        EditCheckpointSafety.CopyBackupAtomically(projectPath, backupPath);
+                        backupSha256 = EditCheckpointSafety.CopyBackupVerified(projectPath, backupPath);
                         // Copying is not a UI operation: edits or a project switch
                         // may occur while the source .ymmp is being read. Never
                         // advertise that copy as a restorable checkpoint.
@@ -358,12 +359,14 @@ namespace YMM4McpPlugin
                         {
                             TryDeleteBackup(backupPath);
                             backupPath = null;
+                            backupSha256 = null;
                             backupWarning = "PROJECT_CHANGED_DURING_BACKUP";
                         }
                     }
                     catch (Exception ex)
                     {
                         backupPath = null;
+                        backupSha256 = null;
                         backupWarning = "BACKUP_FAILED:" + ex.Message;
                     }
                 }
@@ -375,9 +378,11 @@ namespace YMM4McpPlugin
                 Reason = reason,
                 ProjectPath = projectPath,
                 BackupPath = backupPath,
+                BackupSha256 = backupSha256,
                 ItemIds = itemIds
             };
             List<CheckpointRecord> pruned;
+            bool persisted = false;
             // Read, persist and publish under one lock. Concurrent checkpoint
             // requests must not overwrite each other's snapshots on disk.
             lock (_editsLock)
@@ -391,13 +396,19 @@ namespace YMM4McpPlugin
                 {
                     PersistCheckpoints(kept);
                     _checkpoints = kept;
+                    persisted = true;
                 }
                 catch (Exception ex)
                 {
                     Log("チェックポイント保存に失敗: " + ex.Message);
-                    TryDeleteBackup(backupPath);
-                    return Failure("CHECKPOINT_NOT_SAVED", "チェックポイントを保存できませんでした");
                 }
+            }
+            // Do not dispatch to the UI thread for active-file protection while
+            // holding _editsLock; that can deadlock against an editor callback.
+            if (!persisted)
+            {
+                TryDeleteBackup(backupPath);
+                return Failure("CHECKPOINT_NOT_SAVED", "チェックポイントを保存できませんでした");
             }
             foreach (var old in pruned)
                 TryDeleteBackup(old.BackupPath);
@@ -410,6 +421,7 @@ namespace YMM4McpPlugin
                 item_count = record.ItemIds.Count,
                 project_path = record.ProjectPath,
                 backup_path = record.BackupPath,
+                backup_sha256 = record.BackupSha256,
                 backup_warning = backupWarning,
                 note = "Rollback deletes items added after this snapshot. Deleted items and property edits are not restored unless you open backup_path."
             };
@@ -539,7 +551,7 @@ namespace YMM4McpPlugin
         private async Task<object> RestoreCheckpointBackup(CheckpointRecord record)
         {
             if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
-                    record.Id, record.ProjectPath, CurrentProjectPath()))
+                    record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
                 return Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
                     "保存済みの同一プロジェクトに属する安全なバックアップがありません");
             return await RunOnUi(async () =>
@@ -553,7 +565,7 @@ namespace YMM4McpPlugin
                     return (object)Failure("UNSAVED_CHANGES",
                         "保存状態が不明か未保存の変更があります。保存してから復元してください");
                 if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
-                        record.Id, record.ProjectPath, CurrentProjectPath()))
+                        record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
                     return (object)Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
                         "復元用バックアップが存在しないか安全ではありません");
 
@@ -579,8 +591,9 @@ namespace YMM4McpPlugin
                     action = "restore_backup",
                     checkpoint_id = record.Id,
                     backup_path = record.BackupPath,
+                    backup_sha256 = record.BackupSha256,
                     original_project_path = record.ProjectPath,
-                    note = "チェックポイントの保存済みコピーを別プロジェクトとして開きました。元のプロジェクトファイルは上書きしていません。"
+                    note = "バックアップを別プロジェクトとして開きました。元のプロジェクトは上書きしていません。チェックポイント領域のコピーは将来整理されるため、編集を続ける前に別の場所へ名前を付けて保存してください。"
                 };
             });
         }
@@ -650,9 +663,12 @@ namespace YMM4McpPlugin
             File.Move(temp, CheckpointsFilePath, true);
         }
 
-        private static void TryDeleteBackup(string? path)
+        private void TryDeleteBackup(string? path)
         {
             if (!EditCheckpointSafety.IsOwnedBackupPath(path, CheckpointBackupDir)) return;
+            // A restored backup can itself be the currently open YMM4 project.
+            // Never prune or clean up the active document's backing file.
+            if (EditCheckpointSafety.SameProject(path, CurrentProjectPath())) return;
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
@@ -666,6 +682,7 @@ namespace YMM4McpPlugin
             item_count = record.ItemIds.Count,
             project_path = record.ProjectPath,
             backup_path = record.BackupPath,
+            backup_sha256 = record.BackupSha256,
             item_ids = includeItems ? record.ItemIds.ToArray() : null
         };
 
@@ -699,6 +716,7 @@ namespace YMM4McpPlugin
             public string Reason { get; set; } = "";
             public string? ProjectPath { get; set; }
             public string? BackupPath { get; set; }
+            public string? BackupSha256 { get; set; }
             public List<string> ItemIds { get; set; } = new();
 
             public CheckpointRecord Clone() => new()
@@ -708,6 +726,7 @@ namespace YMM4McpPlugin
                 Reason = Reason,
                 ProjectPath = ProjectPath,
                 BackupPath = BackupPath,
+                BackupSha256 = BackupSha256,
                 ItemIds = ItemIds.ToList()
             };
         }
