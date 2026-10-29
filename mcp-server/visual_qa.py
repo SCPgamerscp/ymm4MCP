@@ -22,6 +22,7 @@ def _validate_png_container(raw: bytes) -> None:
     offset = 8
     chunk_count = 0
     seen_ihdr = seen_idat = seen_iend = idat_finished = False
+    seen_plte = False
     while offset < len(raw):
         chunk_count += 1
         if chunk_count > 4096 or len(raw) - offset < 12:
@@ -40,6 +41,18 @@ def _validate_png_container(raw: bytes) -> None:
             seen_ihdr = True
         elif kind == b"IHDR":
             raise ValueError("duplicate PNG IHDR")
+        # Unknown critical chunks can change how the pixels are interpreted.
+        # Pillow may skip them, so reject before using the image for QA.
+        if any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in kind):
+            raise ValueError("invalid PNG chunk type")
+        if kind[2] & 0x20:
+            raise ValueError("invalid PNG reserved chunk type")
+        if (kind[0] & 0x20) == 0 and kind not in (b"IHDR", b"PLTE", b"IDAT", b"IEND"):
+            raise ValueError("unknown critical PNG chunk")
+        if kind == b"PLTE":
+            if seen_plte or seen_idat:
+                raise ValueError("PNG PLTE must be unique and precede IDAT")
+            seen_plte = True
         if kind == b"IDAT":
             if idat_finished:
                 raise ValueError("nonconsecutive PNG IDAT chunks")
