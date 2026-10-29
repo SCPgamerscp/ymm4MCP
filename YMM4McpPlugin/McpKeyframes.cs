@@ -61,25 +61,34 @@ namespace YMM4McpPlugin
                         var anim = ResolveAnimation(item, name);
                         if (anim == null)
                         {
+                            if (!string.IsNullOrWhiteSpace(prop))
+                                return Failure("KEYFRAME_UNSUPPORTED",
+                                    "プロパティ '" + name + "' はAnimationではありません");
                             if (strictInventory)
                                 return Failure("ANIMATION_INVENTORY_INCOMPLETE",
                                     "アニメーション " + name + " を再取得できませんでした");
                             continue;
                         }
+                        // Read before advertising the property: an unreadable
+                        // animation must never appear in the returned inventory.
+                        var keyframes = ReadKeyframes(anim, located.frame);
                         names.Add(name);
                         animations.Add(new
                         {
                             prop = name,
                             type = anim.GetType().Name,
-                            keyframes = ReadKeyframes(anim, located.frame)
+                            keyframes
                         });
                     }
                     catch (Exception)
                     {
-                        if (strictInventory)
+                        // Best-effort inventory remains usable when one host
+                        // property is broken. Explicit and strict reads must
+                        // instead fail closed rather than hide that corruption.
+                        if (strictInventory || !string.IsNullOrWhiteSpace(prop))
                             return Failure("ANIMATION_INVENTORY_INCOMPLETE",
                                 "アニメーション " + name + " の読取に失敗しました");
-                        throw;
+                        continue;
                     }
                 }
                 return (object)new
@@ -345,6 +354,9 @@ namespace YMM4McpPlugin
         {
             var frames = ReadFrameList(anim);
             var values = ReadValueList(anim);
+            if (!KeyframeMutationVerification.HasReadableLayout(frames, values))
+                throw new InvalidOperationException(
+                    "Animation Frames/Values layout is inconsistent");
             var result = new List<object>();
             bool valuesHasStart = values.Count == frames.Count + 1;
             if (frames.Count == 0)
