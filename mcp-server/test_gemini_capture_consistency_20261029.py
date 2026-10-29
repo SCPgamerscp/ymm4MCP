@@ -77,6 +77,25 @@ class CaptureConsistencyTests(unittest.TestCase):
         ])
         self.assertIn("capture indices conflict", error)
 
+    def test_reject_oversized_or_malformed_instructions_before_upload(self):
+        self.frame("a.png")
+        for instruction in (12, ["bad"], "x" * 32_769, "hello\\x00world",
+                            "bad\\ud800unicode"):
+            with self.subTest(instruction_type=type(instruction).__name__):
+                with patch.object(gemini_video, "_client",
+                                  side_effect=AssertionError("Gemini must not be called")):
+                    result = gemini_video.analyze_frames_dir(
+                        str(self.root), event_instruction=instruction)
+                self.assertFalse(result["success"], result)
+                self.assertIn("event_instruction", result["error"])
+
+    def test_png_preflight_stat_failure_returns_structured_error(self):
+        self.frame("a.png")
+        with patch.object(gemini_video.os.path, "getsize",
+                          side_effect=OSError("stat denied")):
+            error = self.reject([{"file": "a.png"}])
+        self.assertIn("Cannot inspect PNG frame", error)
+
     def test_valid_shuffled_capture_still_passes(self):
         self.frame("a.png")
         self.frame("b.png")
