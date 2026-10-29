@@ -153,6 +153,22 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
     id_counts = Counter(item["item_id"] for item in items
                         if isinstance(item, dict) and _valid_item_id(item.get("item_id")))
     for index, item in enumerate(items):
+        # Identity is independent of timing. An item with a malformed frame
+        # can still collide with a valid item's ID, making future edits unsafe.
+        # Check every object before skipping invalid timeline geometry.
+        if isinstance(item, dict) and item.get("item_id") is not None:
+            item_id = item["item_id"]
+            if not _valid_item_id(item_id):
+                problems.append({"code": "INVALID_ITEM_ID", "severity": "error",
+                                 "index": index, "item_ids": [],
+                                 "message": "Timeline item has an invalid stable item_id"})
+            elif item_id in seen_item_ids:
+                previous = seen_item_ids[item_id]
+                problems.append({"code": "DUPLICATE_ITEM_ID", "severity": "error",
+                                 "indices": [previous, index], "item_ids": [item_id],
+                                 "message": "Multiple timeline items share the same item_id"})
+            else:
+                seen_item_ids[item_id] = index
         try:
             if not isinstance(item, dict):
                 raise ValueError("item must be an object")
@@ -166,22 +182,6 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                              "item_ids": ids, "message": str(exc)})
             continue
         valid_indices.add(index)
-        # A repeated stable item_id makes follow-up edits and QA repairs target
-        # an arbitrary timeline item. Missing IDs are permitted for legacy
-        # snapshots, but any supplied non-null ID must be usable and unique.
-        if item.get("item_id") is not None:
-            item_id = item["item_id"]
-            if not _valid_item_id(item_id):
-                problems.append({"code": "INVALID_ITEM_ID", "severity": "error",
-                                 "index": index, "item_ids": [],
-                                 "message": "Timeline item has an invalid stable item_id"})
-            elif item_id in seen_item_ids:
-                previous = seen_item_ids[item_id]
-                problems.append({"code": "DUPLICATE_ITEM_ID", "severity": "error",
-                                 "indices": [previous, index], "item_ids": [item_id],
-                                 "message": "Multiple timeline items share the same item_id"})
-            else:
-                seen_item_ids[item_id] = index
         layers.setdefault(layer, []).append((frame, end, index))
         if subtitle_layers is not None:
             kind = item.get("type")
@@ -447,9 +447,10 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             return json.dumps(evidence, sort_keys=True, ensure_ascii=False,
                               allow_nan=False, separators=(",", ":"))
 
-        # Identical diagnostics can describe different snapshots when the
-        # number of timeline items changes. That is progress, not a stalled edit.
-        return report.get("item_count"), sorted(canonical(issue) for issue in report["issues"])
+        # A change in the total number of timeline items is not necessarily
+        # QA progress: unrelated additions/removals must not reset the stall
+        # counter while the same failures remain. Compare issue evidence only.
+        return sorted(canonical(issue) for issue in report["issues"])
 
     def error_identity(issue):
         """Track new hard failures even when other repairs raise the QA score.
