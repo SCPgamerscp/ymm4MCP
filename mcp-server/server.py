@@ -693,13 +693,23 @@ async def run_bgm_ducking(args: dict) -> dict:
             "error" in project or "error_code" in project or
             project.get("isSaved") is not True):
         return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
-    checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
+    try:
+        checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
+    except Exception as exc:
+        # A timed-out checkpoint may have created a backup; no keyframes were written.
+        return {"success": False, "error_code": "BGM_BACKUP_OUTCOME_UNKNOWN",
+                "error": str(exc), "outcome_unknown": True, "applied": []}
     backup = checkpoint.get("backup_path") if isinstance(checkpoint, dict) else None
     if (not isinstance(checkpoint, dict) or checkpoint.get("success") is not True or
             "error" in checkpoint or "error_code" in checkpoint or
-            not isinstance(backup, str) or not backup):
+            not isinstance(backup, str) or backup != backup.strip() or
+            not is_absolute_media_path(backup)):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
-    conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+    try:
+        conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+    except Exception as exc:
+        return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN",
+                "error": str(exc), "backup_path": backup, "applied": []}
     if conflict is not None:
         return {**conflict, "error_code": "BGM_DUCKING_" + conflict["error_code"],
                 "applied": [], "backup_path": backup}
