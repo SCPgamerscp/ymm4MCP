@@ -29,7 +29,7 @@ def _icc_profile(size, fill=b"D"):
     profile[16:20] = b"RGB "
     profile[20:24] = b"XYZ "
     profile[36:40] = b"acsp"
-    profile[128:132] = b"\\x00" * 4
+    profile[128:132] = bytes(4)
     return bytes(profile)
 
 
