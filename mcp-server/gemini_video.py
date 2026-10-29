@@ -434,7 +434,11 @@ def analyze_frames_dir(
                         "error": "frames_meta contains duplicate physical PNG frames"}
             seen_capture_file_ids.add(file_id)
         # Keep the existing size-check seam used by preflight regression tests.
-        size = os.path.getsize(path)
+        try:
+            size = os.path.getsize(path)
+        except OSError as exc:
+            return {"success": False, "source": "frames_dir",
+                    "error": f"Cannot inspect PNG frame: {exc}"}
         if size == 0:
             return {"success": False, "source": "frames_dir",
                     "error": "PNG frame is empty"}
