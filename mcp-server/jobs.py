@@ -34,8 +34,10 @@ def _valid_windows_file_path(candidate: str) -> bool:
     if not segments or any(not part or part in {".", ".."} for part in segments):
         return False
     for part in segments:
+        # Windows also resolves NUL .mp4 and COM1  .mp4 as device aliases.
+        device_stem = part.split(".", 1)[0].rstrip(" .")
         if (part.endswith((" ", ".")) or any(char in '<>:"|?*' for char in part) or
-                re.fullmatch(r"(?i)(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?", part)):
+                re.fullmatch(r"(?i)(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])", device_stem)):
             return False
     return True
 
