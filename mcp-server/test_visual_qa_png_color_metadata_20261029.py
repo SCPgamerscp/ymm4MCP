@@ -82,7 +82,7 @@ class PNGColorMetadataTests(unittest.TestCase):
     def test_valid_bounded_icc_profile(self):
         # LittleCMS-generated sRGB profile includes real required tag payloads.
         self.valid(insert(png(), b"iCCP",
-                          b"Display profile\\x00\\x00" +
+                          b"Display profile\x00\x00" +
                           zlib.compress(rgb_icc_profile())))
 
     def test_reject_icc_missing_keyword_method_or_compression(self):
