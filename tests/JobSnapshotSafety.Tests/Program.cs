@@ -29,9 +29,15 @@ try
     JobSnapshotSafety.WriteAtomic(path, "{\"version\":2}");
     Check(JsonDocument.Parse(File.ReadAllText(path)).RootElement.GetProperty("version").GetInt32() == 2,
         "New snapshots must atomically replace old snapshots");
-    Parallel.For(0, 12, i => JobSnapshotSafety.WriteAtomic(path, "{\"version\":" + i + "}"));
+    // Repeated parallel replacements used to throw UnauthorizedAccessException
+    // on Windows even though each writer had a unique staging filename.
+    for (int round = 0; round < 4; round++)
+    {
+        Parallel.For(0, 32, i => JobSnapshotSafety.WriteAtomic(
+            path, "{\"version\":" + (round * 32 + i) + "}"));
+    }
     var version = JsonDocument.Parse(File.ReadAllText(path)).RootElement.GetProperty("version").GetInt32();
-    Check(version >= 0 && version < 12, "Concurrent snapshot writes must never create mixed JSON");
+    Check(version >= 96 && version < 128, "Concurrent snapshot writes must never create mixed JSON");
     Check(!Directory.EnumerateFiles(directory, "*.tmp").Any(),
         "Successful snapshots must not leave temporary files");
 
