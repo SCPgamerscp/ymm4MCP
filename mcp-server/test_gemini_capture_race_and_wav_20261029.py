@@ -127,22 +127,17 @@ class CaptureRaceAndWavTests(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.client.models.generate_content.assert_called_once()
 
-    def test_audio_changed_after_preflight_is_rejected(self):
+    def test_missing_padding_after_odd_wav_chunk_is_rejected(self):
         audio = self.root / "audio.wav"
-        audio.write_bytes(self.wav_bytes())
-        real_open = open
-
-        def change_before_open(path, mode="r", *args, **kwargs):
-            if str(path) == str(audio) and mode == "rb":
-                audio.write_bytes(self.wav_bytes(b"\x01\x02"))
-                st = audio.stat()
-                os.utime(audio, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-            return real_open(path, mode, *args, **kwargs)
-
-        with patch("builtins.open", side_effect=change_before_open):
-            result = self.analyze(audio_path=str(audio))
+        payload = self.wav_bytes()
+        # An odd-sized RIFF chunk must have a padding byte before the next.
+        bad_chunk = b"JUNK" + (1).to_bytes(4, "little") + b"x"
+        changed = bytearray(payload + bad_chunk)
+        changed[4:8] = (len(changed) - 8).to_bytes(4, "little")
+        audio.write_bytes(changed)
+        result = self.analyze(audio_path=str(audio))
         self.assertFalse(result["success"], result)
-        self.assertIn("changed", result["error"])
+        self.assertIn("truncated WAV chunk", result["error"])
         self.client.models.generate_content.assert_not_called()
 
 
