@@ -10,6 +10,8 @@ from PIL import Image, UnidentifiedImageError
 
 from editing import MAX_FRAME
 from png_scanlines import validate_idat_scanlines
+from png_metadata_integrity import (validate_icc_profile, validate_language_tag,
+                                    validate_text_payload)
 
 # PNG sRGB requires the standardized gAMA/cHRM values when those chunks exist.
 _SRGB_CHRM = b"".join(value.to_bytes(4, "big") for value in (
@@ -101,6 +103,10 @@ def _validate_png_container(raw: bytes) -> None:
             raise ValueError("invalid PNG chunk type")
         if kind[2] & 0x20:
             raise ValueError("invalid PNG reserved chunk type")
+        # Even an APNG with a single declared frame is not a static preview:
+        # animation control changes which image the decoder may present.
+        if kind in (b"acTL", b"fcTL", b"fdAT"):
+            raise ValueError("animated PNG is not a static preview")
         if (kind[0] & 0x20) == 0 and kind not in (b"IHDR", b"PLTE", b"IDAT", b"IEND"):
             raise ValueError("unknown critical PNG chunk")
         if kind == b"PLTE":
@@ -182,6 +188,7 @@ def _validate_png_container(raw: bytes) -> None:
                 raise ValueError("invalid PNG ICC profile metadata")
             profile = _inflate_png_metadata(
                 remainder[1:], limit=metadata_limit - metadata_bytes)
+            validate_icc_profile(profile, color_type)
             metadata_bytes += len(profile)
             seen_iccp = True
         if kind == b"pHYs":
@@ -214,6 +221,7 @@ def _validate_png_container(raw: bytes) -> None:
             if (not sep or not _valid_png_keyword(keyword) or
                     len(text) > metadata_limit - metadata_bytes):
                 raise ValueError("invalid PNG Latin-1 text metadata")
+            validate_text_payload(text)
             metadata_bytes += len(text)
         if kind == b"zTXt":
             keyword, sep, remainder = payload.partition(b"\x00")
@@ -222,6 +230,7 @@ def _validate_png_container(raw: bytes) -> None:
                 raise ValueError("invalid PNG compressed text metadata")
             decoded_text = _inflate_png_metadata(
                 remainder[1:], limit=metadata_limit - metadata_bytes)
+            validate_text_payload(decoded_text)
             metadata_bytes += len(decoded_text)
         if kind == b"iTXt":
             keyword, sep, remainder = payload.partition(b"\x00")
@@ -231,10 +240,10 @@ def _validate_png_container(raw: bytes) -> None:
                 raise ValueError("invalid PNG international text header")
             language, sep, remainder_text = remainder[2:].partition(b"\x00")
             translated, translated_sep, encoded_text = remainder_text.partition(b"\x00")
-            if (not sep or not translated_sep or
-                    any(not (65 <= ch <= 90 or 97 <= ch <= 122 or
-                             48 <= ch <= 57 or ch == 45) for ch in language)):
+            if not sep or not translated_sep:
                 raise ValueError("invalid PNG international text language")
+            validate_language_tag(language)
+            validate_text_payload(translated)
             try:
                 translated.decode("utf-8")
                 decoded = (_inflate_png_metadata(
@@ -243,6 +252,7 @@ def _validate_png_container(raw: bytes) -> None:
                 if len(decoded) > metadata_limit - metadata_bytes:
                     raise ValueError("oversized PNG international text")
                 decoded.decode("utf-8")
+                validate_text_payload(decoded)
                 metadata_bytes += len(decoded)
             except UnicodeDecodeError as exc:
                 raise ValueError("invalid PNG international text UTF-8") from exc
