@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   setup-cross-pr-integration:
-    # This workflow belongs to PR #228 until it is merged. A manual run can
-    # re-check the same set later; no GitHub PR is merged or pushed by this job.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    # Run for the active #22 settings PR as well as manual dispatches.
+    # No GitHub PR is merged or pushed by this job.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 259
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -29,9 +29,9 @@ jobs:
       - name: Compose main with the open Issue 22 and 140 PRs (runner only)
         shell: bash
         env:
-          # A queued/rerun PR check must test the exact #228 revision it reports.
+          # A queued/rerun #259 check must test its exact event revision.
           # Manual dispatches intentionally compose the latest open PR heads.
-          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EVENT_PR_259_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
         run: |
           set -euo pipefail
           git config user.name "Issue 22 integration CI"
@@ -53,9 +53,9 @@ jobs:
           # Include #260's Windows job-snapshot fix: the prior all-PR
           # Windows integration failed without it even though #228 passed alone.
           for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259 260; do
-            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
+            if [[ "$number" == 259 && -n "$EVENT_PR_259_HEAD_SHA" ]]; then
               # Pin the triggering PR to its event SHA, not a newer moving ref.
-              git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
+              git fetch --no-tags origin "$EVENT_PR_259_HEAD_SHA:refs/remotes/pr/${number}"
             else
               git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
             fi
@@ -201,9 +201,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          # Pin the triggering #228 revision in BOTH composed trees. A newer
+          # Pin the triggering #259 revision in BOTH composed trees. A newer
           # push during this run must not change the revision under test.
-          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EVENT_PR_259_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
         run: |
           set -euo pipefail
           git config user.name "Read-only PR integration audit"
@@ -234,8 +234,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           for number in "${numbers[@]}"; do
             refspec="refs/pull/${number}/head:refs/remotes/audit-pr/${number}"
-            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
-              refspec="${EVENT_PR_228_HEAD_SHA}:refs/remotes/audit-pr/${number}"
+            if [[ "$number" == 259 && -n "$EVENT_PR_259_HEAD_SHA" ]]; then
+              refspec="${EVENT_PR_259_HEAD_SHA}:refs/remotes/audit-pr/${number}"
             fi
             if ! git fetch --no-tags origin "$refspec" \
               > "$RUNNER_TEMP/audit-fetch.log" 2>&1; then
