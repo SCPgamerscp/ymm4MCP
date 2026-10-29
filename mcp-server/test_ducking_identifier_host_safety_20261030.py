@@ -58,7 +58,7 @@ class HostBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get.await_count, 1)
 
     async def test_malformed_expected_revision_is_rejected(self):
-        for expected in (" r1", "r1\\x00", "x" * 257):
+        for expected in (" r1", "r1\x00", "x" * 257):
             with (self.subTest(expected=repr(expected)),
                   patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)) as get):
                 with self.assertRaises(ValueError):
