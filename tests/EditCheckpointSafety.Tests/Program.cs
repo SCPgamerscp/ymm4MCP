@@ -206,7 +206,7 @@ try
             restoreDir, checkpointId, project, project, hash),
         "restore must reject paths outside the private backup directory");
     var originalTimestamp = File.GetLastWriteTimeUtc(backup);
-    File.WriteAllText(backup, "modified! backup payload");
+    File.WriteAllText(backup, "modified backup payload");
     File.SetLastWriteTimeUtc(backup, originalTimestamp);
     Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
         "modified backup with identical length and timestamp must fail");
