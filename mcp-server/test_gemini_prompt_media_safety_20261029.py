@@ -20,9 +20,9 @@ class GeminiPromptSafetyTests(unittest.TestCase):
         self.addCleanup(self.availability.stop)
 
     def test_windows_png_names_reject_bidi_controls_and_surrogates(self):
-        for filename in ("frame\\u202Egnp.png", "frame\\u2066.png",
-                         "frame\\u200F.png", "frame\\u061C.png",
-                         "frame\\ud800.png"):
+        for filename in ("frame\u202Egnp.png", "frame\u2066.png",
+                         "frame\u200F.png", "frame\u061C.png",
+                         "frame\ud800.png"):
             with self.subTest(filename=ascii(filename)):
                 self.assertFalse(gemini_video._valid_capture_png_name(filename))
                 with patch.object(gemini_video, "_client",
@@ -36,8 +36,8 @@ class GeminiPromptSafetyTests(unittest.TestCase):
     def test_video_file_rejects_invalid_instruction_before_upload(self):
         video = self.root / "sample.mp4"
         video.write_bytes(b"test-video")
-        for instruction in (42, [], "x" * 32769, "bad\\x00prompt",
-                            "bad\\udfffprompt"):
+        for instruction in (42, [], "x" * 32769, "bad\x00prompt",
+                            "bad\udfffprompt"):
             with self.subTest(instruction=ascii(instruction)[:50]):
                 with patch.object(gemini_video, "_client",
                                   side_effect=AssertionError("no network")):
@@ -60,7 +60,7 @@ class GeminiPromptSafetyTests(unittest.TestCase):
         parts = SimpleNamespace(
             from_bytes=lambda **kwargs: kwargs["data"],
             from_text=lambda **kwargs: kwargs["text"])
-        with patch.object(gemini_video, "_client", return_value=client), \\
+        with patch.object(gemini_video, "_client", return_value=client), \
              patch.object(gemini_video, "genai_types",
                           SimpleNamespace(Part=parts)):
             result = gemini_video.analyze_frames_dir(
