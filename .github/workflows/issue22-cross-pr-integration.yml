@@ -50,7 +50,9 @@ jobs:
           # hand-picked order merged #228/#229 before #219 and caused a
           # package-ymme.yml conflict despite the all-PR audit succeeding.
           # Keeping the order deterministic avoids a false release blocker.
-          for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259; do
+          # Include #260's Windows job-snapshot fix: the prior all-PR
+          # Windows integration failed without it even though #228 passed alone.
+          for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259 260; do
             if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
               # Pin the triggering PR to its event SHA, not a newer moving ref.
               git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
@@ -118,6 +120,14 @@ jobs:
             dotnet run --project $project.FullName --configuration Release
             if ($LASTEXITCODE -ne 0) { throw "Composed keyframe regression failed: $($project.FullName)" }
           }
+      - name: Test composed cross-process job snapshot persistence (#30, #61)
+        shell: pwsh
+        run: |
+          # The previous all-open-PR Windows build exposed a concurrent
+          # File.Move failure that was invisible to single-process Linux CI.
+          # Require the Windows multi-process regression before release prep.
+          dotnet run --project tests/JobSnapshotSafety.Tests/JobSnapshotSafety.Tests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Composed job snapshot regression failed' }
       - name: Regression-test interrupted and corrupt official reference downloads
         shell: pwsh
         run: ./ci/test-download-ymm4-lite.ps1
