@@ -45,7 +45,11 @@ try
     Directory.CreateDirectory(destinationDirectory);
     bool failed = false;
     try { JobSnapshotSafety.WriteAtomic(destinationDirectory, "test"); }
-    catch (IOException) { failed = true; }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        // Windows may report a directory destination as access denied.
+        failed = true;
+    }
     Check(failed, "Replacing a directory must fail");
     Check(!Directory.EnumerateFiles(directory, "*.tmp").Any(),
         "Failed snapshots must clean up temporary files");
