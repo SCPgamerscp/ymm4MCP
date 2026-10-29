@@ -102,6 +102,40 @@ class SaturatedQaRegressionTests(unittest.TestCase):
         self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
                          "QA_ISSUES_REMAIN")
 
+    def test_reducing_anonymous_selector_matches_is_progress(self):
+        # The item count changes, but both reports still contain the same
+        # EXPECTED_AMBIGUOUS issue and have the same score. Match positions
+        # alone must not determine whether a repair was productive.
+        anonymous = lambda layer: {"frame": 0, "length": 10, "layer": layer}
+        before = editing.validate_timeline(
+            [anonymous(1), anonymous(2), anonymous(3)],
+            expected=[{"length": 10}])
+        after = editing.validate_timeline(
+            [anonymous(1), anonymous(2)],
+            expected=[{"length": 10}])
+        self.assertEqual([i["code"] for i in before["issues"]], ["EXPECTED_AMBIGUOUS"])
+        self.assertEqual([i["code"] for i in after["issues"]], ["EXPECTED_AMBIGUOUS"])
+        self.assertEqual((len(before["issues"][0]["matches"]),
+                          len(after["issues"][0]["matches"])), (3, 2))
+        self.assertEqual(before["score"], after["score"])
+        result = editing.evaluate_qa_gate(after, [before])
+        self.assertEqual(result["decision"], "repair")
+        self.assertEqual(result["reason_code"], "QA_ISSUES_REMAIN")
+
+    def test_reordering_anonymous_matches_does_not_reset_stall(self):
+        anonymous = lambda layer: {"frame": 0, "length": 10, "layer": layer}
+        unrelated = {"frame": 0, "length": 5, "layer": 4}
+        before = editing.validate_timeline(
+            [anonymous(1), anonymous(2), unrelated],
+            expected=[{"length": 10}])
+        after = editing.validate_timeline(
+            [unrelated, anonymous(1), anonymous(2)],
+            expected=[{"length": 10}])
+        self.assertEqual(before["issues"][0]["matches"], [0, 1])
+        self.assertEqual(after["issues"][0]["matches"], [1, 2])
+        self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
+                         "QA_STALLED")
+
     def test_unchanged_zero_score_is_stalled_not_regressed(self):
         expected = missing_expected()
         before = editing.validate_timeline([], expected=expected)
