@@ -1,6 +1,9 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace YMM4McpPlugin
 {
@@ -33,7 +36,29 @@ namespace YMM4McpPlugin
                 File.WriteAllText(temp, content);
                 lock (SnapshotReplaceLock)
                 {
-                    File.Move(temp, path, overwrite: true);
+                    // A static lock only protects threads in this YMM4 process.
+                    // Two YMM4 processes can still write the same per-user job
+                    // snapshot, so use a stable per-path OS mutex as well.
+                    string fullPath = Path.GetFullPath(path);
+                    if (OperatingSystem.IsWindows())
+                        fullPath = fullPath.ToUpperInvariant();
+                    string mutexName = "YMM4McpJobSnapshot_" +
+                        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fullPath)));
+                    using var mutex = new Mutex(false, mutexName);
+                    bool acquired = false;
+                    try
+                    {
+                        try { acquired = mutex.WaitOne(TimeSpan.FromSeconds(30)); }
+                        catch (AbandonedMutexException) { acquired = true; }
+                        if (!acquired)
+                            throw new IOException("Timed out waiting to replace the job snapshot.");
+                        File.Move(temp, path, overwrite: true);
+                    }
+                    finally
+                    {
+                        if (acquired)
+                            mutex.ReleaseMutex();
+                    }
                 }
             }
             finally
