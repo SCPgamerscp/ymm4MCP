@@ -75,10 +75,16 @@ def plan_script(args):
             "note": "No edits or voice synthesis performed. Actual voice durations may differ."}
 
 
+def _valid_item_id(value):
+    """Only usable host IDs may be referenced in repair suggestions."""
+    return (isinstance(value, str) and bool(value.strip()) and
+            not any(ord(char) < 32 or ord(char) == 127 for char in value))
+
+
 def _item_ids(items, indices):
-    """Return only stable IDs present on the affected items."""
+    """Return only usable IDs present on the affected items."""
     return [items[index]["item_id"] for index in indices
-            if isinstance(items[index], dict) and isinstance(items[index].get("item_id"), str)]
+            if isinstance(items[index], dict) and _valid_item_id(items[index].get("item_id"))]
 
 
 def validate_timeline(items, expected=None, duration=None, include_gaps=True, subtitle_layers=None,
@@ -119,8 +125,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         # snapshots, but any supplied non-null ID must be usable and unique.
         if item.get("item_id") is not None:
             item_id = item["item_id"]
-            if (not isinstance(item_id, str) or not item_id.strip() or
-                    any(ord(char) < 32 or ord(char) == 127 for char in item_id)):
+            if not _valid_item_id(item_id):
                 problems.append({"code": "INVALID_ITEM_ID", "severity": "error",
                                  "index": index, "item_ids": [],
                                  "message": "Timeline item has an invalid stable item_id"})
