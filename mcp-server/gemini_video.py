@@ -224,6 +224,12 @@ def _reject_gemini_surrogates(value: Any) -> None:
 
 def _extract_json(text: str) -> dict:
     """Geminiの応答からJSONを頑健に抽出する。コードフェンスや前後テキストを許容。"""
+    if not isinstance(text, str):
+        return {"summary": "", "events": [], "_parse_error": "Gemini response must be text"}
+    # A malformed or unexpectedly verbose model response must not allocate
+    # unbounded JSON objects while automated video QA is running.
+    if len(text) > 16 * 1024 * 1024:
+        return {"summary": "", "events": [], "_parse_error": "Gemini response exceeds 16777216 characters"}
     if not text:
         return {"summary": "", "events": [], "_parse_error": "空の応答"}
     # The response has already been downloaded, but do not parse an unbounded
@@ -404,6 +410,9 @@ def analyze_video_file(
     if (not isinstance(video_path, str) or not video_path.strip()
             or any(ord(char) < 32 or ord(char) == 127 for char in video_path)):
         return {"success": False, "error": "video_path must be a nonempty path without control characters"}
+    if event_instruction is not None and not _valid_event_instruction(event_instruction):
+        return {"success": False, "source": "file",
+                "error": "event_instruction must be valid text of at most 32768 characters"}
     ok, msg = is_available()
     if not ok:
         return {"success": False, "error": msg}
@@ -461,6 +470,35 @@ def analyze_video_file(
                 pass
 
 
+def _valid_event_instruction(value: Any) -> bool:
+    """Reject unbounded or non-UTF-8-encodable user-supplied Gemini prompts."""
+    return (isinstance(value, str) and len(value) <= 32_768
+            and not any(ord(ch) == 0 or 0xD800 <= ord(ch) <= 0xDFFF
+                        for ch in value))
+
+
+def _valid_capture_png_name(name: Any) -> bool:
+    """Accept only unambiguous Windows-exportable PNG basenames.
+
+    YMM4 exports on Windows. Reserved DOS device names and alternate data
+    stream separators are unsafe even if a POSIX test host can create them.
+    """
+    if (not isinstance(name, str) or not name or len(name) > 255
+            or name.strip() != name or not name.lower().endswith(".png")
+            or any(ord(ch) < 32 or ord(ch) == 127
+                   or ch in '<>:"/\\|?*'
+                   or 0xD800 <= ord(ch) <= 0xDFFF
+                   or ord(ch) in (0x061C, 0x200E, 0x200F)
+                   or 0x202A <= ord(ch) <= 0x202E
+                   or 0x2066 <= ord(ch) <= 0x206F for ch in name)):
+        return False
+    stem = name.split(".", 1)[0].upper()
+    return stem not in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} and not (
+        len(stem) == 4 and stem[:3] in ("COM", "LPT")
+        and stem[3] in "123456789¹²³"
+    )
+
+
 def _safe_frame_path(frames_dir: str, filename: Any) -> Optional[str]:
     """Allow only existing PNG frames contained in the export directory.
 
@@ -483,8 +521,14 @@ def _frame_filename_key(name: Any) -> tuple:
     """Natural numeric ordering for exports such as 1.png, 2.png, 10.png."""
     if not isinstance(name, str):
         return ((0, ""),)
-    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
-                 for part in re.split(r"([0-9]+)", name))
+    # Avoid int()'s digit limit and non-decimal Unicode isdigit() cases.
+    def key(part: str) -> tuple:
+        if part.isascii() and part.isdigit():
+            normalized = part.lstrip("0") or "0"
+            return (1, len(normalized), normalized, len(part))
+        return (0, part.casefold(), "", 0)
+
+    return tuple(key(part) for part in re.split(r"([0-9]+)", name))
 
 
 def _valid_time_ms(value: Any) -> bool:
@@ -494,6 +538,99 @@ def _valid_time_ms(value: Any) -> bool:
 
 def _valid_frame_index(value: Any) -> bool:
     return type(value) is int and 0 <= value <= 2_147_483_647
+
+
+def _file_snapshot(info) -> tuple:
+    """Capture file identity and metadata to detect mid-QA replacements."""
+    return (info.st_dev, info.st_ino, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _wav_chunk_error(data: bytes) -> Optional[str]:
+    """Validate the RIFF/WAVE audio layout before treating it as captured QA.
+
+    A plausible RIFF envelope is not enough: an invalid format, impossible
+    sample layout, or truncated sample frame must not pass as observed audio.
+    Only uncompressed PCM / IEEE float (including their extensible forms)
+    can be interpreted reliably as an inline audio/wav payload.
+    """
+    offset = 12  # Caller already checked RIFF/WAVE and the declared length.
+    found_fmt = False
+    found_data = False
+    block_align = None
+    chunk_count = 0
+    pcm_guid = bytes.fromhex("0100000000001000800000aa00389b71")
+    float_guid = bytes.fromhex("0300000000001000800000aa00389b71")
+    while offset < len(data):
+        # A hostile WAV may consist of millions of empty chunks; bound work.
+        chunk_count += 1
+        if chunk_count > 4096:
+            return "Requested audio exceeds the WAV chunk count limit"
+        if len(data) - offset < 8:
+            return "Requested audio has a truncated WAV chunk header"
+        kind = data[offset:offset + 4]
+        size = int.from_bytes(data[offset + 4:offset + 8], "little")
+        end = offset + 8 + size
+        if end > len(data) or end + (size & 1) > len(data):
+            return "Requested audio has a truncated WAV chunk"
+        if kind == b"fmt ":
+            if found_fmt or found_data or size < 16:
+                return "Requested audio has a duplicate, misplaced or invalid WAV fmt chunk"
+            fmt = data[offset + 8:end]
+            format_tag = int.from_bytes(fmt[0:2], "little")
+            channels = int.from_bytes(fmt[2:4], "little")
+            sample_rate = int.from_bytes(fmt[4:8], "little")
+            byte_rate = int.from_bytes(fmt[8:12], "little")
+            block_align = int.from_bytes(fmt[12:14], "little")
+            sample_bits = int.from_bytes(fmt[14:16], "little")
+            if size != 16:
+                if size < 18:
+                    return "Requested audio has a truncated WAV fmt extension"
+                extension_size = int.from_bytes(fmt[16:18], "little")
+                if size != 18 + extension_size:
+                    return "Requested audio has an inconsistent WAV fmt extension length"
+            if format_tag == 0xFFFE:  # WAVE_FORMAT_EXTENSIBLE
+                if size < 40 or int.from_bytes(fmt[16:18], "little") < 22:
+                    return "Requested audio has an invalid extensible WAV fmt chunk"
+                subtype = fmt[24:40]
+                if subtype == pcm_guid:
+                    format_tag = 1
+                elif subtype == float_guid:
+                    format_tag = 3
+                else:
+                    return "Requested audio uses an unsupported extensible WAV codec"
+                valid_bits = int.from_bytes(fmt[18:20], "little")
+                if not 1 <= valid_bits <= sample_bits:
+                    return "Requested audio has invalid extensible WAV valid bits"
+                # A declared speaker map must describe exactly the declared
+                # number of channels; zero means the positions are unspecified.
+                channel_mask = int.from_bytes(fmt[20:24], "little")
+                if channel_mask and channel_mask.bit_count() != channels:
+                    return "Requested audio WAV channel mask does not match channel count"
+            if format_tag not in (1, 3):
+                return "Requested audio uses an unsupported WAV codec"
+            if (not 1 <= channels <= 32 or not 1 <= sample_rate <= 768_000):
+                return "Requested audio has invalid WAV channel count or sample rate"
+            supported_bits = (8, 16, 24, 32) if format_tag == 1 else (32, 64)
+            if sample_bits not in supported_bits:
+                return "Requested audio has unsupported WAV sample precision"
+            expected_align = channels * (sample_bits // 8)
+            if (block_align != expected_align
+                    or byte_rate != sample_rate * expected_align):
+                return "Requested audio has inconsistent WAV block alignment or byte rate"
+            found_fmt = True
+        elif kind == b"data":
+            if found_data or size == 0:
+                return "Requested audio has a duplicate or empty WAV data chunk"
+            if not found_fmt:
+                return "Requested audio has a WAV data chunk before fmt"
+            if size % block_align:
+                return "Requested audio has a partial WAV sample frame"
+            found_data = True
+        offset = end + (size & 1)
+    if not found_fmt or not found_data:
+        return "Requested audio lacks a WAV fmt or nonempty data chunk"
+    return None
 
 
 def analyze_frames_dir(
@@ -523,37 +660,188 @@ def analyze_frames_dir(
     if frames_meta is not None and (not isinstance(frames_meta, list)
                                     or any(not isinstance(m, dict) for m in frames_meta)):
         return {"success": False, "error": "frames_meta must be an array of objects"}
+    # Even though only max_images frames are uploaded, sorting a huge metadata
+    # list before sampling could otherwise exhaust memory or CPU.
+    if frames_meta is not None and len(frames_meta) > 100_000:
+        return {"success": False, "source": "frames_dir",
+                "error": "frames_meta exceeds the 100000 frame metadata limit"}
+    # Explicit empty host capture metadata must not fall back to stale PNGs
+    # left in the export directory by an earlier capture.
+    if frames_meta is not None and not frames_meta:
+        return {"success": False, "source": "frames_dir",
+                "error": "frames_meta contains no captured frames"}
 
+    # A caller-supplied QA instruction must not create an unbounded prompt
+    # or carry malformed Unicode into the Gemini request.
+    if event_instruction is not None and not _valid_event_instruction(event_instruction):
+        return {"success": False, "source": "frames_dir",
+                "error": "event_instruction must be valid text of at most 32768 characters"}
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
 
     # 解析対象の画像ファイルを決定(metaがあればそれを優先、なければフォルダ走査)
     if frames_meta:
-        entries = [m for m in frames_meta if m.get("file")]
-        if len(entries) > 1:
-            # Never claim chronological analysis for shuffled or incomparable
-            # host metadata. Prefer actual capture times, then frame indices.
-            if all(_valid_time_ms(e.get("timeMs")) for e in entries):
-                entries.sort(key=lambda e: e["timeMs"])
-            elif all(_valid_frame_index(e.get("frame")) for e in entries):
-                entries.sort(key=lambda e: e["frame"])
-            elif any(_valid_time_ms(e.get("timeMs")) or _valid_frame_index(e.get("frame"))
-                     for e in entries):
+        # A partial selection must never be reported as a complete QA pass.
+        # The YMM4 export API emits plain basenames. Reject path aliases,
+        # traversal, control characters and padded names before any disk I/O.
+        if any(not _valid_capture_png_name(m.get("file")) for m in frames_meta):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta contains an invalid PNG filename"}
+        entries = list(frames_meta)
+        if len({e["file"] for e in entries}) != len(entries):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta contains duplicate PNG filenames"}
+        # Captures are produced by YMM4 on Windows. Case-only aliases can
+        # resolve to the same file there even if tests run on a POSIX host.
+        if len({e["file"].casefold() for e in entries}) != len(entries):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta contains case-insensitive duplicate PNG filenames"}
+        # The YMM4 exporter numbers captures from zero. An incomplete or
+        # duplicated index sequence can conceal missing frames even when all
+        # remaining filenames and timestamps look valid.
+        if any("index" in e for e in entries):
+            if (any(type(e.get("index")) is not int or e["index"] < 0
+                    for e in entries)
+                    or {e["index"] for e in entries} != set(range(len(entries)))):
                 return {"success": False, "source": "frames_dir",
-                        "error": "frames_meta has inconsistent timestamp/frame metadata"}
-            else:
-                entries.sort(key=lambda e: _frame_filename_key(e["file"]))
+                        "error": "frames_meta contains incomplete capture indices"}
+        # Older callers may omit dimensions, but if the exporter supplies them
+        # they must be complete and usable for every captured image.
+        if any("width" in e or "height" in e for e in entries):
+            if any(type(e.get(axis)) is not int or not 1 <= e[axis] <= 32_768
+                   for e in entries for axis in ("width", "height")):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains invalid capture dimensions"}
+            # A single export-clip capture has one fixed preview size.
+            # Mixing dimensions means the capture changed mid-export and
+            # cannot be treated as a consistent video QA sample.
+            if len({(e["width"], e["height"]) for e in entries}) != 1:
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains inconsistent capture dimensions"}
+        time_present = ["timeMs" in e for e in entries]
+        frame_present = ["frame" in e for e in entries]
+        has_time = [_valid_time_ms(e.get("timeMs")) for e in entries]
+        has_frame = [_valid_frame_index(e.get("frame")) for e in entries]
+        # A present-but-invalid field is not the same as an absent field.
+        # All-invalid metadata must fail instead of falling back to filenames.
+        if ((any(time_present) and (not all(time_present) or not all(has_time)))
+                or (any(frame_present) and (not all(frame_present) or not all(has_frame)))):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta has inconsistent timestamp/frame metadata"}
+        if all(has_time):
+            entries.sort(key=lambda e: e["timeMs"])
+        elif all(has_frame):
+            entries.sort(key=lambda e: e["frame"])
+        elif all("index" in e for e in entries):
+            # Without frame/time metadata, capture indices are authoritative.
+            # Filename sorting can reverse the actual capture order.
+            entries.sort(key=lambda e: e["index"])
+        else:
+            entries.sort(key=lambda e: _frame_filename_key(e["file"]))
+        # The exporter's capture index is chronological. Even individually
+        # valid indices must agree with the timestamp/frame sequence.
+        if (len(entries) > 1 and all("index" in e for e in entries)
+                and (all(has_time) or all(has_frame))
+                and [e["index"] for e in entries] != list(range(len(entries)))):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta capture indices conflict with chronological order"}
+        # Timestamp order and frame order must agree when both are supplied.
+        if len(entries) > 1:
+            if all(has_time) and any(entries[i]["timeMs"] <= entries[i - 1]["timeMs"]
+                                     for i in range(1, len(entries))):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains duplicate capture timestamps"}
+            if all(has_frame) and any(entries[i]["frame"] <= entries[i - 1]["frame"]
+                                      for i in range(1, len(entries))):
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta frame order conflicts with capture order"}
     else:
-        files = sorted((f for f in os.listdir(frames_dir) if f.lower().endswith(".png")),
-                       key=_frame_filename_key)
+        try:
+            # scandir is incremental; listdir materializes every directory
+            # entry before a limit can be applied. Bound even non-PNG entries
+            # so an untrusted directory cannot starve the QA process.
+            files = []
+            with os.scandir(frames_dir) as iterator:
+                for scanned_count, item in enumerate(iterator, start=1):
+                    if scanned_count > 100_000:
+                        return {"success": False, "source": "frames_dir",
+                                "error": "PNG directory exceeds the 100000 entry scan limit"}
+                    if item.name.lower().endswith(".png"):
+                        if not _valid_capture_png_name(item.name):
+                            return {"success": False, "source": "frames_dir",
+                                    "error": "PNG directory contains an invalid filename"}
+                        files.append(item.name)
+            # Case-only aliases can be distinct on a POSIX test host but
+            # collide when YMM4's Windows export is opened again.
+            if len({name.casefold() for name in files}) != len(files):
+                return {"success": False, "source": "frames_dir",
+                        "error": "PNG directory contains case-insensitive duplicate filenames"}
+            files.sort(key=_frame_filename_key)
+        except OSError as exc:
+            return {"success": False, "source": "frames_dir",
+                    "error": f"Cannot enumerate PNG frames: {exc}"}
         entries = [{"file": f, "timeMs": None, "frame": None} for f in files]
 
     if not entries:
         return {"success": False, "error": "解析対象の画像がありません"}
 
+    # Check the complete capture before downsampling, even without explicit
+    # metadata. A broken unselected PNG must not yield a successful QA result.
+    seen_capture_paths = set()
+    seen_capture_file_ids = set()
+    preflight_snapshots = {}
+    for e in entries:
+        path = _safe_frame_path(frames_dir, e["file"])
+        if path is None:
+            return {"success": False, "source": "frames_dir",
+                    "error": "PNG frame is missing or outside export directory"}
+        # Distinct names (including symlink aliases) may refer to the same
+        # underlying frame. Treat such metadata as an incomplete capture.
+        canonical = os.path.normcase(path)
+        if canonical in seen_capture_paths:
+            return {"success": False, "source": "frames_dir",
+                    "error": "capture contains duplicate resolved PNG frames"}
+        seen_capture_paths.add(canonical)
+        try:
+            info = os.stat(path)
+        except OSError as exc:
+            return {"success": False, "source": "frames_dir",
+                    "error": f"Cannot inspect PNG frame: {exc}"}
+        # Different hardlink names have different resolved paths but the
+        # same file identity. They must not count as independent captures.
+        if info.st_ino:
+            file_id = (info.st_dev, info.st_ino)
+            if file_id in seen_capture_file_ids:
+                return {"success": False, "source": "frames_dir",
+                        "error": "capture contains duplicate physical PNG frames"}
+            seen_capture_file_ids.add(file_id)
+        # Preserve the identity and metadata of every frame checked during
+        # preflight. Selected files must still be the same immutable capture
+        # when their bytes are later read for the Gemini request.
+        preflight_snapshots[canonical] = _file_snapshot(info)
+        # Keep the existing size-check seam used by preflight regression tests.
+        try:
+            size = os.path.getsize(path)
+        except OSError as exc:
+            return {"success": False, "source": "frames_dir",
+                    "error": f"Cannot inspect PNG frame: {exc}"}
+        if size == 0:
+            return {"success": False, "source": "frames_dir",
+                    "error": "PNG frame is empty"}
+        if size > MAX_FRAME_IMAGE_BYTES:
+            return {"success": False, "source": "frames_dir",
+                    "error": "PNG frame exceeds the upload size limit"}
+
     # 多すぎる場合は均等間引き
     if len(entries) > max_images:
-        stepf = len(entries) / max_images
-        entries = [entries[int(i * stepf)] for i in range(max_images)]
+        # Cover the final frame as well as the first. The previous floor(i*N/K)
+        # sampling always skipped the last frame when downsampling, potentially
+        # missing a broken export tail. Use integer arithmetic for stable indices.
+        if max_images == 1:
+            entries = [entries[0]]
+        else:
+            last = len(entries) - 1
+            entries = [entries[(i * last) // (max_images - 1)]
+                       for i in range(max_images)]
 
     # 画像 + 各画像の時刻ラベルを contents に並べる
     contents: list[Any] = []
@@ -570,18 +858,34 @@ def analyze_frames_dir(
                 # problem while still returning success; never silently skip.
                 return {"success": False, "source": "frames_dir",
                         "error": "Selected PNG frame is missing or outside export directory"}
-            if os.path.getsize(path) > MAX_FRAME_IMAGE_BYTES:
-                return {"success": False, "error": "PNG frame exceeds the upload size limit",
-                        "source": "frames_dir"}
-            frame_signature = _video_signature(path)
-            with open(path, "rb") as fh:
+            canonical = os.path.normcase(path)
+            expected = preflight_snapshots.get(canonical)
+            if expected is None:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame changed after preflight"}
+            # O_NOFOLLOW prevents a last-component symlink swap where supported;
+            # fstat and path stat verify the actual opened file and its contents.
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as fh:
+                before = _file_snapshot(os.fstat(fh.fileno()))
+                if before != expected:
+                    return {"success": False, "source": "frames_dir",
+                            "error": "Selected PNG frame changed after preflight"}
                 img_bytes = fh.read(MAX_FRAME_IMAGE_BYTES + 1)
+                after = _file_snapshot(os.fstat(fh.fileno()))
+            if (after != expected or _file_snapshot(os.stat(path)) != expected):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame changed during upload preparation"}
+            if not img_bytes:
+                return {"success": False, "error": "Selected PNG frame is empty",
+                        "source": "frames_dir"}
             if (len(img_bytes) > MAX_FRAME_IMAGE_BYTES
                     or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Frame payload exceeds the upload size limit",
                         "source": "frames_dir"}
-            if (_video_signature(path) != frame_signature
-                    or len(img_bytes) != frame_signature[2]):
+            frame_signature = _video_signature(path)
+            if frame_signature[2] != len(img_bytes):
                 return {"success": False, "source": "frames_dir",
                         "error": "Selected PNG frame changed while being read"}
             media_snapshots.append(
@@ -625,6 +929,17 @@ def analyze_frames_dir(
                     or wav_bytes[8:12] != b"WAVE"):
                 return {"success": False, "error": "Requested audio is not a RIFF/WAVE file",
                         "source": "frames_dir"}
+            # A RIFF/WAVE signature alone is insufficient: a truncated WAV
+            # can still start with RIFF and WAVE. Do not certify an incomplete
+            # audio track or upload appended bytes outside the RIFF container.
+            riff_size = int.from_bytes(wav_bytes[4:8], "little")
+            if riff_size < 4 or riff_size != len(wav_bytes) - 8:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Requested audio RIFF/WAVE size does not match file length"}
+            chunk_error = _wav_chunk_error(wav_bytes)
+            if chunk_error:
+                return {"success": False, "source": "frames_dir",
+                        "error": chunk_error}
             if (_video_signature(audio_path) != audio_signature
                     or len(wav_bytes) != audio_signature[2]):
                 return {"success": False, "source": "frames_dir",
@@ -637,11 +952,22 @@ def analyze_frames_dir(
                 text="↑これは上記フレーム区間全体の音声です。画像の時刻と対応付けて音響イベントを解析してください。"))
 
         # 指示プロンプト
-        contents.append(genai_types.Part.from_text(text=(
+        media_description = (
             "上記は、ある動画区間を時刻順にサンプリングした連番フレーム画像"
-            "(各画像の直後にその時刻を示すラベルあり)と、その区間の音声です。\n\n"
-            + _build_prompt(instruction)
-        )))
+            "(各画像の直後にその時刻を示すラベルあり)"
+        )
+        if audio_path is not None:
+            media_description += "と、その区間の音声です。"
+        else:
+            media_description += "です。音声データは提供されていません。"
+        prompt = media_description + "\n\n" + _build_prompt(instruction)
+        if audio_path is None:
+            prompt += (
+                "\n\n重要: 音声データがないため、BGM・効果音・声・無音などの"
+                "音響イベントを観測したと推測して報告しないでください。"
+                "全イベントの audio は必ず null とし、type に sound を使わないこと。"
+            )
+        contents.append(genai_types.Part.from_text(text=prompt))
 
         if not _media_still_matches(media_snapshots):
             return {"success": False, "source": "frames_dir",
@@ -653,6 +979,14 @@ def analyze_frames_dir(
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
             return {"success": False, "error": parsed["_parse_error"], "source": "frames_dir"}
+        # A prompt warning alone does not prevent model hallucinations. Never
+        # certify an audio event when the caller supplied images but no audio.
+        if audio_path is None and any(
+                str(event.get("type", "")).strip().casefold() == "sound"
+                or event.get("audio") not in (None, "")
+                for event in parsed["events"]):
+            return {"success": False, "source": "frames_dir",
+                    "error": "Gemini reported audio without a supplied audio track"}
         return {
             **parsed,
             "success": True,

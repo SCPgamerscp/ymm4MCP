@@ -18,10 +18,17 @@ namespace YMM4McpPlugin
 
         private object GetItemKeyframes(HttpListenerRequest req)
         {
-            int tf = -1, tl = -1;
-            int.TryParse(req.QueryString["frame"], out tf);
-            int.TryParse(req.QueryString["layer"], out tl);
-            string itemId = req.QueryString["item_id"] ?? "";
+            (string itemId, int tf, int tl) selector;
+            try
+            {
+                selector = KeyframeSelectorSafety.Parse(
+                    req.QueryString["item_id"], req.QueryString["frame"], req.QueryString["layer"]);
+            }
+            catch (ArgumentException ex)
+            {
+                return Failure("ITEM_SELECTOR_INVALID", ex.Message);
+            }
+            var (itemId, tf, tl) = selector;
             string prop = req.QueryString["prop"] ?? "";
             return Application.Current.Dispatcher.Invoke(() =>
             {
@@ -29,22 +36,51 @@ namespace YMM4McpPlugin
                 if (located.error != null) return located.error;
                 var item = located.item!;
                 var identity = GetItemIdentity(item);
-                var properties = string.IsNullOrWhiteSpace(prop)
-                    ? ListAnimatableProperties(item)
-                    : new[] { prop };
+                // The opt-in live smoke test must never certify a partial
+                // inventory as complete when a YMM4 property getter fails.
+                bool strictInventory = string.IsNullOrWhiteSpace(prop)
+                    && req.QueryString["strict_inventory"] == "1";
+                IEnumerable<string> properties;
+                try
+                {
+                    properties = string.IsNullOrWhiteSpace(prop)
+                        ? strictInventory ? ListAnimatablePropertiesStrict(item) : ListAnimatableProperties(item)
+                        : new[] { prop };
+                }
+                catch (Exception)
+                {
+                    return Failure("ANIMATION_INVENTORY_INCOMPLETE",
+                        "アニメーション一覧の取得に失敗しました。実機検証を中断してください");
+                }
                 var animations = new List<object>();
                 var names = new List<string>();
                 foreach (var name in properties)
                 {
-                    var anim = ResolveAnimation(item, name);
-                    if (anim == null) continue;
-                    names.Add(name);
-                    animations.Add(new
+                    try
                     {
-                        prop = name,
-                        type = anim.GetType().Name,
-                        keyframes = ReadKeyframes(anim, located.frame)
-                    });
+                        var anim = ResolveAnimation(item, name);
+                        if (anim == null)
+                        {
+                            if (strictInventory)
+                                return Failure("ANIMATION_INVENTORY_INCOMPLETE",
+                                    "アニメーション " + name + " を再取得できませんでした");
+                            continue;
+                        }
+                        names.Add(name);
+                        animations.Add(new
+                        {
+                            prop = name,
+                            type = anim.GetType().Name,
+                            keyframes = ReadKeyframes(anim, located.frame)
+                        });
+                    }
+                    catch (Exception)
+                    {
+                        if (strictInventory)
+                            return Failure("ANIMATION_INVENTORY_INCOMPLETE",
+                                "アニメーション " + name + " の読取に失敗しました");
+                        throw;
+                    }
                 }
                 return (object)new
                 {
@@ -55,6 +91,7 @@ namespace YMM4McpPlugin
                     frame = located.frame,
                     layer = located.layer,
                     properties = names,
+                    inventory_complete = strictInventory,
                     animations
                 };
             });
@@ -99,8 +136,9 @@ namespace YMM4McpPlugin
                 if (KeyframeHostBinding.HasConflictingBinding(item, anim))
                     return Failure("KEYFRAME_BINDING_CONFLICT",
                         "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
-                if (action == "set" && relativeFrame > 0)
-                    KeyframeHostBinding.TryBind(item, anim);
+                if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
+                    return Failure("KEYFRAME_BINDING_UNAVAILABLE",
+                        "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
@@ -134,7 +172,7 @@ namespace YMM4McpPlugin
 
         private (object? item, int frame, int layer, object? error) LocateTimelineItem(string itemId, int frame, int layer)
         {
-            if (itemId.Length == 0 && frame < 0 && layer < 0)
+            if (itemId.Length == 0 && (frame < 0 || layer < 0))
                 return (null, 0, 0, Failure("ITEM_SELECTOR_REQUIRED", "item_id または frame+layer を指定してください"));
             var vm = GetMainViewModel();
             if (vm == null) return (null, 0, 0, Failure("NO_MAIN_VIEW_MODEL", "VM失敗"));
@@ -154,8 +192,11 @@ namespace YMM4McpPlugin
                 foreach (var iv in rawItems)
                 {
                     var info = ReadItemInfo(iv);
-                    if ((frame < 0 || info.frame == frame) && (layer < 0 || info.layer == layer))
+                    if (info.frame == frame && info.layer == layer)
                     {
+                        if (KeyframeSelectorSafety.IsAmbiguousMatch(target, info.item))
+                            return (null, 0, 0, Failure("ITEM_COORDINATES_AMBIGUOUS",
+                                "同じframe/layerに複数のアイテムがあります。item_idで指定してください"));
                         target = info.item;
                         foundFrame = info.frame;
                         foundLayer = info.layer;
@@ -182,6 +223,32 @@ namespace YMM4McpPlugin
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(n => n)
                 .ToArray();
+        }
+
+        // Strict mode is used only by the opt-in destructive smoke test.
+        // Unlike GetPropObj, direct reflection does not hide throwing getters.
+        // A failure in *any* readable item property aborts the test rather
+        // than allowing an unobserved animation to be changed silently.
+        private static string[] ListAnimatablePropertiesStrict(object item)
+        {
+            var names = new List<string>();
+            foreach (var property in item.GetType().GetProperties(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length != 0 || property.GetGetMethod(true) == null)
+                    continue;
+                object? value = property.GetValue(item);
+                if (value != null && value.GetType().Name.Contains("ReactiveProperty"))
+                {
+                    var inner = value.GetType().GetProperty("Value",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (inner?.GetGetMethod(true) != null)
+                        value = inner.GetValue(value);
+                }
+                if (IsAnimation(value)) names.Add(property.Name);
+            }
+            return names.Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         private static object? ResolveAnimation(object item, string prop)
@@ -219,7 +286,7 @@ namespace YMM4McpPlugin
                 if (valuesHasStart && at == 0) continue;
                 int valueIndex = valuesHasStart ? i + 1 : i;
                 double? value = valueIndex >= 0 && valueIndex < values.Count ? values[valueIndex] : null;
-                result.Add(new { at, absolute_frame = itemStartFrame + at, value });
+                result.Add(new { at, absolute_frame = KeyframeSelectorSafety.AbsoluteFrame(itemStartFrame, at), value });
             }
             return result;
         }
@@ -341,11 +408,15 @@ namespace YMM4McpPlugin
         {
             if (TryInvokeNamed(anim, KeyframeRemoveNames, frame)) return true;
             var keyFrames = GetPropObj(anim, "KeyFrames");
-            return keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame);
+            if (keyFrames != null && TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame" }, frame)) return true;
+            return KeyframeCollectionRemoval.TryRemove(anim, frame);
         }
 
         private static bool ClearKeyframes(object anim)
         {
+            // Prefer a single verified transaction over a series of removals.
+            // Otherwise a failure halfway through leaves an edited animation.
+            if (KeyframeCollectionRemoval.TryClear(anim)) return true;
             var frames = ReadFrameList(anim).OrderByDescending(f => f).ToArray();
             if (frames.Length == 0)
             {
@@ -355,7 +426,19 @@ namespace YMM4McpPlugin
             }
             bool any = false;
             foreach (var frame in frames)
-                any |= RemoveKeyframe(anim, frame);
+            {
+                if (!RemoveKeyframe(anim, frame))
+                {
+                    if (any)
+                        throw new InvalidOperationException(
+                            "Keyframe clear stopped after a partial native removal; inspect the animation before retrying.");
+                    return false;
+                }
+                any = true;
+            }
+            if (ReadFrameList(anim).Count != 0)
+                throw new InvalidOperationException(
+                    "Native keyframe clear returned success but some frames remain.");
             return any;
         }
 

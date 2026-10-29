@@ -1,0 +1,18 @@
+name: Keyframe selector safety
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selector-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify strict GET selectors and ambiguous coordinates
+        run: dotnet run --project tests/KeyframeSelectorSafety.Tests/KeyframeSelectorSafety.Tests.csproj --configuration Release

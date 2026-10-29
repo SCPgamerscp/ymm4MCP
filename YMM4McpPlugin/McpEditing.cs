@@ -50,7 +50,7 @@ namespace YMM4McpPlugin
         {
             string Snapshot(string name)
             {
-                try { return GetPropObj(item, name)?.ToString() ?? ""; }
+                try { return ItemSnapshotFormatting.Format(GetPropObj(item, name)); }
                 catch { return ""; }
             }
             string state = string.Join("\u001f", new[]
@@ -58,7 +58,7 @@ namespace YMM4McpPlugin
                 item.GetType().FullName ?? item.GetType().Name,
                 Snapshot("Frame"), Snapshot("Layer"), Snapshot("Length"), Snapshot("Serif"),
                 Snapshot("Text"), Snapshot("FilePath"), Snapshot("Name"), Snapshot("IsEnabled"),
-                RuntimeItemRevisions.GetValue(item, _ => new RuntimeItemRevision()).Generation.ToString()
+                ItemSnapshotFormatting.Format(RuntimeItemRevisions.GetValue(item, _ => new RuntimeItemRevision()).Generation)
             });
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(state))).ToLowerInvariant();
         }
@@ -127,14 +127,6 @@ namespace YMM4McpPlugin
             if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out int result) || result < 0)
                 throw new ArgumentException(key + " must be a nonnegative 32-bit integer");
             return result;
-        }
-
-        private static bool MatchesItemType(object item, string typeName)
-        {
-            var name = item.GetType().Name;
-            return name.Equals(typeName, StringComparison.Ordinal)
-                || name.EndsWith(typeName, StringComparison.OrdinalIgnoreCase)
-                || name.Contains(typeName, StringComparison.OrdinalIgnoreCase);
         }
 
         private static MethodInfo? FindAddMethod(object model, string name, bool voice, bool character)
@@ -364,32 +356,13 @@ namespace YMM4McpPlugin
             catch { return null; }
             if (newcomers.Length == 0) return null;
 
-            var typed = newcomers.Where(i => MatchesItemType(i, typeName)).ToArray();
-            object item;
-            bool verified;
-            if (typed.Length == 1)
-            {
-                item = typed[0];
-                verified = true;
-            }
-            else if (newcomers.Length == 1)
-            {
-                item = newcomers[0];
-                verified = false;
-                warning = JoinWarning(warning, "型名が想定と異なるため検証を緩和しました: " + item.GetType().Name);
-            }
-            else if (typed.Length > 1)
-            {
-                item = typed[0];
-                verified = false;
-                warning = JoinWarning(warning, $"新規アイテムが{typed.Length}件あります。再追加せず items で確認してください");
-            }
-            else
-            {
-                item = newcomers[0];
-                verified = false;
-                warning = JoinWarning(warning, $"新規アイテムが{newcomers.Length}件あります。再追加せず items で確認してください");
-            }
+            // A successful native call is not proof that a specific timeline item was
+            // added. Do not mutate or report an arbitrary newcomer when verification
+            // is missing or ambiguous: the caller must re-read the timeline instead.
+            var selected = AddedItemVerification.UniqueExpectedNewcomer(newcomers, typeName);
+            if (selected == null) return null;
+            object item = selected;
+            bool verified = true;
 
             if (length.HasValue)
             {
@@ -397,13 +370,24 @@ namespace YMM4McpPlugin
                 {
                     var lengthProperty = item.GetType().GetProperty("Length");
                     if (lengthProperty?.CanWrite != true)
+                    {
+                        verified = false;
                         warning = JoinWarning(warning, "追加されましたが長さを設定できません");
+                    }
                     else
+                    {
                         lengthProperty.SetValue(item, length.Value);
+                        if (!AddedItemVerification.LengthMatches(lengthProperty.GetValue(item), length.Value))
+                        {
+                            verified = false;
+                            warning = JoinWarning(warning, "追加後の長さが要求と一致しません");
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    warning = JoinWarning(warning, "追加されましたが長さの設定に失敗: " + (ex.InnerException?.Message ?? ex.Message));
+                    verified = false;
+                    warning = JoinWarning(warning, "追加されましたが長さの設定・検証に失敗: " + (ex.InnerException?.Message ?? ex.Message));
                 }
             }
 

@@ -48,6 +48,10 @@ namespace YMM4McpPlugin
                         fmtSeen = true;
                         if (size < 16) return Fail("AUDIO_FILE_INVALID", "fmt チャンクが不完全です");
                         var fmt = Read(file, (int)Math.Min(size, 40));
+                        // WAVEFORMATEX extensions need both cbSize bytes, and
+                        // cbSize cannot claim bytes outside the fmt chunk.
+                        if (size > 16 && (size < 18 || U16(fmt, 16) > size - 18))
+                            return Fail("AUDIO_FILE_INVALID", "WAV fmt の拡張長が不正です");
                         format = U16(fmt, 0); channels = U16(fmt, 2); rate = checked((int)U32(fmt, 4));
                         byteRate = U32(fmt, 8);
                         align = U16(fmt, 12); bits = U16(fmt, 14);
@@ -66,8 +70,12 @@ namespace YMM4McpPlugin
                                 subtype == new Guid("00000003-0000-0010-8000-00aa00389b71")) format = 3;
                         }
                     }
-                    else if (Text(header, 0) == "data" && dataStart < 0)
+                    else if (Text(header, 0) == "data")
                     {
+                        // A second data chunk must not be silently ignored:
+                        // that would report QA only for the first audio segment.
+                        if (dataStart >= 0)
+                            return Fail("AUDIO_FILE_INVALID", "WAV data チャンクが重複しています");
                         dataStart = file.Position;
                         dataSize = size;
                     }

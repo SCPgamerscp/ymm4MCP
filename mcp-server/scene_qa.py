@@ -25,10 +25,15 @@ def inspect(items, config):
         ratio_key = f"min_{category}_coverage_ratio"
         min_ratios[category] = None
         if ratio_key in config:
-            ratio = finite_number(config[ratio_key], ratio_key)
+            raw_ratio = config[ratio_key]
+            if isinstance(raw_ratio, bool) or not isinstance(raw_ratio, (int, float)):
+                raise ValueError(f"{ratio_key} must be a numeric ratio")
+            ratio = finite_number(raw_ratio, ratio_key)
             if not 0 <= ratio <= 1:
                 raise ValueError(f"{ratio_key} must be between 0 and 1")
             min_ratios[category] = ratio
+        if not required[category] and (ratio_key in config or total_key in config):
+            raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
     index = scene_media.with_coverage(scenes.index(items, config["scene_ranges"]))

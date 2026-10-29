@@ -63,7 +63,15 @@ def parse_allowed_hosts(raw: str) -> list[str]:
                     (len(port) > 1 and port[0] == "0") or
                     not 1 <= int(port) <= 65535):
                 raise ValueError("YMM4_MCP_ALLOWED_HOSTS has an invalid port")
-        canonical = entry.lower()
+        # IPv6 has many equivalent textual representations (zero compression,
+        # leading zeros, embedded IPv4). Compare the actual address rather than
+        # the spelling so an allowlist cannot contain duplicate host rules.
+        if host.startswith("["):
+            canonical = f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]"
+            if port is not None:
+                canonical += f":{port}"
+        else:
+            canonical = entry.lower()
         if canonical in seen:
             raise ValueError("YMM4_MCP_ALLOWED_HOSTS has duplicate entries")
         seen.add(canonical)

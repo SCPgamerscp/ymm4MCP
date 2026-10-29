@@ -77,4 +77,21 @@ Check(!ExportAcceptance.Evaluate("out.mp4", complete with { AudioChannels = 99 }
     "impossible audio channels must fail");
 Check(ExportAcceptance.Evaluate("out.mp4", complete with { AverageFps = null }).Passed,
     "unknown optional FPS metadata must remain allowed");
+// Verified status must not mask contradictory or malformed container metadata.
+foreach (var brand in new string?[] { null, "", "    ", "too-long", "iso\u0001" })
+{
+    var result = ExportAcceptance.Evaluate("out.mp4", complete with { Brand = brand });
+    Check(!result.Passed && result.Issues.Any(i => i.Code == "INVALID_BRAND_METADATA"),
+        "invalid verified MP4 brand passed QA");
+}
+Check(!ExportAcceptance.Evaluate("out.mp4", complete with { Width = 20000 }).Passed,
+    "out-of-range verified width passed QA");
+Check(!ExportAcceptance.Evaluate("out.mp4", complete with { Height = 20000 }).Passed,
+    "out-of-range verified height passed QA");
+var inconsistentAudio = ExportAcceptance.Evaluate("out.mp4", complete with { HasAudio = false });
+Check(!inconsistentAudio.Passed &&
+      inconsistentAudio.Issues.Any(i => i.Code == "INCONSISTENT_AUDIO_METADATA"),
+    "audio format without an audio track passed QA");
+Check(ExportAcceptance.Evaluate("out.mp4", incomplete).Passed,
+    "valid silent export should remain accepted without an audio requirement");
 Console.WriteLine("Export acceptance tests passed");

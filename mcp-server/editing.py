@@ -203,18 +203,33 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         if not isinstance(expected, list) or len(expected) > 1000:
             raise ValueError("expected must be an array of at most 1000 item descriptions")
         supported = {"frame", "layer", "length", "type", "text", "item_id", "revision", "id"}
+        claimed_item_indices = set()
         for index, wanted in enumerate(expected):
             if not isinstance(wanted, dict) or not wanted or set(wanted) - supported:
                 raise ValueError("expected entries must contain supported nonempty item selectors")
+            # Python considers True == 1 and None == a missing dict value.
+            # Validate selectors before matching to avoid false QA passes.
+            for key, value in wanted.items():
+                if key in {"frame", "layer", "length"}:
+                    integer(value, f"expected[{index}].{key}", 1 if key == "length" else 0)
+                elif not isinstance(value, str) or (key != "text" and not value.strip()):
+                    raise ValueError(f"expected[{index}].{key} must be a valid string")
             selector = dict(wanted)
-            legacy_id = selector.pop("id", None)
-            if legacy_id is not None:
+            if "id" in selector:
+                legacy_id = selector.pop("id")
                 if "item_id" in selector and selector["item_id"] != legacy_id:
                     raise ValueError("expected id and item_id must not conflict")
                 selector["item_id"] = legacy_id
             matches = [i for i, item in enumerate(items)
                        if isinstance(item, dict) and all(item.get(k) == v for k, v in selector.items())]
-            if len(matches) != 1:
+            if len(matches) == 1 and matches[0] in claimed_item_indices:
+                problems.append({"code": "EXPECTED_REUSED", "severity": "error",
+                                 "expected_index": index, "expected": selector,
+                                 "matches": matches, "item_ids": _item_ids(items, matches),
+                                 "message": "Multiple expected entries resolve to the same timeline item"})
+            elif len(matches) == 1:
+                claimed_item_indices.add(matches[0])
+            else:
                 problems.append({"code": "EXPECTED_NOT_FOUND" if not matches else "EXPECTED_AMBIGUOUS",
                                  "severity": "error", "expected_index": index,
                                  "expected": selector, "matches": matches,

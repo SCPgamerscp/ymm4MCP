@@ -1,0 +1,22 @@
+name: Main editor selection tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/MainViewModelSelector.cs'
+      - 'tests/MainViewModelSelector.Tests/**'
+      - '.github/workflows/main-editor-selection.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  main-editor-selection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/MainViewModelSelector.Tests/MainViewModelSelector.Tests.csproj --configuration Release
