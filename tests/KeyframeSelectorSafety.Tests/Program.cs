@@ -44,4 +44,42 @@ Check(KeyframeSelectorSafety.IsAmbiguousMatch(first, new object()),
     "distinct timeline items at the same coordinates must be ambiguous");
 Check(KeyframeSelectorSafety.AbsoluteFrame(int.MaxValue - 1, 100) == (long)int.MaxValue + 99,
     "absolute frame arithmetic must not overflow int32");
+// Exercise the complete coordinate-selection path, not only IsAmbiguousMatch.
+// A previous early break in LocateTimelineItem made the ambiguity guard dead code.
+static (object? item, bool ambiguous) SelectAt(
+    int frame, int layer, params (object? item, int frame, int layer)[] entries)
+    => KeyframeSelectorSafety.FindUniqueCoordinateItem(
+        entries, frame, layer, entry =>
+        {
+            var value = (ValueTuple<object?, int, int>)entry;
+            return (value.Item1, value.Item2, value.Item3);
+        });
+
+var second = new object();
+var unique = SelectAt(15, 4, (second, 14, 4), (first, 15, 4), (second, 15, 5));
+Check(ReferenceEquals(unique.item, first) && !unique.ambiguous,
+    "one matching item must be selected even if it is not the first timeline item");
+var overlap = SelectAt(15, 4, (first, 15, 4), (second, 15, 4));
+Check(overlap.item == null && overlap.ambiguous,
+    "two distinct items at identical coordinates must be rejected");
+var lateOverlap = SelectAt(15, 4, (first, 15, 4), (second, 1, 4),
+    (first, 15, 4), (second, 15, 4));
+Check(lateOverlap.item == null && lateOverlap.ambiguous,
+    "a duplicate discovered late in enumeration must not be silently ignored");
+var repeated = SelectAt(15, 4, (first, 15, 4), (first, 15, 4));
+Check(ReferenceEquals(repeated.item, first) && !repeated.ambiguous,
+    "repeated wrappers for the same item reference must not be ambiguous");
+var empty = SelectAt(15, 4, (second, 16, 4), (null, 15, 4));
+Check(empty.item == null && !empty.ambiguous,
+    "no matching non-null item must remain not found");
+var count = 0;
+var inspected = KeyframeSelectorSafety.FindUniqueCoordinateItem(
+    new object[] { first, second, first }, 15, 4, entry =>
+    {
+        count++;
+        return (entry, 15, 4);
+    });
+Check(inspected.ambiguous && count == 2,
+    "selection must inspect beyond the first match and stop after proving ambiguity");
+
 Console.WriteLine("Keyframe selector safety tests passed");
