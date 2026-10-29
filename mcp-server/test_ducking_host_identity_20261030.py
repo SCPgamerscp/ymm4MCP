@@ -48,6 +48,34 @@ class ReadbackItemIdentityTests(unittest.TestCase):
                 self.assertFalse(ducking.verify_keyframes(
                     readback(), "r5", points, 100.0, expected_item_id=value))
 
+    def test_per_write_echo_requires_matching_value(self):
+        point = {"at": 15, "value": 100.0}
+        self.assertFalse(ducking.verify_mutation_point(
+            [{"at": 15, "value": 10.0}], point))
+        self.assertFalse(ducking.verify_mutation_point(
+            [{"at": 15, "value": float("nan")}], point))
+        self.assertFalse(ducking.verify_mutation_point(
+            [{"at": 15, "value": 100.0}, {"at": 15, "value": 100.0}], point))
+        self.assertTrue(ducking.verify_mutation_point(
+            [{"at": 15, "value": 100.0}], point))
+
+    def test_final_absolute_frame_mismatch_is_rejected(self):
+        points = ducking.plan(BGM, [VOICE], 100.0)
+        report = readback()
+        report["animations"][0]["keyframes"][1]["absolute_frame"] = 999
+        self.assertFalse(ducking.verify_keyframes(
+            report, "r5", points, 100.0, expected_item_id="bgm:1",
+            expected_start_frame=0))
+
+    def test_correct_absolute_frame_metadata_verifies(self):
+        points = ducking.plan(BGM, [VOICE], 100.0)
+        report = readback()
+        for key in report["animations"][0]["keyframes"]:
+            key["absolute_frame"] = key["at"]
+        self.assertTrue(ducking.verify_keyframes(
+            report, "r5", points, 100.0, expected_item_id="bgm:1",
+            expected_start_frame=0))
+
 
 class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
     async def test_oversized_snapshot_fails_before_keyframe_query(self):
@@ -63,6 +91,26 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_keyframe_response_for_other_item_fails_closed(self):
         wrong = {**KEYS, "item_id": "bgm:other"}
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, wrong])),
+              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post):
+            result = await server.dispatch({
+                "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_KEYFRAMES_UNAVAILABLE")
+        post.assert_not_awaited()
+
+
+    async def test_initial_keyframe_wrong_timeline_frame_is_rejected(self):
+        wrong = {**KEYS, "frame": 7}
+        with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, wrong])),
+              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post):
+            result = await server.dispatch({
+                "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_KEYFRAMES_UNAVAILABLE")
+        post.assert_not_awaited()
+
+    async def test_initial_keyframe_wrong_layer_is_rejected(self):
+        items = {"items": [{**BGM, "layer": 3}, VOICE]}
+        wrong = {**KEYS, "layer": 4}
+        with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[items, wrong])),
               patch.object(server, "ymm4_post", new_callable=AsyncMock) as post):
             result = await server.dispatch({
                 "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
@@ -109,6 +157,23 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_code"], "BGM_DUCKING_OUTCOME_UNKNOWN")
         self.assertEqual(len(calls), 2)
 
+
+    async def test_mutation_echo_wrong_volume_stops_chain(self):
+        result, calls = await self._apply([
+            {"success": True, "revision": "r2",
+             "keyframes": [{"at": 15, "value": 12.0}]}])
+        self.assertEqual(result["error_code"], "BGM_DUCKING_OUTCOME_UNKNOWN")
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(calls), 2)
+
+    async def test_mutation_echo_duplicate_frame_stops_chain(self):
+        result, calls = await self._apply([
+            {"success": True, "revision": "r2",
+             "keyframes": [{"at": 15, "value": 100.0},
+                           {"at": 15, "value": 100.0}]}])
+        self.assertEqual(result["error_code"], "BGM_DUCKING_OUTCOME_UNKNOWN")
+        self.assertEqual(len(calls), 2)
+
     async def test_revision_cycle_stops_before_third_write(self):
         result, calls = await self._apply([
             {"success": True, "revision": "r2"},
@@ -121,7 +186,8 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
         points = ducking.plan(BGM, [VOICE], 100.0)
         replies = [
             {"success": True, "revision": f"r{i + 2}", "item_id": "bgm:1",
-             "prop": "Volume", "action": "set", "at": point["at"]}
+             "prop": "Volume", "action": "set", "at": point["at"],
+             "keyframes": [{"at": point["at"], "value": point["value"]}]}
             for i, point in enumerate(points)]
         result, calls = await self._apply(replies, final_readback=readback())
         self.assertTrue(result["success"])
