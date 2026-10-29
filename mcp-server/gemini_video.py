@@ -314,9 +314,14 @@ def _wav_chunk_error(data: bytes) -> Optional[str]:
     found_fmt = False
     found_data = False
     block_align = None
+    chunk_count = 0
     pcm_guid = bytes.fromhex("0100000000001000800000aa00389b71")
     float_guid = bytes.fromhex("0300000000001000800000aa00389b71")
     while offset < len(data):
+        # A hostile WAV may consist of millions of empty chunks; bound work.
+        chunk_count += 1
+        if chunk_count > 4096:
+            return "Requested audio exceeds the WAV chunk count limit"
         if len(data) - offset < 8:
             return "Requested audio has a truncated WAV chunk header"
         kind = data[offset:offset + 4]
@@ -353,6 +358,11 @@ def _wav_chunk_error(data: bytes) -> Optional[str]:
                 valid_bits = int.from_bytes(fmt[18:20], "little")
                 if not 1 <= valid_bits <= sample_bits:
                     return "Requested audio has invalid extensible WAV valid bits"
+                # A declared speaker map must describe exactly the declared
+                # number of channels; zero means the positions are unspecified.
+                channel_mask = int.from_bytes(fmt[20:24], "little")
+                if channel_mask and channel_mask.bit_count() != channels:
+                    return "Requested audio WAV channel mask does not match channel count"
             if format_tag not in (1, 3):
                 return "Requested audio uses an unsupported WAV codec"
             if (not 1 <= channels <= 32 or not 1 <= sample_rate <= 768_000):

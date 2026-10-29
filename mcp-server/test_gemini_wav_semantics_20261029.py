@@ -129,6 +129,25 @@ class GeminiWavSemanticsTests(unittest.TestCase):
     def test_valid_extensible_pcm_is_accepted(self):
         self.assertTrue(self.analyze(self.extensible_wav())["success"])
 
+    def test_extensible_channel_mask_matches_declared_channels(self):
+        self.assertTrue(self.analyze(self.extensible_wav())["success"])
+        payload = bytearray(self.extensible_wav())
+        # The original mask has two speaker positions for two channels.
+        payload[40:44] = (1).to_bytes(4, "little")
+        self.reject(bytes(payload), "channel mask")
+        payload[40:44] = (0).to_bytes(4, "little")
+        self.assertTrue(self.analyze(bytes(payload))["success"])
+
+    def test_excessive_wav_chunk_count_is_rejected(self):
+        payload = self.wav()
+        junk = b"JUNK" + (0).to_bytes(4, "little")
+        body = payload[8:36] + junk * 4097 + payload[36:]
+        oversized = b"RIFF" + len(body).to_bytes(4, "little") + body
+        self.reject(oversized, "WAV chunk count limit")
+        body = payload[8:36] + junk * 2 + payload[36:]
+        normal = b"RIFF" + len(body).to_bytes(4, "little") + body
+        self.assertTrue(self.analyze(normal)["success"])
+
     def test_unknown_extensible_subtype_and_invalid_bits_are_rejected(self):
         self.reject(self.extensible_wav(subtype=b"\x00" * 16),
                     "unsupported extensible WAV codec")
