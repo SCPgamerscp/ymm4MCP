@@ -90,6 +90,38 @@ class PNGMetadataIntegrityTests(unittest.TestCase):
         self.invalid(iccp(png(), profile(tags=[(1024, 32)])))
         self.invalid(iccp(png(), profile(tags=[(144, 8)])))
 
+    def test_reject_missing_palette_color_in_decoded_pixels(self):
+        # Pillow keeps the index (3) but silently converts it to black even
+        # though the shortened PLTE contains only indices 0 and 1.
+        image = Image.new("P", (8, 8), 3)
+        image.putpalette([0, 0, 0, 255, 255, 255] + [0] * 762)
+        out = BytesIO()
+        image.save(out, "PNG")
+        raw = out.getvalue()
+        offset = 8
+        rebuilt = bytearray(raw[:8])
+        while offset < len(raw):
+            size = int.from_bytes(raw[offset:offset + 4], "big")
+            kind = raw[offset + 4:offset + 8]
+            payload = raw[offset + 8:offset + 8 + size]
+            if kind == b"PLTE":
+                payload = payload[:6]
+            rebuilt.extend(chunk(kind, payload))
+            offset += 12 + size
+        raw = bytes(rebuilt)
+        visual_qa._validate_png_container(raw)  # Structurally valid PNG.
+        with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
+            visual_qa.thumbnail(base64.b64encode(raw).decode("ascii"))
+
+    def test_accept_indexed_pixels_within_short_palette(self):
+        image = Image.new("P", (8, 8), 1)
+        image.putpalette([0, 0, 0, 255, 255, 255])
+        out = BytesIO()
+        image.save(out, "PNG")
+        raw = out.getvalue()
+        self.assertEqual(len(visual_qa.thumbnail(
+            base64.b64encode(raw).decode("ascii"))), 64 * 36 * 3)
+
     def test_reject_apng_control_even_for_one_frame(self):
         for kind, payload in ((b"acTL", b"\x00\x00\x00\x01\x00\x00\x00\x00"),
                               (b"fcTL", b"\x00" * 26),
