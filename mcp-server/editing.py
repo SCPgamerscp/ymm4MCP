@@ -442,14 +442,19 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         timeline indices; frame moves alone must not imply a new failure.
         """
         ids = issue.get("item_ids") or []
-        return (issue["code"], issue.get("source"),
-                tuple(sorted(ids)) if ids else None)
+        return json.dumps([issue["code"], issue.get("source"), sorted(ids)],
+                          sort_keys=True, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"))
 
     def introduces_new_error(previous, latest):
-        previous_errors = {error_identity(issue) for issue in previous["issues"]
-                           if issue["severity"] == "error"}
-        return any(error_identity(issue) not in previous_errors
-                   for issue in latest["issues"] if issue["severity"] == "error")
+        # Compare multiplicities too: three identical black-frame failures
+        # after two is a new failure even if another error was repaired.
+        previous_errors = Counter(error_identity(issue) for issue in previous["issues"]
+                                  if issue["severity"] == "error")
+        latest_errors = Counter(error_identity(issue) for issue in latest["issues"]
+                                if issue["severity"] == "error")
+        return any(count > previous_errors[identity]
+                   for identity, count in latest_errors.items())
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
     if not current["passed"]:
