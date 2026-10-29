@@ -55,11 +55,90 @@ def _spans(scene: dict, names: tuple[str, ...], start: int, end: int) -> list[tu
     return sorted(spans)
 
 
+def _uncovered_from_items(items: list[dict], start: int, end: int) -> list[dict]:
+    """Recompute occupancy from the source spans, without trusting summaries."""
+    intervals = []
+    for item in items:
+        left, right = item.get("visible_start_frame"), item.get("visible_end_frame")
+        if type(left) is not int or type(right) is not int or right <= left:
+            raise ValueError("scene occupancy requires valid visible item ranges")
+        left, right = max(start, left), min(end, right)
+        if left < right:
+            intervals.append((left, right))
+    cursor, gaps = start, []
+    for left, right in sorted(intervals):
+        if left > cursor:
+            gaps.append({"start_frame": cursor, "end_frame": left})
+        cursor = max(cursor, right)
+    if cursor < end:
+        gaps.append({"start_frame": cursor, "end_frame": end})
+    return gaps
+
+
+def _validate_scene_summaries(scene: dict, start: int, end: int) -> None:
+    """Reject stale or forged scene-wide and per-layer occupancy summaries."""
+    keys = ("covered_frames", "uncovered_frames", "uncovered_ranges", "layer_occupancy")
+    if not any(key in scene for key in keys):
+        return
+    gaps = _uncovered_from_items(scene["items"], start, end)
+    uncovered = sum(g["end_frame"] - g["start_frame"] for g in gaps)
+    covered = end - start - uncovered
+    expected = {"covered_frames": covered, "uncovered_frames": uncovered,
+                "uncovered_ranges": gaps}
+    for key, value in expected.items():
+        if key in scene and (scene[key] != value or
+                             (key != "uncovered_ranges" and type(scene[key]) is not int)):
+            raise ValueError(f"scene {key} contradicts item occupancy")
+    if "layer_occupancy" in scene:
+        groups = {}
+        for item in scene["items"]:
+            groups.setdefault(item.get("layer"), []).append(item)
+        expected_layers = []
+        for layer in sorted(groups, key=lambda x: (x is None, x if x is not None else 0)):
+            members = groups[layer]
+            layer_gaps = _uncovered_from_items(members, start, end)
+            missing = sum(g["end_frame"] - g["start_frame"] for g in layer_gaps)
+            expected_layers.append({
+                "layer": layer,
+                "item_ids": list(dict.fromkeys(item.get("item_id") for item in members)),
+                "covered_frames": end - start - missing,
+                "uncovered_frames": missing,
+                "uncovered_ranges": layer_gaps,
+            })
+        if scene["layer_occupancy"] != expected_layers:
+            raise ValueError("scene layer_occupancy contradicts item occupancy")
+
+
+def _validate_continuations(scenes: list[dict]) -> None:
+    """Continuation IDs must match the actual overlap with adjacent scenes."""
+    for pos, scene in enumerate(scenes):
+        for field, neighbor in (
+            ("continues_from_previous_item_ids", scenes[pos - 1] if pos else None),
+            ("continues_into_next_item_ids", scenes[pos + 1] if pos + 1 < len(scenes) else None),
+        ):
+            if field not in scene:
+                continue
+            expected = []
+            if neighbor is not None:
+                for item in scene["items"]:
+                    if (not isinstance(item.get("item_id"), str) or
+                            type(item.get("frame")) is not int or
+                            type(item.get("end_frame")) is not int):
+                        raise ValueError("scene continuation requires complete item evidence")
+                    if (item["frame"] < neighbor["end_frame"] and
+                            item["end_frame"] > neighbor["start_frame"]):
+                        expected.append(item["item_id"])
+            if scene[field] != expected:
+                raise ValueError(f"scene {field} contradicts adjacent scene membership")
+
+
 def with_coverage(index: dict) -> dict:
     """Add coverage only after validating the complete scene evidence."""
     if (not isinstance(index, dict) or not isinstance(index.get("scenes"), list)
             or not 1 <= len(index["scenes"]) <= MAX_SCENES):
         raise ValueError("scene index requires 1..200 scenes")
+    if "success" in index and index["success"] is not True:
+        raise ValueError("scene index must report success")
     seen_ids = set()
     assigned_item_ids = set()
     item_snapshots = {}
@@ -88,16 +167,17 @@ def with_coverage(index: dict) -> dict:
                     raise ValueError("scene item IDs must be distinct nonempty strings")
                 item_ids.add(identity)
                 assigned_item_ids.add(identity)
-                if "frame" in item and "end_frame" in item:
-                    # The same host item may appear in adjacent scenes, but its
-                    # immutable snapshot evidence must not change between them.
-                    snapshot = (item["frame"], item["end_frame"],
-                                item.get("type"), item.get("layer"))
-                    if identity in item_snapshots and item_snapshots[identity] != snapshot:
-                        raise ValueError("scene item identity has conflicting source evidence")
-                    item_snapshots[identity] = snapshot
-            if "layer" in item and item["layer"] is not None and type(item["layer"]) is not int:
-                raise ValueError("scene item layer must be an integer or null")
+                # Even partial source evidence must remain identical across
+                # scenes: otherwise a continuation can impersonate another item.
+                snapshot = tuple((key in item, item.get(key))
+                                 for key in ("frame", "end_frame", "type", "layer"))
+                if identity in item_snapshots and item_snapshots[identity] != snapshot:
+                    raise ValueError("scene item identity has conflicting source evidence")
+                item_snapshots[identity] = snapshot
+            if ("layer" in item and item["layer"] is not None and
+                    (type(item["layer"]) is not int or
+                     not 0 <= item["layer"] <= MAX_FRAME)):
+                raise ValueError("scene item layer must be a bounded integer or null")
             if "frame" in item or "end_frame" in item:
                 frame, source_end = item.get("frame"), item.get("end_frame")
                 if (type(frame) is not int or type(source_end) is not int or
@@ -106,6 +186,8 @@ def with_coverage(index: dict) -> dict:
                 visible_start = item.get("visible_start_frame")
                 visible_end = item.get("visible_end_frame")
                 start, end = _scene_range(scene)
+                if max(start, frame) >= min(end, source_end):
+                    raise ValueError("scene source item does not intersect its scene")
                 if (visible_start != max(start, frame) or
                         visible_end != min(end, source_end) or
                         type(visible_start) is not int or type(visible_end) is not int):
@@ -135,11 +217,14 @@ def with_coverage(index: dict) -> dict:
             if not _safe_identifier(identifier, 64) or identifier in seen_ids:
                 raise ValueError("scene IDs must be distinct nonempty strings")
             seen_ids.add(identifier)
+        _validate_scene_summaries(scene, start, end)
+    _validate_continuations(index["scenes"])
     if "item_count" in index or "unassigned_item_ids" in index:
         unassigned = index.get("unassigned_item_ids")
         total = index.get("item_count")
-        if (type(total) is not int or total < 0 or
+        if (type(total) is not int or not 0 <= total <= MAX_TOTAL_SCENE_ITEMS or
                 not isinstance(unassigned, list) or
+                len(unassigned) > MAX_TOTAL_SCENE_ITEMS or
                 any(not _safe_identifier(identity, 256) for identity in unassigned) or
                 len(set(unassigned)) != len(unassigned) or
                 assigned_item_ids.intersection(unassigned) or
