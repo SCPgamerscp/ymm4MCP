@@ -213,10 +213,7 @@ namespace YMM4McpPlugin
             object? converted;
             try
             {
-                converted = ConvertJson(input, valueType);
-                var underlying = Nullable.GetUnderlyingType(valueType) ?? valueType;
-                if (converted == null ? valueType.IsValueType && Nullable.GetUnderlyingType(valueType) == null
-                    : !underlying.IsInstanceOfType(converted))
+                if (!ReflectionInput.TryConvert(input, valueType, out converted))
                     return Failure("INVALID_ARGUMENT", $"value を {valueType.Name} に変換できません");
             }
             catch (Exception ex) { return Failure("INVALID_ARGUMENT", ex.InnerException?.Message ?? ex.Message); }
@@ -260,18 +257,16 @@ namespace YMM4McpPlugin
                     return ((Task?)null, (object?)null, "METHOD_NOT_FOUND", $"メソッド '{method}'({argElems.Length}引数) 見つからず。候補: {string.Join("; ", avail)}");
                 }
 
-                var m2 = candidates[0];
-                var ps = m2.GetParameters();
-                var args = new object?[ps.Length];
-                try
-                {
-                    for (int i = 0; i < ps.Length; i++) args[i] = ConvertJson(argElems[i], ps[i].ParameterType);
-                }
-                catch (Exception ex) { return ((Task?)null, (object?)null, "INVALID_ARGUMENT", ex.InnerException?.Message ?? ex.Message); }
+                if (!ReflectionInput.TrySelectMethod(candidates, argElems,
+                    out var selected, out var args, out var ambiguous))
+                    return ((Task?)null, (object?)null,
+                        ambiguous ? "AMBIGUOUS_METHOD" : "INVALID_ARGUMENT",
+                        ambiguous ? "複数のメソッドが引数に一致しました。呼び出しを中止します"
+                                  : "引数の型がメソッドのパラメータに一致しません");
 
                 try
                 {
-                    var ret = m2.Invoke(obj, args);
+                    var ret = selected!.Invoke(obj, args);
                     if (ret is Task t) return (t, (object?)null, "", "");
                     return ((Task?)null, (object?)ToJsonSafe(ret), "", "");
                 }
@@ -350,29 +345,6 @@ namespace YMM4McpPlugin
                 return new { count = n, items = list };
             }
             return val.ToString();
-        }
-
-        /// <summary>JsonElement を指定の .NET 型に変換する。</summary>
-        private static object? ConvertJson(JsonElement el, Type targetType)
-        {
-            var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
-            try
-            {
-                if (underlying.IsEnum)
-                {
-                    if (el.ValueKind == JsonValueKind.String) return Enum.Parse(underlying, el.GetString()!, true);
-                    if (el.ValueKind == JsonValueKind.Number) return Enum.ToObject(underlying, el.GetInt32());
-                }
-                return el.ValueKind switch
-                {
-                    JsonValueKind.String => underlying == typeof(string) ? el.GetString() : Convert.ChangeType(el.GetString(), underlying),
-                    JsonValueKind.Number => Convert.ChangeType(el.GetDouble(), underlying),
-                    JsonValueKind.True or JsonValueKind.False => el.GetBoolean(),
-                    JsonValueKind.Null => null,
-                    _ => el.ToString()
-                };
-            }
-            catch { return el.ToString(); }
         }
 
     }

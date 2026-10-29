@@ -1,0 +1,24 @@
+name: Settings file integrity regression
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/McpSettings.cs'
+      - 'YMM4McpPlugin/SettingsFileSafety.cs'
+      - 'tests/SettingsFileSafety.Tests/**'
+      - '.github/workflows/settings-file-integrity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  settings-safety:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test bounded, unambiguous, atomic settings
+        run: dotnet run --project tests/SettingsFileSafety.Tests/SettingsFileSafety.Tests.csproj --configuration Release

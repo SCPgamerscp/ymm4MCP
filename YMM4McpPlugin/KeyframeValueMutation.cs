@@ -12,7 +12,12 @@ namespace YMM4McpPlugin
         {
             if (entry == null || !double.IsFinite(requested)) return false;
             var property = entry.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
-            if (property?.CanWrite != true || property.GetIndexParameters().Length != 0)
+            // Reflection can invoke private or init-only setters even though normal
+            // YMM4 edits cannot. Never bypass the host's public mutability contract.
+            if (property?.GetMethod?.IsPublic != true || property.SetMethod?.IsPublic != true
+                || property.GetIndexParameters().Length != 0
+                || property.SetMethod.ReturnParameter.GetRequiredCustomModifiers()
+                    .Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)))
                 return false;
             var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
             var typeCode = Type.GetTypeCode(type);

@@ -6,42 +6,66 @@ $serverDir = $sourceDir
 
 # The Windows py launcher can exist without a registered Python 3 runtime.
 # Probe it first, then fall back to python.exe instead of failing installation.
+# The MCP dependency stack requires Python >= 3.10.  A machine may have an
+# older py -3 default even when python.exe points to a supported interpreter.
 $pythonCommand = $null
 $pythonArgs = @()
 if (Get-Command py -ErrorAction SilentlyContinue) {
-    try {
-        & py -3 -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $pythonCommand = 'py'
-            $pythonArgs = @('-3')
+    # A user-configured py -3 default may be Python 3.9 even when a newer
+    # interpreter is registered. -V:3 asks the modern Windows launcher for
+    # the newest registered Python 3 (including versions after 3.14). Older
+    # launchers can reject it, so retain the explicit-version fallbacks.
+    foreach ($selector in @('-3', '-V:3', '-3.14', '-3.13', '-3.12', '-3.11', '-3.10')) {
+        try {
+            & py $selector -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $pythonCommand = 'py'
+                $pythonArgs = @($selector)
+                break
+            }
+        } catch {
+            # A missing launcher registration is not fatal: try the next one.
         }
-    } catch {
-        # A broken launcher must not prevent checking python.exe.
     }
 }
 if ($null -eq $pythonCommand -and (Get-Command python -ErrorAction SilentlyContinue)) {
     try {
-        & python -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        & python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
         if ($LASTEXITCODE -eq 0) { $pythonCommand = 'python' }
     } catch {
         # Report a single actionable error below if both candidates fail.
     }
 }
 if ($null -eq $pythonCommand) {
-    throw '利用可能な Python 3 が見つかりません。Python 3 をインストールしてから再実行してください。'
+    throw '利用可能な Python 3.10 以上が見つかりません。Python 3.10 以上をインストールしてから再実行してください。'
 }
 # Install into a persistent per-user directory.  Running from a downloaded ZIP
 # extraction directory would break Claude Desktop when that folder is removed.
-# Direct setup.ps1 usage without -Install keeps its previous in-place behavior.
-if ($Install) {
+# Configuring Claude Desktop must always use the persistent installation:
+# otherwise a later deletion of the downloaded ZIP folder breaks the MCP entry.
+# Read-only connection checks without -Install remain in-place.
+if ($Install -or $ConfigureClaudeDesktop) {
     if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA が見つかりません。' }
     $targetDir = Join-Path $env:LOCALAPPDATA 'YMM4MCP\mcp-server'
     if ([IO.Path]::GetFullPath($sourceDir).TrimEnd('\') -ine
         [IO.Path]::GetFullPath($targetDir).TrimEnd('\')) {
         [IO.Directory]::CreateDirectory($targetDir) | Out-Null
+        # Keep local MCP configuration across upgrades.  A Release ZIP may
+        # contain a default config.json, but must not erase an existing user's
+        # model selection or local secrets.  Never import connection.json from
+        # the extracted ZIP: the plugin owns the live connection descriptor.
+        # New installs still receive the packaged default config.json.
+        $copyArgs = @('/E', '/XJ', '/XD', '.venv', '__pycache__', '.git',
+                      '/XF', '*.pyc', 'connection.json')
+        foreach ($localName in @('config.json', 'settings.local.json', '.env')) {
+            if (Test-Path -LiteralPath (Join-Path $targetDir $localName) -PathType Leaf) {
+                $copyArgs += $localName
+            }
+        }
+        $copyArgs += @('/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
         # robocopy preserves the directory layout and skips ephemeral Python
-        # environments/caches.  Exit codes 0..7 mean success on Windows.
-        & robocopy.exe $sourceDir $targetDir /E /XJ /XD '.venv' '__pycache__' '.git' /XF '*.pyc' /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+        # environments/caches. Exit codes 0..7 mean success on Windows.
+        & robocopy.exe $sourceDir $targetDir @copyArgs
         if ($LASTEXITCODE -ge 8) { throw 'MCP サーバーの永続インストールに失敗しました。' }
     }
     $serverDir = $targetDir
@@ -109,20 +133,54 @@ if ($ConfigureClaudeDesktop) {
                 $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force
             }
             $current = $config.mcpServers.ymm4
+            if ($null -ne $current -and $current -isnot [pscustomobject]) {
+                throw "既存の mcpServers.ymm4 は JSON オブジェクトである必要があります: $configPath"
+            }
+            # Keep user-managed MCP settings (for example API credentials,
+            # timeout and disabled flags) when reinstalling or upgrading.
+            # Only the executable/script paths and an explicitly requested
+            # -Port belong to the installer. Do not mutate $current.env:
+            # the original config must remain intact until the atomic commit.
+            $desiredEntry = [pscustomobject]@{
+                command = $entry.command
+                args = @($entry.args)
+            }
+            if ($null -ne $current) {
+                foreach ($property in $current.PSObject.Properties) {
+                    if ($property.Name -notin @('command', 'args', 'env')) {
+                        $desiredEntry | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                    }
+                }
+            }
+            $desiredEnv = [pscustomobject]@{}
+            if ($null -ne $current -and $null -ne $current.env) {
+                if ($current.env -isnot [pscustomobject]) {
+                    throw "既存の mcpServers.ymm4.env は JSON オブジェクトである必要があります: $configPath"
+                }
+                foreach ($property in $current.env.PSObject.Properties) {
+                    $desiredEnv | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                }
+            }
+            if ($null -ne $Port) {
+                $desiredEnv | Add-Member -NotePropertyName YMM4_API_BASE -NotePropertyValue $entry.env.YMM4_API_BASE -Force
+            }
+            if (@($desiredEnv.PSObject.Properties).Count -gt 0) {
+                $desiredEntry | Add-Member -NotePropertyName env -NotePropertyValue $desiredEnv
+            }
             $sameEntry = $null -ne $current -and
                          $current.command -ceq $entry.command -and
                          ($current.args -is [array]) -and
                          @($current.args).Count -eq 1 -and
                          @($current.args)[0] -ceq $entry.args[0] -and
-                         (($null -eq $current.env -and $null -eq $entry.env) -or
-                          ($null -ne $current.env -and $null -ne $entry.env -and
+                         ($null -eq $Port -or
+                          ($null -ne $current.env -and
                            $current.env.YMM4_API_BASE -ceq $entry.env.YMM4_API_BASE))
             if ($sameEntry) {
                 Write-Output "Claude Desktop の設定は更新済みです: $configPath"
                 continue
             }
 
-            $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $entry -Force
+            $config.mcpServers | Add-Member -NotePropertyName ymm4 -NotePropertyValue $desiredEntry -Force
             $configDir = Split-Path -Parent $configPath
             [IO.Directory]::CreateDirectory($configDir) | Out-Null
             $tempPath = "$configPath.tmp.$([guid]::NewGuid().ToString('N'))"

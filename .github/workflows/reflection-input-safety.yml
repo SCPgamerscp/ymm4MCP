@@ -1,0 +1,23 @@
+name: Reflection input safety tests
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/ReflectionInput.cs'
+      - 'YMM4McpPlugin/McpReflectionApi.cs'
+      - 'tests/ReflectionInput.Tests/**'
+      - '.github/workflows/reflection-input-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reflection-input:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/ReflectionInput.Tests/ReflectionInput.Tests.csproj --configuration Release

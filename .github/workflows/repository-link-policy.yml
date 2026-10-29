@@ -1,0 +1,19 @@
+name: Repository link policy
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  link-policy-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate safe repository navigation
+        run: dotnet run --project tests/RepositoryLinkPolicy.Tests/RepositoryLinkPolicy.Tests.csproj --configuration Release

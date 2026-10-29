@@ -12,6 +12,16 @@ def _windows_media_file(path: str) -> bool:
     drive, tail = ntpath.splitdrive(path)
     if not ntpath.isabs(path) or not tail or not ntpath.basename(path):
         return False
+    # Windows treats device names and alternate data streams specially, even
+    # when they appear in otherwise absolute file paths.
+    reserved = {"CON", "PRN", "AUX", "NUL"}
+    reserved.update(f"COM{i}" for i in range(1, 10))
+    reserved.update(f"LPT{i}" for i in range(1, 10))
+    for part in (segment for segment in tail.replace("/", "\\").split("\\") if segment):
+        if (part in {".", ".."} or part.endswith((" ", ".")) or
+                any(char in '<>:"|?*' for char in part) or
+                part.split(".", 1)[0].rstrip(" ").upper() in reserved):
+            return False
     if len(drive) == 2:
         return drive[1] == ":" and drive[0].isascii() and drive[0].isalpha()
     if drive.startswith(ntpath.sep * 2):

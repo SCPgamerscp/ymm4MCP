@@ -192,6 +192,8 @@ namespace YMM4McpPlugin
                     await Task.WhenAny(tcs.Task, Task.Delay(2000));
 
                     // バッファを結合
+                    if (buffer.IsTruncated) return (object)new { success = false, error_code = "AUDIO_CAPTURE_LIMIT_EXCEEDED",
+                        error = "録音バッファが安全な上限を超えました。録音時間やデバイス形式を調整してください" };
                     var allBytes = buffer.ToArray();
 
                     // WAVヘッダーを付けてbase64化
@@ -284,6 +286,8 @@ namespace YMM4McpPlugin
                     await Task.WhenAny(recordTcs.Task, Task.Delay(2000));
                     await captureTask;
 
+                    if (audioBuffer.IsTruncated) return (object)new { success = false, error_code = "AUDIO_CAPTURE_LIMIT_EXCEEDED",
+                        error = "録音バッファが安全な上限を超えました。録音時間やデバイス形式を調整してください" };
                     var allBytes = audioBuffer.ToArray();
                     using var ms = new MemoryStream();
                     using (var writer = new NAudio.Wave.WaveFileWriter(ms, waveFormat))
@@ -478,12 +482,18 @@ namespace YMM4McpPlugin
 
                     string? b64 = null; int w = 0, h = 0;
                     Application.Current.Dispatcher.Invoke(() => { var r = CaptureCurrentFrame(); b64 = r.b64; w = r.w; h = r.h; });
-                    if (b64 == null) continue;
+                    // A partial capture sequence must not be returned as a
+                    // successful export: downstream Gemini QA would miss frames.
+                    if (string.IsNullOrEmpty(b64))
+                        return new { success = false, error = $"Preview capture failed at frame {frame}" };
 
                     string fileName = $"frame_{index:D5}_f{frame}.png";
                     string filePath = System.IO.Path.Combine(outputDir, fileName);
                     try { System.IO.File.WriteAllBytes(filePath, Convert.FromBase64String(b64)); }
-                    catch (Exception ex) { savedFrames.Add(new { frame, error = ex.Message }); continue; }
+                    catch (Exception ex)
+                    {
+                        return new { success = false, error = $"Cannot save captured frame {frame}: {ex.Message}" };
+                    }
 
                     double timeMs = (frame - startFrame) * 1000.0 / fps;
                     savedFrames.Add(new { index, frame, timeMs = Math.Round(timeMs, 1), file = fileName, width = w, height = h });
