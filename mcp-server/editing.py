@@ -12,7 +12,11 @@ def _bounded_qa_issues(issues):
     """Keep QA gate reports usable without silently accepting truncated failures."""
     if len(issues) <= MAX_QA_ISSUES:
         return issues
-    omitted = len(issues) - (MAX_QA_ISSUES - 1)
+    # A dropped truncation marker represents its underlying omitted issues,
+    # not one additional issue. Preserve nested source-report omissions when
+    # combining already-bounded structural, visual and audio evidence.
+    omitted = sum(issue["omitted_count"] if issue.get("code") == "QA_ISSUES_TRUNCATED" else 1
+                  for issue in issues[MAX_QA_ISSUES - 1:])
     return issues[:MAX_QA_ISSUES - 1] + [{
         "code": "QA_ISSUES_TRUNCATED", "severity": "error",
         "omitted_count": omitted,
@@ -232,6 +236,17 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                         isinstance(items[s_index].get("text"), str) and
                         "".join(items[s_index]["text"].split()) == normalized]
             if matching:
+                # A correct subtitle must not mask a second, conflicting
+                # subtitle on another configured subtitle layer.
+                conflicting = [(s_index, text) for s_index, text in overlapping
+                               if not isinstance(text, str) or "".join(text.split()) != normalized]
+                if conflicting:
+                    affected = [index, *(s_index for s_index, _ in conflicting)]
+                    problems.append({"code": "SUBTITLE_TEXT_MISMATCH", "severity": "error",
+                                     "index": index, "indices": affected,
+                                     "item_ids": _item_ids(items, affected),
+                                     "frame_range": [frame, end], "expected_text": voice_text,
+                                     "actual_texts": [text for _, text in conflicting]})
                 cursor, gaps = frame, []
                 for left, right, _ in sorted(matching):
                     if left - cursor > tolerance:
@@ -372,6 +387,9 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         if "issue_count" in report and (type(report["issue_count"]) is not int or
                                         report["issue_count"] != len(report["issues"])):
             raise ValueError("validate report issue_count disagrees with issues")
+        if "item_count" in report and (type(report["item_count"]) is not int or
+                                       report["item_count"] < 0):
+            raise ValueError("validate report item_count must be a non-negative integer")
         if "problems" in report and report["problems"] != report["issues"]:
             raise ValueError("validate report problems disagrees with issues")
         if "summary" in report:
@@ -412,7 +430,9 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             return json.dumps(evidence, sort_keys=True, ensure_ascii=False,
                               allow_nan=False, separators=(",", ":"))
 
-        return sorted(canonical(issue) for issue in report["issues"])
+        # Identical diagnostics can describe different snapshots when the
+        # number of timeline items changes. That is progress, not a stalled edit.
+        return report.get("item_count"), sorted(canonical(issue) for issue in report["issues"])
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
     if not current["passed"]:
