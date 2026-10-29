@@ -302,6 +302,37 @@ def _file_snapshot(info) -> tuple:
             info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _wav_chunk_error(data: bytes) -> Optional[str]:
+    """Check RIFF chunk boundaries and the presence of usable audio data.
+
+    A RIFF/WAVE envelope without a fmt or nonempty data chunk is not an
+    audio capture and must not be treated as a completed audio QA sample.
+    """
+    offset = 12  # Caller has already checked the RIFF/WAVE envelope.
+    found_fmt = False
+    found_data = False
+    while offset < len(data):
+        if len(data) - offset < 8:
+            return "Requested audio has a truncated WAV chunk header"
+        kind = data[offset:offset + 4]
+        size = int.from_bytes(data[offset + 4:offset + 8], "little")
+        end = offset + 8 + size
+        if end > len(data) or end + (size & 1) > len(data):
+            return "Requested audio has a truncated WAV chunk"
+        if kind == b"fmt ":
+            if found_fmt or size < 16:
+                return "Requested audio has a duplicate or invalid WAV fmt chunk"
+            found_fmt = True
+        elif kind == b"data":
+            if found_data or size == 0:
+                return "Requested audio has a duplicate or empty WAV data chunk"
+            found_data = True
+        offset = end + (size & 1)
+    if not found_fmt or not found_data:
+        return "Requested audio lacks a WAV fmt or nonempty data chunk"
+    return None
+
+
 def analyze_frames_dir(
     frames_dir: str,
     frames_meta: Optional[list[dict]] = None,
@@ -576,11 +607,21 @@ def analyze_frames_dir(
                     not audio_path.lower().endswith(".wav") or not os.path.isfile(audio_path)):
                 return {"success": False, "source": "frames_dir",
                         "error": "Requested audio file must be an existing WAV"}
-            if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
+            audio_snapshot = _file_snapshot(os.stat(audio_path))
+            if audio_snapshot[2] > MAX_AUDIO_BYTES:
                 return {"success": False, "error": "Audio exceeds the upload size limit",
                         "source": "frames_dir"}
             with open(audio_path, "rb") as fh:
+                if _file_snapshot(os.fstat(fh.fileno())) != audio_snapshot:
+                    return {"success": False, "source": "frames_dir",
+                            "error": "Requested audio changed before reading"}
                 wav_bytes = fh.read(MAX_AUDIO_BYTES + 1)
+                if _file_snapshot(os.fstat(fh.fileno())) != audio_snapshot:
+                    return {"success": False, "source": "frames_dir",
+                            "error": "Requested audio changed while reading"}
+            if _file_snapshot(os.stat(audio_path)) != audio_snapshot:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Requested audio changed during upload preparation"}
             if (len(wav_bytes) > MAX_AUDIO_BYTES
                     or total_payload_bytes + len(wav_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Audio payload exceeds the upload size limit",
@@ -597,6 +638,10 @@ def analyze_frames_dir(
             if riff_size < 4 or riff_size != len(wav_bytes) - 8:
                 return {"success": False, "source": "frames_dir",
                         "error": "Requested audio RIFF/WAVE size does not match file length"}
+            chunk_error = _wav_chunk_error(wav_bytes)
+            if chunk_error:
+                return {"success": False, "source": "frames_dir",
+                        "error": chunk_error}
             total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
             contents.append(genai_types.Part.from_text(
