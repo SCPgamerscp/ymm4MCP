@@ -1,8 +1,8 @@
 """Regression contract for Issue #22/#140 composed PR CI.
 
-A queued pull_request check must test the triggering PR head SHA from its event,
-not a newer revision fetched from the moving refs/pull/<number>/head. Manual dispatches
-are allowed to compose the latest available heads.
+The all-open-PR audit pins the triggering PR SHA and archives the exact
+composed tree. All #22/#140, Python, Windows and real-export checks must use
+that archive rather than re-merging a stale list of historical PRs.
 """
 from pathlib import Path
 import re
@@ -21,42 +21,53 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         cls.source = WORKFLOW.read_text(encoding="utf-8-sig")
 
     def test_pull_request_uses_triggering_head_sha(self):
+        audit = self.source.split(
+            "  audit-open-pr-merge-compatibility:", 1
+        )[1].split("  all-open-prs-python-integration:", 1)[0]
         self.assertIn(
             "EVENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}",
-            self.source,
+            audit,
         )
-        self.assertIn("EVENT_PR_NUMBER: ${{ github.event.pull_request.number || '' }}", self.source)
+        self.assertIn(
+            "EVENT_PR_NUMBER: ${{ github.event.pull_request.number || '' }}",
+            audit,
+        )
         self.assertIn(
             'if [[ "$number" == "$EVENT_PR_NUMBER" && -n "$EVENT_PR_HEAD_SHA" ]]; then',
-            self.source,
+            audit,
         )
         self.assertIn(
-            'git fetch --no-tags origin "$EVENT_PR_HEAD_SHA:refs/remotes/pr/${number}"',
-            self.source,
+            'refspec="${EVENT_PR_HEAD_SHA}:refs/remotes/audit-pr/${number}"',
+            audit,
         )
 
     def test_manual_dispatch_keeps_current_ref_fallback(self):
         self.assertIn("workflow_dispatch:", self.source)
+        audit = self.source.split(
+            "  audit-open-pr-merge-compatibility:", 1
+        )[1].split("  all-open-prs-python-integration:", 1)[0]
         self.assertIn(
-            'git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"',
-            self.source,
+            'refspec="refs/pull/${number}/head:refs/remotes/audit-pr/${number}"',
+            audit,
         )
-        self.assertIn('git merge --no-ff --no-edit "refs/remotes/pr/${number}"', self.source)
 
-
-    def test_composition_includes_export_qa_pr(self):
-        # The export QA branch modifies the same packaging workflow as #228;
-        # composing it is required before claiming release integration passed.
-        # This order must match the numeric all-open-PR merge audit.
-        match = re.search(r"for number in ((?:\d+\s+)*\d+); do", self.source)
-        self.assertIsNotNone(match, "Curated PR merge loop missing")
-        numbers = [int(value) for value in match.group(1).split()]
-        self.assertEqual(numbers, sorted(set(numbers)))
-        self.assertTrue(
-            {218, 219, 221, 228, 229, 234, 241, 243, 244, 248,
-             251, 254, 255, 257, 259, 260}.issubset(set(numbers)),
-            "Release integration must include setup, keyframe, export QA and snapshot fixes",
+    def test_issue22_and_140_checks_use_the_same_audited_source(self):
+        curated = self.source.split(
+            "  setup-cross-pr-integration:", 1
+        )[1].split("  composed-real-export-qa:", 1)[0]
+        self.assertIn("needs: audit-open-pr-merge-compatibility", curated)
+        self.assertIn(
+            "if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'",
+            curated,
         )
+        self.assertIn("name: all-open-prs-composed-source", curated)
+        self.assertIn("tar -xf all-open-prs-composed.tar -C composed", curated)
+        self.assertIn("working-directory: composed", curated)
+        self.assertNotIn("git fetch", curated)
+        self.assertNotIn("git merge", curated)
+        self.assertNotIn("for number in ", curated)
+        self.assertIn("Test all composed keyframe C# regression projects", curated)
+        self.assertIn("Test composed Issue 22 and 140 Python setup", curated)
 
     def test_export_qa_discovers_new_regression_modules(self):
         # Hard-coded unittest module lists missed newly added tests on PR #229,
@@ -76,7 +87,7 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
     def test_real_export_qa_uses_exact_composed_source(self):
         # Real export QA must inspect the exact all-open-PR archive that
         # passed both the Windows package and Python integration jobs.
-        # The curated 15-PR source is NOT equivalent to the all-PR package.
+        # The #22/#140 checks now consume this same archive.
         self.assertIn("  composed-real-export-qa:", self.source)
         export_job = self.source.split("  composed-real-export-qa:", 1)[1].split(
             "  audit-open-pr-merge-compatibility:", 1
@@ -159,9 +170,8 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertNotIn("git push", self.source)
 
     def test_all_open_pr_audit_pins_the_triggering_pr_head(self):
-        # The curated suite already pins the triggering PR to the event SHA. The 50-PR
-        # audit must not silently test a newer triggering PR revision if it is pushed
-        # after the run starts, or the two green jobs prove different code.
+        # The audit pins the triggering PR to the event SHA so downstream jobs
+        # cannot test a newer revision pushed after the run starts.
         audit = self.source.split(
             "  audit-open-pr-merge-compatibility:", 1
         )[1].split("  all-open-prs-python-integration:", 1)[0]
