@@ -6,6 +6,7 @@ import zlib
 
 from PIL import Image
 import visual_qa
+from _icc_test_profiles import gray_icc_profile, rgb_icc_profile
 
 
 def png(mode="RGB"):
@@ -27,17 +28,12 @@ def insert(raw, kind, payload, *, after_idat=False):
 
 
 def profile(space=b"RGB ", tags=()):
-    result = bytearray(132 + 12 * len(tags))
-    result[:4] = len(result).to_bytes(4, "big")
-    result[16:20] = space
-    result[20:24] = b"XYZ "
-    result[36:40] = b"acsp"
-    result[128:132] = len(tags).to_bytes(4, "big")
-    for i, (offset, size) in enumerate(tags):
-        start = 132 + 12 * i
-        result[start:start + 4] = b"desc"
-        result[start + 4:start + 8] = offset.to_bytes(4, "big")
-        result[start + 8:start + 12] = size.to_bytes(4, "big")
+    result = bytearray(gray_icc_profile() if space == b"GRAY"
+                       else rgb_icc_profile())
+    if tags:
+        # Deliberately corrupt the first genuine tag record to exercise bounds.
+        offset, size = tags[0]
+        result[136:144] = offset.to_bytes(4, "big") + size.to_bytes(4, "big")
     return bytes(result)
 
 
@@ -83,12 +79,50 @@ class PNGMetadataIntegrityTests(unittest.TestCase):
 
     def test_reject_icc_tag_table_overflow(self):
         raw = bytearray(profile())
-        raw[128:132] = (1).to_bytes(4, "big")
+        raw[128:132] = (9999).to_bytes(4, "big")
         self.invalid(iccp(png(), raw))
 
     def test_reject_icc_out_of_bounds_tag(self):
         self.invalid(iccp(png(), profile(tags=[(1024, 32)])))
         self.invalid(iccp(png(), profile(tags=[(144, 8)])))
+
+    def test_reject_missing_required_icc_tags(self):
+        original = rgb_icc_profile()
+        count = int.from_bytes(original[128:132], "big")
+        for missing in (b"desc", b"cprt", b"wtpt", b"rXYZ",
+                        b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC"):
+            with self.subTest(missing=missing):
+                raw = bytearray(original)
+                for i in range(count):
+                    start = 132 + 12 * i
+                    if raw[start:start + 4] == missing:
+                        raw[start:start + 4] = b"zzzz"
+                        break
+                self.invalid(iccp(png(), raw))
+
+    def test_reject_missing_gray_tone_curve(self):
+        raw = bytearray(gray_icc_profile())
+        count = int.from_bytes(raw[128:132], "big")
+        for i in range(count):
+            start = 132 + 12 * i
+            if raw[start:start + 4] == b"kTRC":
+                raw[start:start + 4] = b"zzzz"
+                break
+        self.invalid(iccp(png("L"), raw))
+
+    def test_reject_duplicate_icc_tag_or_invalid_required_type(self):
+        raw = bytearray(rgb_icc_profile())
+        raw[144:148] = b"desc"  # Duplicate first tag signature.
+        self.invalid(iccp(png(), raw))
+        raw = bytearray(rgb_icc_profile())
+        count = int.from_bytes(raw[128:132], "big")
+        for i in range(count):
+            start = 132 + 12 * i
+            if raw[start:start + 4] == b"wtpt":
+                offset = int.from_bytes(raw[start + 4:start + 8], "big")
+                raw[offset:offset + 4] = b"JUNK"
+                break
+        self.invalid(iccp(png(), raw))
 
     def test_reject_missing_palette_color_in_decoded_pixels(self):
         # Pillow keeps the index (3) but silently converts it to black even
