@@ -62,6 +62,7 @@ def with_coverage(index: dict) -> dict:
         raise ValueError("scene index requires 1..200 scenes")
     seen_ids = set()
     assigned_item_ids = set()
+    item_snapshots = {}
     previous_end = 0
     total_scene_items = 0
     for scene in index["scenes"]:
@@ -87,6 +88,16 @@ def with_coverage(index: dict) -> dict:
                     raise ValueError("scene item IDs must be distinct nonempty strings")
                 item_ids.add(identity)
                 assigned_item_ids.add(identity)
+                if "frame" in item and "end_frame" in item:
+                    # The same host item may appear in adjacent scenes, but its
+                    # immutable snapshot evidence must not change between them.
+                    snapshot = (item["frame"], item["end_frame"],
+                                item.get("type"), item.get("layer"))
+                    if identity in item_snapshots and item_snapshots[identity] != snapshot:
+                        raise ValueError("scene item identity has conflicting source evidence")
+                    item_snapshots[identity] = snapshot
+            if "layer" in item and item["layer"] is not None and type(item["layer"]) is not int:
+                raise ValueError("scene item layer must be an integer or null")
             if "frame" in item or "end_frame" in item:
                 frame, source_end = item.get("frame"), item.get("end_frame")
                 if (type(frame) is not int or type(source_end) is not int or
@@ -107,7 +118,8 @@ def with_coverage(index: dict) -> dict:
                 if (type(visible_start) is not int or type(visible_end) is not int or
                         type(relative_start) is not int or type(relative_end) is not int or
                         relative_start != visible_start - start or
-                        relative_end != visible_end - start):
+                        relative_end != visible_end - start or
+                        not 0 <= relative_start < relative_end <= end - start):
                     raise ValueError("scene relative item range contradicts visible range")
             if "crosses_boundary" in item:
                 boundary = item["crosses_boundary"]
