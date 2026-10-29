@@ -302,6 +302,15 @@ def analyze_frames_dir(
         return {"success": False, "source": "frames_dir",
                 "error": "frames_meta contains no captured frames"}
 
+    # A caller-supplied QA instruction must not create an unbounded prompt
+    # or carry malformed Unicode into the Gemini request.
+    if event_instruction is not None and (
+            not isinstance(event_instruction, str)
+            or len(event_instruction) > 32_768
+            or any(0xD800 <= ord(ch) <= 0xDFFF or ch == "\\x00"
+                   for ch in event_instruction)):
+        return {"success": False, "source": "frames_dir",
+                "error": "event_instruction must be valid text of at most 32768 characters"}
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
 
     # 解析対象の画像ファイルを決定(metaがあればそれを優先、なければフォルダ走査)
