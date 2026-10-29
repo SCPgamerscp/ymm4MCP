@@ -162,8 +162,22 @@ Check(!EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "cp_1234567
 Check(!EditCheckpointSafety.IsOwnedBackupPath(null, ownedDir),
     "null backup path accepted for deletion");
 
-// Full rollback is opt-in and may only open an owned, nonempty backup for
-// the same saved project. A forged persisted BackupPath must never be opened.
+// Never delete a checkpoint backup that is currently open as a project.
+string pruningDir = Path.Combine(Path.GetTempPath(), "ymm4-prune-" + Guid.NewGuid().ToString("N"));
+string activeBackup = Path.Combine(pruningDir, "cp_12345678.ymmp");
+Check(!EditCheckpointSafety.CanPruneBackup(activeBackup, pruningDir, activeBackup),
+    "active restored project must not be pruned");
+Check(!EditCheckpointSafety.CanPruneBackup(activeBackup, pruningDir, null),
+    "unknown current project must not authorize backup deletion");
+Check(EditCheckpointSafety.CanPruneBackup(activeBackup, pruningDir, "C:\\other\\project.ymmp"),
+    "inactive owned backup should be prunable");
+Check(!EditCheckpointSafety.CanPruneBackup(Path.Combine(pruningDir, "..", "outside", "cp_12345678.ymmp"),
+        pruningDir, "C:\\other\\project.ymmp"),
+    "backup pruning must reject escaped paths");
+
+// Full rollback requires an owned backup with the exact SHA-256 recorded at
+// checkpoint creation. Replacing the bytes while preserving size/timestamps
+// must never result in a successful restore.
 string restoreDir = Path.Combine(Path.GetTempPath(), "ymm4-restore-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(restoreDir);
 try
@@ -171,24 +185,36 @@ try
     const string checkpointId = "cp_12345678";
     const string project = "C:\\video\\project.ymmp";
     string backup = Path.Combine(restoreDir, checkpointId + ".ymmp");
-    File.WriteAllText(backup, "{\\\"project\\\":true}");
-    Check(EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project),
-        "valid owned backup must be restorable");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, "cp_87654321", project, project),
+    File.WriteAllText(backup, "original backup payload");
+    string hash = EditCheckpointSafety.ComputeBackupSha256(backup);
+    Check(EditCheckpointSafety.IsValidBackupSha256(hash), "generated SHA-256 is invalid");
+    Check(!EditCheckpointSafety.IsValidBackupSha256(null), "missing digest accepted");
+    Check(!EditCheckpointSafety.IsValidBackupSha256(new string('a', 63)), "short digest accepted");
+    Check(!EditCheckpointSafety.IsValidBackupSha256(new string('g', 64)), "nonhex digest accepted");
+    Check(EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
+        "valid owned hashed backup must be restorable");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, null),
+        "legacy backup without integrity digest must fail closed");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, "cp_87654321", project, project, hash),
         "a checkpoint must not restore another checkpoint's backup");
     Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project,
-            "C:\\video\\different.ymmp"), "a backup must not restore into a different project");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, null, project),
+            "C:\\video\\different.ymmp", hash), "backup must not restore into a different project");
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, null, project, hash),
         "unknown source project must reject restore");
     Check(!EditCheckpointSafety.IsRestorableBackup(
             Path.Combine(restoreDir, "..", "outside", checkpointId + ".ymmp"),
-            restoreDir, checkpointId, project, project),
+            restoreDir, checkpointId, project, project, hash),
         "restore must reject paths outside the private backup directory");
+    var originalTimestamp = File.GetLastWriteTimeUtc(backup);
+    File.WriteAllText(backup, "modified! backup payload");
+    File.SetLastWriteTimeUtc(backup, originalTimestamp);
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
+        "modified backup with identical length and timestamp must fail");
     File.WriteAllText(backup, "");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project),
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
         "empty backups must not be opened");
     File.Delete(backup);
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project),
+    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
         "missing backups must not be opened");
 }
 finally
@@ -203,15 +229,17 @@ try
     string source = Path.Combine(root, "source.ymmp");
     string destination = Path.Combine(root, "cp.ymmp");
     File.WriteAllBytes(source, new byte[] { 1, 2, 3, 4, 5 });
-    EditCheckpointSafety.CopyBackupAtomically(source, destination);
+    string copiedHash = EditCheckpointSafety.CopyBackupVerified(source, destination);
     Check(File.ReadAllBytes(destination).SequenceEqual(File.ReadAllBytes(source)),
         "published checkpoint bytes differ from source");
+    Check(string.Equals(copiedHash, EditCheckpointSafety.ComputeBackupSha256(source), StringComparison.Ordinal),
+        "verified copy did not return the actual source digest");
     Check(!Directory.EnumerateFiles(root, "*.tmp").Any(), "temporary file leaked after success");
 
     string failed = Path.Combine(root, "missing-backup.ymmp");
     try
     {
-        EditCheckpointSafety.CopyBackupAtomically(Path.Combine(root, "not-found.ymmp"), failed);
+        EditCheckpointSafety.CopyBackupVerified(Path.Combine(root, "not-found.ymmp"), failed);
         throw new Exception("copying a missing project unexpectedly succeeded");
     }
     catch (FileNotFoundException) { }
