@@ -3,39 +3,449 @@ import json
 import math
 import re
 import subprocess
+import threading
+import time
+from fractions import Fraction
 from pathlib import Path
 
 from jobs import is_absolute_media_path
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+MAX_SIGNAL_EVENTS = 256  # Per signal type, across all tracks and windows.
 
 
-def _signal_ranges(log, start_name, end_name):
+def _unique_object_pairs(pairs):
+    """Reject duplicate ffprobe JSON keys instead of trusting the last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate ffprobe metadata key")
+        result[key] = value
+    return result
+
+
+def _trusted_filter_payload(line, filter_name, bare_names):
+    """Ignore media metadata and unrelated FFmpeg logs masquerading as QA."""
+    line = line.lstrip()
+    # Tests and callers may provide the filter's unprefixed diagnostic text.
+    if any(line.startswith(name + ":") for name in bare_names):
+        return line
+    # Malformed bare signal labels must reach validation instead of being
+    # silently ignored as if the detector had emitted no events.
+    if any(re.match(r"^" + re.escape(name) + r"(?:\s|=|$)", line)
+           for name in bare_names if name.endswith(("_start", "_end", "_duration"))):
+        return line
+    # Bare astats summaries sometimes omit the colon ("Overall"). Malformed
+    # bare peak/channel labels must also reach validation instead of vanishing.
+    # Prefixed diagnostics from other filters still cannot masquerade as astats.
+    if "Overall" in bare_names and line.strip() == "Overall":
+        return line
+    if "Peak level dB" in bare_names and line.startswith("Peak level dB"):
+        return line
+    if "Channel" in bare_names and re.match(r"^Channel(?::|\s+[+-]?[0-9]|$)", line):
+        # Ignore unrelated unprefixed metadata such as "Channel layout".
+        return line
+    match = re.match(
+        r"^\[(?:Parsed_)?" + re.escape(filter_name)
+        + r"(?:_[0-9]+)?\s+@\s+[^\]]+\]\s*(.*)$", line)
+    return match.group(1) if match else ""
+
+
+def _signal_ranges(log, start_name, end_name, window_duration=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
+    # Capture complete tokens, including malformed punctuation. Treating
+    # "1,broken" as "1" would invent a valid event and conceal bad logs.
+    # Ignoring a broken *_end token would extend a prior start to sample EOF.
     pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
-                         + r"):\s*(\d+(?:\.\d+)?)")
+                         + r"):\s*([^\s]+)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
     start = None
     ranges = []
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    # Bare diagnostics are supported for older FFmpeg logs and fixtures,
+    # but another filter\'s line must never supply this filter\'s events.
+    bare_names = (start_name, end_name)
     for line in log.splitlines():
-        for name, timestamp in pattern.findall(line):
-            value = float(timestamp)
-            if name == start_name:
-                start = value
-            elif start is not None:
-                if value > start:
-                    ranges.append((start, value))
+        payload = _trusted_filter_payload(line, filter_name, bare_names)
+        for name, timestamp in pattern.findall(payload):
+            # A malformed non-finite end invalidates the active interval.
+            # Otherwise an unmatched start would be extended to sample EOF
+            # and invent a black/silent/frozen span.
+            if not number.fullmatch(timestamp):
                 start = None
+                continue
+            value = float(timestamp)
+            if not math.isfinite(value):
+                start = None
+                continue
+            # FFmpeg may report negative silence_start during filter preroll.
+            # Clamp it rather than turning '-1.5' into a positive 1.5.
+            value = max(0.0, value)
+            if window_duration is not None:
+                value = min(value, window_duration)
+            if name == start_name:
+                # Repeated starts in concatenated/overlapping diagnostics
+                # must not discard the beginning of a real signal interval.
+                start = value if start is None else min(start, value)
+            elif start is not None and value > start:
+                ranges.append((start, value))
+                start = None
+            # An out-of-order end is not evidence that the active signal
+            # stopped; retain its start for a later valid end.
+    # A black/silent interval that reaches EOF has no matching *_end line.
+    # Close it at the decoded window boundary rather than silently dropping it.
+    if start is not None and window_duration is not None and start < window_duration:
+        ranges.append((start, window_duration))
     return ranges
 
 
 def _audio_peak_db(log):
     """Highest finite sample peak from FFmpeg astats (dBFS); not true-peak."""
     peaks = []
-    for value in re.findall(r"\bPeak level dB:\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\b", log):
-        peak = float(value)
-        if math.isfinite(peak):
-            peaks.append(peak)
+    pattern = re.compile(r"\bPeak level dB:\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?=$|[\s,;])")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "astats", ("Peak level dB",))
+        for value in pattern.findall(payload):
+            peak = float(value)
+            if math.isfinite(peak):
+                peaks.append(peak)
     return max(peaks) if peaks else None
+
+
+
+def _invalid_audio_peak_metrics(log):
+    """A malformed astats peak must not silently disappear from audio QA."""
+    number = re.compile(
+        r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "astats", ("Peak level dB",)).strip()
+        if not payload.startswith("Peak level dB"):
+            continue
+        # A changed or damaged astats label is not proof that the audio
+        # had no peak. Reject it rather than silently skipping QA.
+        if not payload.startswith("Peak level dB:"):
+            return True
+        raw = payload.split(":", 1)[1].strip()
+        if raw.lower() == "-inf":
+            continue  # Valid FFmpeg representation of complete silence.
+        if not number.fullmatch(raw) or not math.isfinite(float(raw)):
+            return True
+    return False
+
+
+def _invalid_signal_labels(log, start_name, end_name):
+    """Reject damaged FFmpeg signal labels instead of missing the event."""
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    names = (start_name, end_name, start_name.replace("_start", "_duration"))
+    malformed = re.compile(r"(?<![A-Za-z0-9_])(?:"
+                           + "|".join(map(re.escape, names)) + r")\b(?!:)")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, filter_name, names)
+        if malformed.search(payload):
+            return True
+    return False
+
+
+def _invalid_signal_timestamps(log, start_name, end_name, window_duration=None):
+    """Reject malformed or out-of-window FFmpeg signal timestamps."""
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    pattern = re.compile(r"\b(" + re.escape(start_name) + r"|"
+                         + re.escape(end_name) + r"):\s*([^\s]*)")
+    number = re.compile(
+        r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
+        for name, raw in pattern.findall(payload):
+            if not number.fullmatch(raw) or not math.isfinite(float(raw)):
+                return True
+            # A start after the window cannot be observed. However an end
+            # beyond the window may legitimately describe a partially clipped
+            # event, which the range parser safely truncates at the boundary.
+            if (name == start_name and window_duration is not None and
+                    float(raw) > window_duration +
+                    max(0.05, window_duration * 0.001)):
+                return True
+    return False
+
+
+
+def _invalid_signal_sequence(log, start_name, end_name):
+    """Reject an end preceding an active start, even when both are numeric.
+
+    A backward end is not evidence that a black/silent/frozen interval
+    finished; treating it as EOF-terminated could invent a long warning.
+    Duplicate starts and unpaired ends are tolerated for concatenated logs.
+    """
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    pattern = re.compile(r"\b(" + re.escape(start_name) + r"|" + re.escape(end_name)
+                         + r"):\s*([^\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    active = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, filter_name, (start_name, end_name))
+        for name, raw in pattern.findall(payload):
+            if not number.fullmatch(raw):
+                continue  # Syntax is checked separately.
+            timestamp = float(raw)
+            if not math.isfinite(timestamp):
+                continue
+            if name == start_name:
+                active = timestamp if active is None else min(active, timestamp)
+            elif active is not None:
+                if timestamp < active:
+                    return True
+                active = None
+    return False
+
+
+def _invalid_signal_durations(log, start_name, end_name):
+    """Reject malformed, non-finite or negative FFmpeg signal durations."""
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    duration_name = start_name.replace("_start", "_duration")
+    pattern = re.compile(r"\b" + re.escape(duration_name) + r":\s*([^\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, filter_name, (start_name, end_name, duration_name))
+        for raw in pattern.findall(payload):
+            if not number.fullmatch(raw):
+                return True
+            value = float(raw)
+            if not math.isfinite(value) or value < 0:
+                return True
+    return False
+
+
+def _invalid_signal_duration_mismatch(log, start_name, end_name):
+    """Reject a duration contradicting a matching start/end interval.
+
+    Compare only complete numeric triples from the same trusted filter.
+    Orphan end/duration messages cannot establish a contradiction.
+    """
+    filter_name = {"black_start": "blackdetect", "silence_start": "silencedetect",
+                   "freeze_start": "freezedetect"}[start_name]
+    duration_name = start_name.replace("_start", "_duration")
+    pattern = re.compile(r"\b(" + "|".join(map(re.escape, (
+        start_name, end_name, duration_name))) + r"):\s*([^\s]*)")
+    number = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+    active = None
+    completed_length = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, filter_name, (start_name, end_name, duration_name))
+        for name, raw in pattern.findall(payload):
+            if not number.fullmatch(raw):
+                continue  # Invalid syntax is handled by other guards.
+            value = float(raw)
+            if not math.isfinite(value):
+                continue
+            if name == start_name:
+                active = value if active is None else min(active, value)
+                completed_length = None
+            elif name == end_name:
+                completed_length = (value - active if active is not None
+                                    and value >= active else None)
+                active = None
+            else:
+                if (completed_length is not None
+                        and abs(completed_length - value)
+                        > max(0.05, completed_length * 0.00001)):
+                    return True
+                completed_length = None
+    return False
+
+
+def _audio_channel_peaks(log):
+    """Read channel-specific FFmpeg astats peaks, including -inf for silence.
+
+    A separate Overall section is never a channel measurement. Only astats
+    diagnostics are trusted; media title/comment text must not supply peaks.
+    """
+    peaks = {}
+    channel = None
+    # FFmpeg channel counts are capped at 64. Never convert arbitrarily
+    # long untrusted decimal fields to Python integers.
+    channel_pattern = re.compile(r"Channel:\s*([1-9][0-9]{0,2})")
+    peak_pattern = re.compile(
+        r"Peak level dB:\s*(-inf|[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)",
+        re.IGNORECASE)
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, "astats", ("Channel", "Overall", "Peak level dB")).strip()
+        if payload == "Overall":
+            channel = None
+            continue
+        if re.match(r"^Channel(?:\s|:|$)", payload):
+            # Invalid channel headers must also clear the previous channel,
+            # otherwise the following peak can be attributed to the wrong one.
+            channel = None
+            match = channel_pattern.fullmatch(payload)
+            if match:
+                value = int(match.group(1))
+                if value <= 64:
+                    channel = value
+            continue
+        if channel is None:
+            continue
+        match = peak_pattern.fullmatch(payload)
+        if match:
+            raw = match.group(1)
+            peak = -math.inf if raw.lower() == "-inf" else float(raw)
+            if peak == -math.inf or math.isfinite(peak):
+                # Multiple astats summaries may occur in one decode. The
+                # last one can be silent even when earlier audio was loud;
+                # retain the highest measured peak across the whole sample.
+                peaks[channel] = max(peaks.get(channel, -math.inf), peak)
+    return peaks
+
+
+
+def _audio_channel_headers(log):
+    """Observe astats channel headers even when their peak metrics are absent.
+
+    An invalid or unexpected channel cannot disappear merely because FFmpeg
+    omitted the corresponding Peak level dB measurement.
+    """
+    observed = set()
+    invalid = False
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "astats", ("Channel",)).strip()
+        if not re.match(r"^Channel(?:\s|:|$)", payload):
+            continue
+        match = re.fullmatch(r"Channel:\s*([1-9][0-9]{0,2})", payload)
+        if match and int(match.group(1)) <= 64:
+            observed.add(int(match.group(1)))
+        else:
+            invalid = True
+    return observed, invalid
+
+
+def _audio_overall_silent(log):
+    """Detect an all-silent astats Overall peak even without channel sections.
+
+    Some FFmpeg builds emit only the Overall summary. Trust only astats
+    diagnostics, and use the last reported Overall peak if repeated.
+    """
+    in_overall = False
+    silent = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(
+            line, "astats", ("Channel", "Overall", "Peak level dB")).strip()
+        if payload == "Overall":
+            in_overall = True
+            # A later Overall section with no peak is not evidence of
+            # silence. Preserve earlier non-silent evidence, but revoke
+            # a previous silent-only measurement until this section reports.
+            if silent is True:
+                silent = None
+        elif re.match(r"^Channel(?:\s|:|$)", payload):
+            # A malformed channel header is a section boundary, but also
+            # makes the earlier Overall summary insufficient evidence of
+            # complete silence in this sample.
+            in_overall = False
+            header = re.fullmatch(r"Channel:\s*([1-9][0-9]{0,2})", payload)
+            if not header or int(header.group(1)) > 64:
+                silent = None
+        elif in_overall and payload.startswith("Peak level dB:"):
+            # Overall summaries can repeat. A later silent summary must
+            # not erase evidence of an earlier non-silent segment.
+            silent = (silent is not False and re.fullmatch(
+                r"Peak level dB:\s*-inf", payload, re.IGNORECASE) is not None)
+    return silent is True
+
+
+def _optional_stream_time(value, *, signed=False):
+    """Parse optional ffprobe stream times without accepting ambiguous values."""
+    if value is None or value == "N/A":
+        return None
+    sign = r"[+-]?" if signed else ""
+    if (type(value) is not str or not re.fullmatch(
+            sign + r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+            value)):
+        raise ValueError("invalid stream time")
+    seconds = float(value)
+    if not math.isfinite(seconds) or (not signed and seconds < 0):
+        raise ValueError("invalid stream time")
+    return seconds
+
+
+
+def _stream_timing_details(stream, container_start):
+    """Expose track timing relative to the container for targeted repairs."""
+    start = _optional_stream_time(stream.get("start_time"), signed=True)
+    length = _optional_stream_time(stream.get("duration"))
+    relative = start - container_start if start is not None else None
+    return {
+        "start_seconds": round(relative, 6) if relative is not None else None,
+        "duration_seconds": round(length, 6) if length is not None else None,
+        "end_seconds": (round(relative + length, 6)
+                        if relative is not None and length is not None else None),
+    }
+
+
+def _frame_rate(value):
+    """Parse ffprobe's exact rational FPS; unknown 0/x is not measured FPS."""
+    if value is None or value == "N/A":
+        return None
+    if type(value) is not str or not re.fullmatch(r"[0-9]{1,9}/[0-9]{1,9}", value):
+        raise ValueError("invalid frame rate")
+    numerator, denominator = map(int, value.split("/"))
+    if denominator == 0:
+        if numerator == 0:
+            return None
+        raise ValueError("invalid frame rate denominator")
+    if numerator == 0:
+        return None
+    fps = numerator / denominator
+    if not 0.1 <= fps <= 1000:
+        raise ValueError("frame rate outside supported range")
+    return round(fps, 3)
+
+
+def _frame_rate_ratio(value):
+    """Expose exact normalized FPS alongside the rounded display number."""
+    if _frame_rate(value) is None:
+        return None
+    numerator, denominator = map(int, value.split("/"))
+    ratio = Fraction(numerator, denominator)
+    return f"{ratio.numerator}/{ratio.denominator}"
+
+
+def _reject_nonfinite_json(value):
+    """Strict JSON does not permit NaN or Infinity tokens."""
+    raise ValueError("non-standard JSON number: " + value)
+
+
+def _finite_json_float(value):
+    """Reject JSON exponent overflow, even in otherwise unused metadata."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number")
+    return number
+
+
+def _check_probe_depth(value, max_depth=64):
+    """Bound nested ffprobe metadata, including unused fields, without recursion."""
+    pending = [(value, 0)]
+    while pending:
+        node, depth = pending.pop()
+        if depth > max_depth:
+            raise ValueError("ffprobe metadata nesting limit exceeded")
+        if isinstance(node, dict):
+            pending.extend((child, depth + 1) for child in node.values())
+        elif isinstance(node, list):
+            pending.extend((child, depth + 1) for child in node)
+
+
+def _file_identity(st):
+    """Include change time so restoring mtime cannot mask an in-place edit."""
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
+            getattr(st, "st_ctime_ns", None))
 
 
 def failure(code, message):
@@ -43,12 +453,206 @@ def failure(code, message):
 
 
 def run(command, timeout):
-    return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
+    """Capture bounded subprocess diagnostics without exhausting RAM or disk.
+
+    Both pipes are drained concurrently. A child exceeding either output cap
+    is killed and rejected, rather than silently treating truncated output
+    as successful media verification.
+    """
+    stdout_limit = 1_000_001  # One byte beyond the accepted ffprobe JSON limit.
+    stderr_limit = 1_000_000
+    stdout_head = bytearray()
+    stderr_tail = bytearray()
+    errors = []
+    over_limit = threading.Event()
+
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        def drain(pipe, keep_head):
+            total = 0
+            limit = stdout_limit if keep_head else stderr_limit
+            try:
+                while True:
+                    chunk = pipe.read(65_536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if keep_head:
+                        room = stdout_limit - len(stdout_head)
+                        if room > 0:
+                            stdout_head.extend(chunk[:room])
+                    else:
+                        stderr_tail.extend(chunk)
+                        if len(stderr_tail) > stderr_limit:
+                            del stderr_tail[:-stderr_limit]
+                    if total > limit:
+                        over_limit.set()
+                        # Stop the noisy process immediately. The other reader
+                        # keeps draining until the child closes both pipes.
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                        break
+            except OSError as exc:
+                errors.append(exc)
+            finally:
+                pipe.close()
+
+        stdout_thread = threading.Thread(target=drain, args=(process.stdout, True),
+                                         daemon=True)
+        stderr_thread = threading.Thread(target=drain, args=(process.stderr, False),
+                                         daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            stdout_thread.join()
+            stderr_thread.join()
+            raise
+        stdout_thread.join()
+        stderr_thread.join()
+    if errors:
+        raise OSError("failed to capture FFmpeg process output") from errors[0]
+    if over_limit.is_set():
+        raise OSError("FFmpeg subprocess output exceeded the capture limit")
+    return subprocess.CompletedProcess(
+        command, returncode, stdout_head.decode("utf-8"),
+        stderr_tail.decode("utf-8", errors="replace"))
+
+def _has_loudnorm_field(text, fields):
+    """Spot damaged loudnorm JSON even when its field names are escaped.
+
+    A malformed second measurement must not be ignored just because the
+    preceding measurement was valid. Recognize JSON unicode escapes and
+    unquoted field names used in damaged diagnostics as well.
+    """
+    normalized = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        lambda match: chr(int(match.group(1), 16)), text)
+    return any(
+        ('"' + field + '"' in normalized
+         or re.search(r"(?<![A-Za-z0-9_])" + re.escape(field)
+                      + r"\s*(?::|=|$)", normalized, re.MULTILINE))
+        for field in fields)
 
 
-def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
-    """Sample both ends and optionally decode all video/audio streams end-to-end."""
+def _loudnorm_measurements(log):
+    """Read original integrated LUFS and inter-sample true peak (dBTP)."""
+    # Normalize CRLF and legacy CR-only FFmpeg diagnostics before matching
+    # JSON block boundaries. Otherwise a valid Windows log is rejected
+    # because the closing brace is followed by a carriage return.
+    log = log.replace("\r\n", "\n").replace("\r", "\n")
+    # FFmpeg emits the input measurements in a final JSON object. Reject
+    # missing, duplicate, or nonfinite values rather than inventing loudness.
+    # FFmpeg normally prints a multiline JSON object, but compact JSON
+    # produced by wrappers or newer builds is equally valid measurement data.
+    blocks = re.findall(r"(?ms)^[ \t]*\{[ \t]*\n.*?^[ \t]*\}[ \t]*$", log)
+    blocks += re.findall(r"(?m)^[ \t]*\{[^\r\n]*\}[ \t]*$", log)
+    measurements = []
+    loudnorm_fields = (
+        "input_i", "input_tp", "input_lra", "input_thresh", "output_i",
+        "output_tp", "output_lra", "output_thresh", "target_offset",
+        "normalization_type")
+    # A truncated second measurement has no closing brace and therefore
+    # cannot appear in blocks. It must not be ignored after a valid first
+    # measurement: that would certify an ambiguous or corrupted FFmpeg log.
+    remainder = log
+    for block in blocks:
+        remainder = remainder.replace(block, "", 1)
+    if _has_loudnorm_field(remainder, loudnorm_fields):
+        raise ValueError("incomplete loudnorm measurement")
+    for block in blocks:
+        # An invalid second measurement must not disappear merely because a
+        # different (valid) loudnorm JSON block was also emitted. Ignore
+        # unrelated JSON, but fail closed for any recognizable measurement.
+        # Damaged separators must not hide a second measurement, and a
+        # standalone auxiliary-only object is not harmless metadata.
+        candidate = _has_loudnorm_field(block, loudnorm_fields)
+        try:
+            record = json.loads(block, object_pairs_hook=_unique_object_pairs,
+                                parse_constant=_reject_nonfinite_json,
+                                parse_float=_finite_json_float)
+            # Loudnorm diagnostics are untrusted subprocess output too.
+            # Reject exponent-overflow and deeply nested unused fields rather
+            # than accepting a plausible input_i from a corrupted record.
+            _check_probe_depth(record)
+        except (ValueError, TypeError, RecursionError) as exc:
+            if candidate:
+                raise ValueError("malformed loudnorm measurement") from exc
+            continue
+        if isinstance(record, dict) and "input_i" in record:
+            measurements.append(record)
+        elif candidate:
+            raise ValueError("incomplete loudnorm measurement")
+    if len(measurements) != 1:
+        raise ValueError("loudnorm input measurement missing or ambiguous")
+    record = measurements[0]
+    # A valid input_i alongside corrupt auxiliary loudnorm measurements is
+    # not a trustworthy first-pass result. Validate the complete measurement
+    # instead of silently accepting NaN/Infinity or impossible loudness data.
+    for field, lower, upper in (("input_tp", -100, 30),
+                                ("input_lra", 0, 100),
+                                ("input_thresh", -100, 30),
+                                ("output_i", -100, 30)):
+        raw = record.get(field)
+        if (type(raw) is not str or not re.fullmatch(
+                r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", raw)):
+            raise ValueError("invalid loudnorm " + field)
+        numeric = float(raw)
+        if not math.isfinite(numeric) or not lower <= numeric <= upper:
+            raise ValueError("out-of-range loudnorm " + field)
+    # FFmpeg normally supplies these output-side measurements too. They are
+    # optional for older test fixtures, but a present invalid value must not
+    # be silently ignored while accepting input_i/input_tp as trustworthy.
+    for field, lower, upper in (("output_tp", -100, 30),
+                                ("output_lra", 0, 100),
+                                ("output_thresh", -100, 30),
+                                ("target_offset", -100, 100)):
+        if field not in record:
+            continue
+        raw = record[field]
+        if (type(raw) is not str or not re.fullmatch(
+                r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", raw)):
+            raise ValueError("invalid loudnorm " + field)
+        numeric = float(raw)
+        if not math.isfinite(numeric) or not lower <= numeric <= upper:
+            raise ValueError("out-of-range loudnorm " + field)
+    if ("normalization_type" in record
+            and record["normalization_type"] not in ("dynamic", "linear")):
+        raise ValueError("invalid loudnorm normalization_type")
+    value = record["input_i"]
+    if type(value) is not str or not re.fullmatch(
+            r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value):
+        raise ValueError("loudnorm integrated loudness is not finite")
+    lufs = float(value)
+    if not math.isfinite(lufs) or not -100 <= lufs <= 30:
+        raise ValueError("loudnorm integrated loudness is out of range")
+    return lufs, float(record["input_tp"])
+
+
+def _integrated_lufs_from_loudnorm(log):
+    """Backward-compatible helper for LUFS-only callers and tests."""
+    return _loudnorm_measurements(log)[0]
+
+
+def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
+            expected_duration_seconds=None, duration_tolerance_seconds=1.0,
+            expected_width=None, expected_height=None, expected_fps=None,
+            fps_tolerance=0.1, expected_audio_sample_rate=None,
+            expected_audio_channels=None, expected_video_streams=None,
+            expected_audio_streams=None, require_tracks_to_end=False,
+            full_signal_scan=False, expected_video_codec=None,
+             expected_audio_codec=None, max_black_seconds=None,
+             max_silence_seconds=None, max_freeze_seconds=None,
+             require_audio_peak_metrics=False, expected_video_frames=None,
+             min_audio_peak_dbfs=None, max_audio_peak_dbfs=None,
+             max_stereo_imbalance_db=None, min_integrated_lufs=None,
+             max_integrated_lufs=None, max_true_peak_dbtp=None):
+    """Sample completed media, optionally checking its expected final duration."""
     if not is_absolute_media_path(path) or Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("path must be an absolute video file path")
     if not isinstance(require_audio, bool):
@@ -57,18 +661,128 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         raise ValueError("sample_seconds must be an integer in 1..15")
     if not isinstance(full_decode, bool):
         raise ValueError("full_decode must be boolean")
+    for name, value in (("min_integrated_lufs", min_integrated_lufs),
+                        ("max_integrated_lufs", max_integrated_lufs)):
+        if value is not None and (type(value) not in (int, float)
+                                  or not math.isfinite(value) or not -70 <= value <= 10):
+            raise ValueError(f"{name} must be finite and in [-70, 10]")
+    if (min_integrated_lufs is not None and max_integrated_lufs is not None
+            and min_integrated_lufs > max_integrated_lufs):
+        raise ValueError("min_integrated_lufs exceeds max_integrated_lufs")
+    if max_true_peak_dbtp is not None and (
+            type(max_true_peak_dbtp) not in (int, float)
+            or not math.isfinite(max_true_peak_dbtp)
+            or not -60 <= max_true_peak_dbtp <= 12):
+        raise ValueError("max_true_peak_dbtp must be finite and in [-60, 12]")
+    loudness_requested = (min_integrated_lufs is not None
+                          or max_integrated_lufs is not None
+                          or max_true_peak_dbtp is not None)
+    if loudness_requested and not full_decode:
+        raise ValueError("loudness and true peak gates require full_decode=True")
+    if not isinstance(full_signal_scan, bool):
+        raise ValueError("full_signal_scan must be boolean")
+    if full_signal_scan and not full_decode:
+        raise ValueError("full_signal_scan requires full_decode=True")
+    if not isinstance(require_tracks_to_end, bool):
+        raise ValueError("require_tracks_to_end must be boolean")
+    if (expected_duration_seconds is not None and
+            (type(expected_duration_seconds) not in (int, float) or
+             not 0 < expected_duration_seconds <= 7 * 24 * 60 * 60 or
+             not math.isfinite(expected_duration_seconds))):
+        raise ValueError("expected_duration_seconds must be finite and in (0, 604800]")
+    if (type(duration_tolerance_seconds) not in (int, float) or
+            not 0 <= duration_tolerance_seconds <= 60 or
+            not math.isfinite(duration_tolerance_seconds)):
+        raise ValueError("duration_tolerance_seconds must be finite and in [0, 60]")
+    for name, value, lower, upper in (
+            ("expected_width", expected_width, 1, 16384),
+            ("expected_height", expected_height, 1, 16384),
+            ("expected_audio_sample_rate", expected_audio_sample_rate, 8000, 384000),
+            ("expected_audio_channels", expected_audio_channels, 1, 8)):
+        if value is not None and (type(value) is not int or not lower <= value <= upper):
+            raise ValueError(f"{name} must be an integer in [{lower}, {upper}]")
+    for name, value, lower in (
+            ("expected_video_streams", expected_video_streams, 1),
+            ("expected_audio_streams", expected_audio_streams, 0)):
+        if value is not None and (type(value) is not int or not lower <= value <= 16):
+            raise ValueError(f"{name} must be an integer in [{lower}, 16]")
+    if expected_audio_streams == 0:
+        if require_audio:
+            raise ValueError("expected_audio_streams=0 requires require_audio=False")
+        if expected_audio_sample_rate is not None or expected_audio_channels is not None:
+            raise ValueError("expected_audio_streams=0 conflicts with expected audio format")
+    if (expected_fps is not None and
+            (type(expected_fps) not in (int, float) or
+             not 0 < expected_fps <= 240 or not math.isfinite(expected_fps))):
+        raise ValueError("expected_fps must be finite and in (0, 240]")
+    if (type(fps_tolerance) not in (int, float) or
+            not 0 <= fps_tolerance <= 10 or not math.isfinite(fps_tolerance)):
+        raise ValueError("fps_tolerance must be finite and in [0, 10]")
+    for name, value in (("expected_video_codec", expected_video_codec),
+                        ("expected_audio_codec", expected_audio_codec)):
+        if value is not None and (type(value) is not str or
+                                  not re.fullmatch(r"[a-z0-9_]{1,32}", value)):
+            raise ValueError(f"{name} must be a lowercase FFmpeg codec name")
+    for name, value in (("max_black_seconds", max_black_seconds),
+                        ("max_silence_seconds", max_silence_seconds),
+                        ("max_freeze_seconds", max_freeze_seconds)):
+        if (value is not None and
+                (type(value) not in (int, float) or
+                 not 0 <= value <= 900 or not math.isfinite(value))):
+            raise ValueError(f"{name} must be finite and in [0, 900]")
+    if type(require_audio_peak_metrics) is not bool:
+        raise ValueError("require_audio_peak_metrics must be boolean")
+    if expected_audio_codec is not None and expected_audio_streams == 0:
+        raise ValueError("expected_audio_codec conflicts with expected_audio_streams=0")
+    if (expected_video_frames is not None and
+            (type(expected_video_frames) is not int or
+             not 1 <= expected_video_frames <= 1_000_000_000)):
+        raise ValueError("expected_video_frames must be an integer in [1, 1000000000]")
+    for name, value, low, high in (
+            ("min_audio_peak_dbfs", min_audio_peak_dbfs, -120, 12),
+            ("max_audio_peak_dbfs", max_audio_peak_dbfs, -120, 12),
+            ("max_stereo_imbalance_db", max_stereo_imbalance_db, 0, 120)):
+        if (value is not None and
+                (type(value) not in (int, float) or
+                 not low <= value <= high or not math.isfinite(value))):
+            raise ValueError(f"{name} must be finite and in [{low}, {high}]")
+    if (min_audio_peak_dbfs is not None and max_audio_peak_dbfs is not None
+            and min_audio_peak_dbfs > max_audio_peak_dbfs):
+        raise ValueError("min_audio_peak_dbfs exceeds max_audio_peak_dbfs")
+    audio_quality_requested = (
+        expected_audio_codec is not None or require_audio_peak_metrics or
+        min_audio_peak_dbfs is not None or max_audio_peak_dbfs is not None or
+        max_stereo_imbalance_db is not None or max_silence_seconds is not None or
+        loudness_requested)
+    if expected_audio_streams == 0 and audio_quality_requested:
+        raise ValueError("audio QA options conflict with expected_audio_streams=0")
+    # Detection filters must observe events shorter than the caller's
+    # requested maximum. Fixed 1s/2s filter minima silently ignored
+    # sub-threshold defects even when the quality gate was stricter.
+    # A 1ms floor bounds diagnostic volume for a zero-second tolerance.
+    black_detect_seconds = (1.0 if max_black_seconds is None else
+                            min(1.0, max(0.001, max_black_seconds)))
+    silence_detect_seconds = (2.0 if max_silence_seconds is None else
+                              min(2.0, max(0.001, max_silence_seconds)))
+    freeze_detect_seconds = (2.0 if max_freeze_seconds is None else
+                             min(2.0, max(0.001, max_freeze_seconds)))
     target = Path(path)
-    if not target.is_file():
+    try:
+        exists = target.is_file()
+    except OSError:
+        return failure("EXPORT_VERIFY_FAILED", "動画ファイルを読み取れません")
+    if not exists:
         return failure("EXPORT_FILE_MISSING", "動画ファイルがありません（Python MCP側のローカルパスを指定）")
     try:
-        if target.stat().st_size < 32:
+        initial_stat = target.stat()
+        if initial_stat.st_size < 32:
             return failure("EXPORT_FILE_EMPTY", "動画ファイルが小さすぎます")
     except OSError:
         return failure("EXPORT_VERIFY_FAILED", "動画ファイルを読み取れません")
 
     try:
         probe = run(["ffprobe", "-v", "error", "-show_entries",
-                     "format=duration:stream=index,codec_type,width,height,sample_rate,channels",
+                     "format=duration,start_time,nb_streams,size:stream=index,codec_type,codec_name,width,height,avg_frame_rate,sample_rate,channels,duration,start_time,nb_frames,time_base:stream_disposition=attached_pic",
                      "-of", "json", str(target)], 15)
     except FileNotFoundError:
         return failure("FFMPEG_UNAVAILABLE", "ffprobeが見つかりません")
@@ -76,16 +790,192 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         return failure("EXPORT_PROBE_TIMEOUT", "ffprobeが時間切れです")
     except OSError:
         return failure("EXPORT_PROBE_FAILED", "ffprobeを実行できません")
-    if probe.returncode or len(probe.stdout) > 1_000_000:
+    except UnicodeDecodeError:
+        return failure("EXPORT_PROBE_FAILED", "ffprobeの出力が不正なUTF-8です")
+    if probe.returncode or len(probe.stdout.encode("utf-8")) > 1_000_000:
         return failure("EXPORT_PROBE_FAILED", "ffprobeで動画を解析できません")
     try:
-        info = json.loads(probe.stdout)
+        info = json.loads(probe.stdout, object_pairs_hook=_unique_object_pairs,
+                          parse_constant=_reject_nonfinite_json,
+                          parse_float=_finite_json_float)
+        _check_probe_depth(info)
+        if not isinstance(info, dict) or not isinstance(info.get("format"), dict):
+            raise ValueError("ffprobe format must be an object")
         streams = info["streams"]
-        duration = float(info["format"]["duration"])
-        if not isinstance(streams, list) or not math.isfinite(duration) or duration <= 0:
+        # An independent ffprobe size claim must match the file we inspected.
+        # A contradictory or malformed claim is not a trustworthy export.
+        reported_size = info["format"].get("size")
+        if reported_size is not None:
+            if (type(reported_size) is not str
+                    or not re.fullmatch(r"[0-9]{1,20}", reported_size)
+                    or int(reported_size) != initial_stat.st_size):
+                raise ValueError("ffprobe file size disagrees with disk")
+        raw_duration = info["format"]["duration"]
+        # Python float() accepts underscores, Unicode digits, and whitespace,
+        # none of which is an unambiguous ffprobe decimal duration.
+        if (type(raw_duration) not in (int, float, str)
+                or (isinstance(raw_duration, str) and not re.fullmatch(
+                    r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+                    raw_duration))):
+            raise ValueError("invalid duration syntax")
+        duration = float(raw_duration)
+        # Transport streams can start at a nonzero presentation timestamp.
+        # Compare track positions to the container origin, not wall-clock zero.
+        container_start = _optional_stream_time(
+            info["format"].get("start_time"), signed=True)
+        # When format.start_time is absent, derive the origin from validated
+        # A/V stream timestamps below instead of assuming wall-clock zero.
+        # The FFmpeg command uses microsecond precision; smaller durations
+        # would round -t to zero and could falsely pass an empty sample.
+        if not isinstance(streams, list) or not math.isfinite(duration) or duration < 0.000001:
             raise ValueError("invalid metadata")
-    except (ValueError, TypeError, KeyError, OverflowError):
+        # The A/V cap below does not cover subtitle/data/attachment tracks.
+        # Bound the entire stream table before iterating over untrusted metadata.
+        if len(streams) > 128:
+            return failure("EXPORT_STREAM_LIMIT", "ストリーム数が多すぎます（最大128）")
+        # ffprobe reports the total stream count independently of the stream
+        # array. An incomplete or contradictory inventory must not be certified.
+        declared_streams = info["format"].get("nb_streams")
+        if declared_streams is not None and (
+                type(declared_streams) is not int or declared_streams != len(streams)):
+            raise ValueError("ffprobe stream count disagrees with stream table")
+        seen_indices = set()
+        last_index = -1
+        for stream in streams:
+            if (not isinstance(stream, dict)
+                    or not isinstance(stream.get("codec_type"), str)
+                    or stream["codec_type"] not in (
+                        "video", "audio", "subtitle", "data", "attachment", "unknown")):
+                raise ValueError("invalid stream metadata")
+            # Cover artwork is a video stream to ffprobe, but not a timed
+            # video track. Do not count or decode it as ordinary video.
+            disposition = stream.get("disposition", {})
+            if not isinstance(disposition, dict):
+                raise ValueError("invalid stream disposition")
+            attached_pic = disposition.get("attached_pic", 0)
+            if (type(attached_pic) is not int or attached_pic not in (0, 1)
+                    or (attached_pic and stream["codec_type"] != "video")):
+                raise ValueError("invalid attached-picture disposition")
+            if "codec_name" in stream and stream["codec_name"] is not None:
+                if (type(stream["codec_name"]) is not str or
+                        not re.fullmatch(r"[a-z0-9_]{1,32}", stream["codec_name"])):
+                    raise ValueError("invalid stream codec name")
+            if "index" in stream:
+                index = stream["index"]
+                if (type(index) is not int or index < 0 or index > 2_147_483_647
+                        or index in seen_indices):
+                    raise ValueError("invalid or duplicate stream index")
+                # FFmpeg's 0:v:N/0:a:N selectors follow stream index order.
+                # Reject reordered metadata so diagnostics cannot be attributed
+                # to the wrong stream when per-type ordinals are constructed.
+                if index <= last_index:
+                    raise ValueError("out-of-order stream indices")
+                last_index = index
+                seen_indices.add(index)
+            if (stream["codec_type"] in ("video", "audio") and not attached_pic
+                    and "time_base" in stream):
+                # A zero or malformed timestamp unit makes all stream timing
+                # comparisons unreliable, even if duration happens to parse.
+                time_base = stream["time_base"]
+                if (type(time_base) is not str or not re.fullmatch(
+                        r"[0-9]{1,18}/[0-9]{1,18}", time_base)):
+                    raise ValueError("invalid stream time base")
+                unit, scale = map(int, time_base.split("/"))
+                if unit == 0 or scale == 0:
+                    raise ValueError("zero stream time base")
+            if (stream["codec_type"] == "video" and not attached_pic
+                    and "nb_frames" in stream):
+                frame_count = stream["nb_frames"]
+                # ffprobe uses N/A when the frame count is unknown. A reported
+                # zero or malformed count must not be mistaken for a valid track.
+                if frame_count not in (None, "N/A"):
+                    if (type(frame_count) is not str
+                            or not re.fullmatch(r"[0-9]{1,19}", frame_count)
+                            or not 1 <= int(frame_count) <= 9_223_372_036_854_775_807):
+                        raise ValueError("invalid video frame count")
+            # ffprobe may expose video dimensions even when the codec cannot
+            # actually be decoded. Incomplete or impossible dimensions must
+            # not be reported as a verified video stream.
+            if (stream["codec_type"] == "video" and not attached_pic and (
+                    "width" in stream or "height" in stream)):
+                width, height = stream.get("width"), stream.get("height")
+                if (type(width) is not int or type(height) is not int
+                        or not 1 <= width <= 16_384 or not 1 <= height <= 16_384
+                        # A 16K-by-16K frame may allocate >1 GiB per frame.
+                        # Keep decoded pixel buffers within a bounded 64 Mi-pixel budget.
+                        or width * height > 67_108_864):
+                    raise ValueError("invalid video dimensions")
+            if (stream["codec_type"] == "video" and not attached_pic
+                    and "avg_frame_rate" in stream):
+                _frame_rate(stream["avg_frame_rate"])
+            # The presence of an audio stream is not evidence of a usable
+            # audio format when ffprobe reports zero or malformed parameters.
+            if stream["codec_type"] in ("video", "audio") and not attached_pic:
+                if "duration" in stream:
+                    stream_duration = _optional_stream_time(stream["duration"])
+                    # An explicitly empty A/V track cannot be certified by
+                    # decoding some other stream or a permissive FFmpeg build.
+                    if stream_duration == 0:
+                        raise ValueError("zero-duration audio/video stream")
+                if "start_time" in stream:
+                    _optional_stream_time(stream["start_time"], signed=True)
+            if stream["codec_type"] == "audio":
+                if "sample_rate" in stream:
+                    rate = stream["sample_rate"]
+                    if (not isinstance(rate, str) or not rate.isascii()
+                            or not rate.isdecimal() or not 1 <= int(rate) <= 768_000):
+                        raise ValueError("invalid audio sample rate")
+                if "channels" in stream:
+                    channels = stream["channels"]
+                    if type(channels) is not int or not 1 <= channels <= 64:
+                        raise ValueError("invalid audio channel count")
+        # Real ffprobe stream tables either provide an index for every
+        # stream or for none. A partial table cannot be reconciled reliably
+        # with FFmpeg's per-type stream selectors.
+        if seen_indices and len(seen_indices) != len(streams):
+            raise ValueError("partially indexed stream table")
+        # Absolute selectors are needed to skip cover artwork. Legacy mocks
+        # without indices remain supported only when there is no cover art.
+        has_cover_art = any(s.get("disposition", {}).get("attached_pic") == 1
+                            for s in streams)
+        if has_cover_art and len(seen_indices) != len(streams):
+            raise ValueError("cover-art stream indices are unavailable")
+        if container_start is None:
+            known_starts = [
+                _optional_stream_time(stream.get("start_time"), signed=True)
+                for stream in streams if stream["codec_type"] in ("video", "audio")
+                and stream.get("disposition", {}).get("attached_pic") != 1]
+            # A missing timestamp on any A/V track makes the origin ambiguous.
+            # Do not shift the timeline using only a late-starting audio track.
+            container_start = (min(known_starts) if known_starts
+                               and all(value is not None for value in known_starts)
+                               else 0.0)
+        for stream in streams:
+            if (stream["codec_type"] in ("video", "audio")
+                    and stream.get("disposition", {}).get("attached_pic") != 1):
+                stream_start = _optional_stream_time(stream.get("start_time"), signed=True)
+                if stream_start is not None:
+                    relative_start = stream_start - container_start
+                    if not math.isfinite(relative_start):
+                        raise ValueError("stream start offset overflow")
+                    if relative_start >= duration:
+                        raise ValueError("stream starts at or beyond container end")
+                    # Finite individual timestamps can still overflow when
+                    # added. Reject them before QA emits Infinity in JSON.
+                    track_length = _optional_stream_time(stream.get("duration"))
+                    if track_length is not None:
+                        relative_end = relative_start + track_length
+                        if not math.isfinite(relative_end):
+                            raise ValueError("stream end offset overflow")
+                        if relative_end <= 0:
+                            raise ValueError("stream ends before container begins")
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return failure("EXPORT_PROBE_FAILED", "動画の尺・ストリーム情報が不正です")
+
+    # Huge or pathological durations lose the precision needed to sample the
+    # tail reliably. Refuse to certify a video whose end cannot be checked.
+    if duration > 7 * 24 * 60 * 60:
+        return failure("EXPORT_DURATION_LIMIT", "動画の長さが検証上限（7日）を超えています")
 
     # Full decode is intentionally bounded: it is opt-in, not a background job.
     # Reject oversized work rather than silently claiming a full verification.
@@ -93,55 +983,575 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
         return failure("EXPORT_FULL_DECODE_DURATION_LIMIT",
                        "全尺デコードは15分以内の動画に限定しています")
 
-    videos = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
+    videos = [s for s in streams if s["codec_type"] == "video"
+              and s.get("disposition", {}).get("attached_pic") != 1]
     audios = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"]
+    # Sample decoding is synchronous: cap total stream work before launching
+    # per-stream subprocesses, including streams not required by the caller.
+    if len(videos) + len(audios) > 16:
+        return failure("EXPORT_STREAM_LIMIT", "映像・音声ストリームが多すぎます（最大16）")
+    video_details = [
+        {"stream_ordinal": i, "stream_index": stream.get("index"),
+         **_stream_timing_details(stream, container_start),
+         "codec": stream.get("codec_name"),
+         "width": stream.get("width"), "height": stream.get("height"),
+         "fps": _frame_rate(stream.get("avg_frame_rate")),
+         "fps_ratio": _frame_rate_ratio(stream.get("avg_frame_rate")),
+         "reported_frames": (int(stream["nb_frames"])
+                             if stream.get("nb_frames") not in (None, "N/A")
+                             else None)}
+        for i, stream in enumerate(videos)]
+    audio_details = [
+        {"stream_ordinal": i, "stream_index": stream.get("index"),
+         **_stream_timing_details(stream, container_start),
+         "codec": stream.get("codec_name"),
+         "sample_rate": int(stream["sample_rate"]) if "sample_rate" in stream else None,
+         "channels": stream.get("channels")}
+        for i, stream in enumerate(audios)]
     issues = []
+    if expected_video_streams is not None and len(videos) != expected_video_streams:
+        issues.append({"code": "EXPORT_VIDEO_STREAM_COUNT_MISMATCH",
+                       "severity": "error", "expected": expected_video_streams,
+                       "actual": len(videos)})
+    if expected_audio_streams is not None and len(audios) != expected_audio_streams:
+        issues.append({"code": "EXPORT_AUDIO_STREAM_COUNT_MISMATCH",
+                       "severity": "error", "expected": expected_audio_streams,
+                       "actual": len(audios)})
+    # Expectations apply to every track. Missing metadata cannot prove a match.
+    for ordinal, details in enumerate(video_details):
+        if expected_video_frames is not None and details["reported_frames"] != expected_video_frames:
+            issues.append({
+                "code": ("EXPORT_VIDEO_FRAME_COUNT_UNKNOWN"
+                         if details["reported_frames"] is None
+                         else "EXPORT_VIDEO_FRAME_COUNT_MISMATCH"),
+                "severity": "error", "stream_type": "video",
+                "stream_ordinal": ordinal, "expected": expected_video_frames,
+                "actual": details["reported_frames"]})
+        if expected_video_codec is not None and details["codec"] != expected_video_codec:
+            issues.append({
+                "code": ("EXPORT_VIDEO_CODEC_UNKNOWN" if details["codec"] is None
+                         else "EXPORT_VIDEO_CODEC_MISMATCH"),
+                "severity": "error", "stream_type": "video",
+                "stream_ordinal": ordinal, "expected": expected_video_codec,
+                "actual": details["codec"]})
+        for field, expected in (("width", expected_width), ("height", expected_height)):
+            if expected is None:
+                continue
+            actual = details[field]
+            if actual is None or actual != expected:
+                issues.append({
+                    "code": ("EXPORT_VIDEO_FORMAT_UNKNOWN" if actual is None
+                             else "EXPORT_VIDEO_FORMAT_MISMATCH"),
+                    "severity": "error", "stream_type": "video",
+                    "stream_ordinal": ordinal, "field": field,
+                    "expected": expected, "actual": actual})
+        if expected_fps is not None:
+            ratio = details["fps_ratio"]
+            actual = float(Fraction(ratio)) if ratio is not None else None
+            if actual is None or abs(actual - expected_fps) > fps_tolerance:
+                issues.append({
+                    "code": ("EXPORT_VIDEO_FORMAT_UNKNOWN" if actual is None
+                             else "EXPORT_VIDEO_FORMAT_MISMATCH"),
+                    "severity": "error", "stream_type": "video",
+                    "stream_ordinal": ordinal, "field": "fps",
+                    "expected": expected_fps, "actual": actual,
+                    "tolerance": fps_tolerance})
+    for ordinal, details in enumerate(audio_details):
+        if expected_audio_codec is not None and details["codec"] != expected_audio_codec:
+            issues.append({
+                "code": ("EXPORT_AUDIO_CODEC_UNKNOWN" if details["codec"] is None
+                         else "EXPORT_AUDIO_CODEC_MISMATCH"),
+                "severity": "error", "stream_type": "audio",
+                "stream_ordinal": ordinal, "expected": expected_audio_codec,
+                "actual": details["codec"]})
+        for field, expected in (
+                ("sample_rate", expected_audio_sample_rate),
+                ("channels", expected_audio_channels)):
+            if expected is None:
+                continue
+            actual = details[field]
+            if actual is None or actual != expected:
+                issues.append({
+                    "code": ("EXPORT_AUDIO_FORMAT_UNKNOWN" if actual is None
+                             else "EXPORT_AUDIO_FORMAT_MISMATCH"),
+                    "severity": "error", "stream_type": "audio",
+                    "stream_ordinal": ordinal, "field": field,
+                    "expected": expected, "actual": actual})
+    # An exported file can decode correctly while being truncated or longer
+    # than the edit plan. This is an error only when the caller supplied an
+    # explicit expected duration, with a bounded tolerance.
+    if (expected_duration_seconds is not None and
+            abs(duration - expected_duration_seconds) > duration_tolerance_seconds):
+        issues.append({
+            "code": "EXPORT_DURATION_MISMATCH", "severity": "error",
+            "expected_duration_seconds": expected_duration_seconds,
+            "actual_duration_seconds": duration,
+            "difference_seconds": round(duration - expected_duration_seconds, 6),
+            "tolerance_seconds": duration_tolerance_seconds})
+    # Multiple output tracks may intentionally differ, so surface format
+    # inconsistencies as QA warnings rather than rejecting the export.
+    dimensions = {f'{v["width"]}x{v["height"]}' for v in video_details
+                  if v["width"] is not None}
+    # Keep exact rational frame rates for comparisons. The public fps field
+    # is rounded for display, and distinct rates can round to the same value.
+    exact_frame_rates = set()
+    for stream in videos:
+        raw_rate = stream.get("avg_frame_rate")
+        if raw_rate not in (None, "N/A") and _frame_rate(raw_rate) is not None:
+            numerator, denominator = map(int, raw_rate.split("/"))
+            exact_frame_rates.add(Fraction(numerator, denominator))
+    sample_rates = {a["sample_rate"] for a in audio_details
+                    if a["sample_rate"] is not None}
+    channel_counts = {a["channels"] for a in audio_details
+                      if a["channels"] is not None}
+    for values, code, field in (
+            (dimensions, "EXPORT_VIDEO_TRACK_RESOLUTION_MISMATCH", "resolutions"),
+            (exact_frame_rates, "EXPORT_VIDEO_TRACK_FPS_MISMATCH", "frame_rates"),
+            (sample_rates, "EXPORT_AUDIO_TRACK_SAMPLE_RATE_MISMATCH", "sample_rates"),
+            (channel_counts, "EXPORT_AUDIO_TRACK_CHANNEL_MISMATCH", "channel_counts")):
+        if len(values) > 1:
+            if field == "frame_rates":
+                # Preserve both human-readable approximations and the exact
+                # ratios, so e.g. 30000/1001 and 2997/100 remain distinguishable.
+                issues.append({"code": code, "severity": "warning",
+                               "frame_rates": sorted({round(float(v), 3) for v in values}),
+                               "frame_rate_ratios": sorted(
+                                   f"{v.numerator}/{v.denominator}" for v in values)})
+            else:
+                issues.append({"code": code, "severity": "warning",
+                               field: sorted(values)})
+    # A successful tail decode only proves that some samples exist in the
+    # final window. Track metadata can reveal an earlier end within it.
+    for kind, tracks in (("video", videos), ("audio", audios)):
+        for ordinal, stream in enumerate(tracks):
+            track_duration = _optional_stream_time(stream.get("duration"))
+            track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+            # An unknown track origin is not evidence that the track starts
+            # at the container origin. Avoid invented end/gap warnings.
+            if track_start is not None:
+                track_start -= container_start
+            if require_tracks_to_end and (track_start is None or track_duration is None):
+                issues.append({"code": "EXPORT_STREAM_TAIL_UNVERIFIABLE",
+                               "severity": "error", "stream_type": kind,
+                               "stream_ordinal": ordinal})
+            if track_start is not None and track_start > 1.0:
+                issues.append({"code": "EXPORT_STREAM_STARTS_LATE",
+                               "severity": "warning", "stream_type": kind,
+                               "stream_ordinal": ordinal,
+                               "missing_head_seconds": round(track_start, 3)})
+            if track_start is not None and track_start < -1.0:
+                # Negative preroll is allowed, but excessive offsets should
+                # be visible to the unattended editor as a QA warning.
+                issues.append({"code": "EXPORT_STREAM_STARTS_BEFORE_CONTAINER",
+                               "severity": "warning", "stream_type": kind,
+                               "stream_ordinal": ordinal,
+                               "preroll_seconds": round(-track_start, 3)})
+            if track_duration is not None and track_start is not None:
+                if track_start + track_duration > duration + 1.0:
+                    issues.append({"code": "EXPORT_STREAM_EXCEEDS_CONTAINER",
+                                   "severity": "warning", "stream_type": kind,
+                                   "stream_ordinal": ordinal,
+                                   "excess_seconds": round(
+                                       track_start + track_duration - duration, 3)})
+                missing = duration - (track_start + track_duration)
+                # A caller requiring end coverage must not accept a truncated
+                # final half-second simply because the advisory threshold was
+                # historically one second. Allow 50 ms of timestamp/encoder
+                # rounding; keep the one-second threshold for default warnings.
+                if missing > (0.05 if require_tracks_to_end else 1.0):
+                    issues.append({"code": "EXPORT_STREAM_ENDS_EARLY",
+                                   "severity": "error" if require_tracks_to_end else "warning",
+                                   "stream_type": kind,
+                                   "stream_ordinal": ordinal,
+                                   "missing_tail_seconds": round(missing, 3)})
+    # Signal detectors only examine *decoded* frames/samples. If every
+    # declared track starts late or ends early, the missing head/tail cannot
+    # produce blackdetect/silencedetect events. A strict quality gate must
+    # therefore also inspect container coverage. Use the union's outer
+    # boundaries, not individual track boundaries: staggered overlays and
+    # music tracks are valid when another track covers the same time.
+    for kind, tracks, limit, code_prefix in (
+            ("video", videos, max_black_seconds, "EXPORT_VIDEO"),
+            ("audio", audios, max_silence_seconds, "EXPORT_AUDIO")):
+        if limit is None or not tracks:
+            continue
+        starts_known = [
+            _optional_stream_time(track.get("start_time"), signed=True)
+            for track in tracks]
+        if all(start is not None for start in starts_known):
+            missing_head = min(starts_known) - container_start
+            if missing_head > limit + 0.05:
+                issues.append({"code": code_prefix + "_HEAD_GAP_EXCEEDED",
+                               "severity": "error",
+                               "missing_head_seconds": round(missing_head, 6),
+                               "max_seconds": limit})
+        ends_known = [
+            _optional_stream_time(track.get("duration"))
+            for track in tracks]
+        # A strict black/silence gate cannot certify unrendered timeline
+        # intervals if even one declared track has an unknown origin or end.
+        # Sample decoding may succeed despite a long uncovered head, tail or
+        # interior gap; do not silently skip the metadata coverage check.
+        if (any(start is None for start in starts_known)
+                or any(length is None for length in ends_known)):
+            issues.append({"code": code_prefix + "_COVERAGE_UNVERIFIABLE",
+                           "severity": "error",
+                           "unknown_start_count": sum(
+                               start is None for start in starts_known),
+                           "unknown_duration_count": sum(
+                               length is None for length in ends_known)})
+        if (all(start is not None for start in starts_known)
+                and all(length is not None for length in ends_known)):
+            last_end = max(start - container_start + length
+                           for start, length in zip(starts_known, ends_known))
+            missing_tail = duration - last_end
+            if missing_tail > limit + 0.05:
+                issues.append({"code": code_prefix + "_TAIL_GAP_EXCEEDED",
+                               "severity": "error",
+                               "missing_tail_seconds": round(missing_tail, 6),
+                               "max_seconds": limit})
+            # Head/tail checks alone miss an empty interval *between*
+            # staggered tracks. Merge overlapping track intervals and reject
+            # uncovered interior gaps; a different track covering the gap
+            # is sufficient, so intentional overlays are not penalized.
+            intervals = sorted(
+                (max(0.0, start - container_start),
+                 min(duration, start - container_start + length))
+                for start, length in zip(starts_known, ends_known))
+            covered_until = intervals[0][1]
+            for next_start, next_end in intervals[1:]:
+                gap = next_start - covered_until
+                if gap > limit + 0.05:
+                    issues.append({"code": code_prefix + "_INTERNAL_GAP_EXCEEDED",
+                                   "severity": "error",
+                                   "gap_start_seconds": round(covered_until, 6),
+                                   "gap_end_seconds": round(next_start, 6),
+                                   "gap_seconds": round(gap, 6),
+                                   "max_seconds": limit})
+                covered_until = max(covered_until, next_end)
     if not videos:
         issues.append({"code": "EXPORT_VIDEO_STREAM_MISSING", "severity": "error"})
-    if require_audio and not audios:
+    if (require_audio or audio_quality_requested
+            or expected_audio_sample_rate is not None
+            or expected_audio_channels is not None) and not audios:
         issues.append({"code": "EXPORT_AUDIO_STREAM_MISSING", "severity": "error"})
     starts = [0.0]
-    if duration > 2 * sample_seconds:
+    # Cover the middle of longer exports, not only the beginning and tail.
+    # Three disjoint windows are enough to catch a broken middle segment
+    # without turning synchronous sampling into an unbounded full decode.
+    if duration >= 3 * sample_seconds:
+        starts.append((duration - sample_seconds) / 2)
+    if duration > sample_seconds:
         starts.append(max(0.0, duration - sample_seconds))
+    # A brief secondary track can fall entirely between the three regular
+    # windows. When its validated timing is known, add one bounded targeted
+    # window rather than falsely certifying a track that was never decoded.
+    # At most one additional window per A/V stream is added (maximum 16).
+    for stream in videos + audios:
+        track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+        track_duration = _optional_stream_time(stream.get("duration"))
+        if track_start is None or track_duration is None:
+            continue
+        left = max(0.0, track_start - container_start)
+        right = min(duration, track_start - container_start + track_duration)
+        if right <= left:
+            continue
+        # A few milliseconds of overlap at a window boundary do not
+        # meaningfully sample a short track. Require at least 100 ms of
+        # overlap, or half the track for tracks shorter than 200 ms.
+        required_overlap = min(0.1, (right - left) / 2)
+        if any(min(right, window + sample_seconds) - max(left, window)
+               >= required_overlap for window in starts):
+            continue
+        # Place the target within the actual track; leave enough room for
+        # FFmpeg's microsecond timestamp rounding and short preroll.
+        center = (left + right) / 2
+        window = max(0.0, min(center - sample_seconds / 2,
+                              max(0.0, duration - sample_seconds)))
+        starts.append(window)
+    # Identical targeted windows must not consume duplicate FFmpeg work.
+    starts = sorted(set(starts))
     samples = []
     black_frames = []
+    frozen_frames = []
     long_silences = []
     audio_peaks = []
+    audio_channel_peaks = []
+    # Overlapping decode windows can clip one physical defect into different
+    # absolute ranges. Coalesce overlapping intervals per signal type/track
+    # and keep the public event and its separate QA issue in sync.
+    signal_records = {"video": [], "audio": [], "freeze": []}
+    # A track outside all chosen windows must not be silently certified.
+    sampled_tracks = set()
+    sample_counts = {}
+
+    def record_signal(kind, event, code, destination):
+        records = signal_records[kind]
+        start = event["video_start_seconds"]
+        end = event["video_end_seconds"]
+        matches = []
+        # A new interval can bridge two previously disjoint detections.
+        # Expand until the union is stable (transitive overlap).
+        while True:
+            additional = [(stored, issue) for stored, issue in records
+                          if stored["stream_ordinal"] == event["stream_ordinal"]
+                          and not any(stored is prior for prior, _ in matches)
+                          and stored["video_start_seconds"] <= end
+                          and start <= stored["video_end_seconds"]]
+            if not additional:
+                break
+            matches.extend(additional)
+            start = min(start, *(stored["video_start_seconds"]
+                                 for stored, _ in additional))
+            end = max(end, *(stored["video_end_seconds"]
+                             for stored, _ in additional))
+        if not matches:
+            # Distinct findings are scanned during overlap coalescing. Bound
+            # the count to avoid quadratic work on pathological filter logs.
+            if len(records) >= MAX_SIGNAL_EVENTS:
+                return False
+            issue = {"code": code, "severity": "warning", **event}
+            destination.append(event)
+            issues.append(issue)
+            records.append((event, issue))
+            return True
+        anchor_event, anchor_issue = matches[0]
+        for redundant_event, redundant_issue in matches[1:]:
+            records[:] = [(stored, issue) for stored, issue in records
+                          if stored is not redundant_event]
+            destination[:] = [stored for stored in destination
+                              if stored is not redundant_event]
+            issues[:] = [issue for issue in issues
+                         if issue is not redundant_issue]
+        # sample_start/filter_* describe the first observation; the video_*
+        # coordinates and duration describe the merged absolute union.
+        for target in (anchor_event, anchor_issue):
+            target["video_start_seconds"] = round(start, 6)
+            target["video_end_seconds"] = round(end, 6)
+            target["duration_seconds"] = round(end - start, 3)
+        return True
+    # Per-command timeouts alone allow up to 32 slow subprocesses. Bound
+    # the complete synchronous sampling pass to two minutes.
+    sample_deadline = time.monotonic() + 120
     for start in starts:
         length = min(float(sample_seconds), duration - start)
         if length <= 0:
             continue
-        samples.append({"start_seconds": round(start, 3), "duration_seconds": round(length, 3)})
-        for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
-            if not present:
-                continue
+        samples.append({"start_seconds": round(start, 6), "duration_seconds": round(length, 6)})
+        # A successful first track cannot certify another broken track.
+        for kind, ordinal, stream in (
+                [("video", i, track) for i, track in enumerate(videos)]
+                + [("audio", i, track) for i, track in enumerate(audios)]):
+            # A late-starting or early-ending track can have no frames in
+            # a sample window. Skip only with validated ffprobe timestamps;
+            # absence of a track in this window is not a decode failure.
+            track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+            track_duration = _optional_stream_time(stream.get("duration"))
+            if track_start is not None:
+                relative_start = track_start - container_start
+                if start + length <= relative_start or (
+                        track_duration is not None
+                        and start >= relative_start + track_duration):
+                    continue
+            # A stream can end inside the requested sample window. FFmpeg
+            # then emits no *_end event, but the missing media after its end
+            # must not be counted as observed black/silent/frozen content.
+            signal_window_length = length
+            if track_start is not None and track_duration is not None:
+                signal_window_length = min(
+                    length, max(0.0, relative_start + track_duration - start))
+            # Stream timestamps are absolute, but FFmpeg filter timestamps
+            # are relative to this sample. Never report preroll before the
+            # known stream start as black/silent/frozen media.
+            signal_active_start = (max(0.0, relative_start - start)
+                                   if track_start is not None else 0.0)
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
-            signal_filter = ("blackdetect=d=1:pix_th=0.10:pic_th=0.98"
-                             if kind == "video" else "silencedetect=noise=-50dB:d=2,astats=metadata=0:reset=0")
+            signal_filter = (
+                f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
+                f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}"
+                if kind == "video" else
+                f"silencedetect=noise=-50dB:d={silence_detect_seconds:.6f},"
+                "astats=metadata=0:reset=0")
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
-                       "-v", "info", "-xerror", "-ss", format(start, ".3f"),
-                       "-i", str(target), "-t", format(length, ".3f"),
-                       "-map", "0:v:0" if kind == "video" else "0:a:0",
+                       "-v", "info", "-xerror", "-ss", format(start, ".6f"),
+                       "-i", str(target), "-t", format(length, ".6f"),
+                       "-map", (f"0:{stream['index']}" if kind == "video" and has_cover_art
+                                else f"0:v:{ordinal}" if kind == "video"
+                                else f"0:a:{ordinal}"),
                        "-vf" if kind == "video" else "-af", signal_filter,
-                       "-abort_on", "empty_output", "-f", "null", "-"]
+                       "-abort_on", "empty_output+empty_output_stream", "-f", "null", "-"]
+            remaining = sample_deadline - time.monotonic()
+            if remaining <= 0:
+                return failure("EXPORT_DECODE_TIMEOUT", "動画サンプルの総検証時間を超えました")
             try:
-                decoded = run(command, 30)
+                decoded = run(command, min(30, remaining))
             except FileNotFoundError:
                 return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
             except subprocess.TimeoutExpired:
                 return failure("EXPORT_DECODE_TIMEOUT", "動画サンプルのデコードが時間切れです")
-            except OSError:
-                return failure("EXPORT_DECODE_FAILED", "ffmpegを実行できません")
+            except (OSError, UnicodeDecodeError):
+                return failure("EXPORT_DECODE_FAILED", "ffmpegの出力を読み取れません")
             if decoded.returncode:
                 issues.append({"code": "EXPORT_DECODE_FAILED", "severity": "error",
-                               "stream_type": kind, "start_seconds": round(start, 3),
+                               "stream_type": kind, "stream_ordinal": ordinal,
+                               "start_seconds": round(start, 6),
                                "details": (decoded.stderr or "")[-500:]})
                 continue
+            sampled_tracks.add((kind, ordinal))
+            sample_counts[(kind, ordinal)] = sample_counts.get((kind, ordinal), 0) + 1
             if kind == "audio":
+                if _invalid_audio_peak_metrics(decoded.stderr or ""):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_PEAK_INVALID",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                channel_peaks = _audio_channel_peaks(decoded.stderr or "")
+                declared_channels = audio_details[ordinal]["channels"]
+                if channel_peaks:
+                    # JSON has no representation for -Infinity. Preserve a
+                    # separate silent-channel list instead of emitting NaN/Inf.
+                    audio_channel_peaks.append({
+                        "sample_start_seconds": round(start, 6),
+                        "stream_ordinal": ordinal,
+                        "peak_dbfs_by_channel": {
+                            str(channel): (round(value, 3)
+                                           if math.isfinite(value) else None)
+                            for channel, value in sorted(channel_peaks.items())},
+                        "silent_channels": sorted(
+                            channel for channel, value in channel_peaks.items()
+                            if value == -math.inf)})
+                overall_silent = _audio_overall_silent(decoded.stderr or "")
+                complete_channels = (channel_peaks and declared_channels is not None
+                                     and set(channel_peaks) ==
+                                     set(range(1, declared_channels + 1)))
+                observed_headers, invalid_headers = _audio_channel_headers(
+                    decoded.stderr or "")
+                if invalid_headers:
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_HEADER_INVALID",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if declared_channels is not None and (
+                        channel_peaks or observed_headers or invalid_headers):
+                    expected = set(range(1, declared_channels + 1))
+                    observed = set(channel_peaks) | observed_headers
+                    if observed != expected or invalid_headers:
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_MISMATCH",
+                            "severity": "warning", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6),
+                            "declared_channels": declared_channels,
+                            "observed_channels": sorted(observed),
+                            "invalid_channel_headers": invalid_headers})
+                    elif declared_channels == 2 and set(channel_peaks) == expected:
+                        left, right = channel_peaks[1], channel_peaks[2]
+                        if ((math.isfinite(left) and math.isfinite(right)
+                             and max(left, right) > -60
+                              and abs(left - right) >= 12)
+                                or (left == -math.inf and right > -60)
+                                or (right == -math.inf and left > -60)):
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_AUDIO_STEREO_IMBALANCE",
+                                "severity": "warning", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "left_peak_dbfs": round(left, 3) if math.isfinite(left) else None,
+                                "right_peak_dbfs": round(right, 3) if math.isfinite(right) else None})
+                # A partial channel inventory cannot satisfy a strict peak
+                # measurement requirement even if one channel has a value.
+                if (require_audio_peak_metrics and declared_channels is not None
+                        and not complete_channels
+                        # An Overall -inf is a complete-silence measurement even
+                        # when FFmpeg omits per-channel sections entirely.
+                        # A finite Overall peak does not prove each channel.
+                        and not (overall_silent and not channel_peaks
+                                 and not observed_headers)):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_METRICS_INCOMPLETE",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6),
+                        "declared_channels": declared_channels,
+                        "measured_channels": sorted(channel_peaks)})
+                if require_audio_peak_metrics and declared_channels is None:
+                    # A finite Overall peak alone cannot prove that every
+                    # channel was measured when the channel count is unknown.
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_CHANNEL_COUNT_UNKNOWN",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if max_stereo_imbalance_db is not None and declared_channels != 2:
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_STEREO_CHANNELS_UNVERIFIABLE",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6),
+                        "declared_channels": declared_channels})
+                if max_stereo_imbalance_db is not None and declared_channels == 2:
+                    if set(channel_peaks) != {1, 2}:
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_STEREO_METRICS_UNAVAILABLE",
+                            "severity": "error", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6)})
+                    else:
+                        left, right = channel_peaks[1], channel_peaks[2]
+                        delta = (abs(left - right)
+                                 if math.isfinite(left) and math.isfinite(right)
+                                 else 0.0 if left == right == -math.inf
+                                 else math.inf)
+                        if delta > max_stereo_imbalance_db:
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_STEREO_IMBALANCE_EXCEEDED",
+                                "severity": "error", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "max_db": max_stereo_imbalance_db,
+                                "difference_db": (round(delta, 3)
+                                                  if math.isfinite(delta) else None)})
+                # A complete channel inventory or an Overall -inf peak
+                # suggests silence, but neither can override a finite peak
+                # measured elsewhere in this same sample. Inconsistent or
+                # repeated astats sections must not produce a false all-silent
+                # finding when any channel/Overall actually contained sound.
                 peak = _audio_peak_db(decoded.stderr or "")
+                if (peak is None and (overall_silent or (complete_channels and all(
+                        value == -math.inf for value in channel_peaks.values())))):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_ALL_CHANNELS_SILENT",
+                        "severity": "warning", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if min_audio_peak_dbfs is not None or max_audio_peak_dbfs is not None:
+                    measured_peak = (peak if peak is not None else
+                                     -math.inf if (overall_silent or
+                                         (complete_channels and all(
+                                             value == -math.inf for value in
+                                             channel_peaks.values()))) else None)
+                    if measured_peak is None:
+                        issues.append({
+                            "code": "EXPORT_SAMPLE_AUDIO_PEAK_UNVERIFIABLE",
+                            "severity": "error", "stream_ordinal": ordinal,
+                            "sample_start_seconds": round(start, 6)})
+                    else:
+                        if (min_audio_peak_dbfs is not None and
+                                measured_peak < min_audio_peak_dbfs):
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_AUDIO_PEAK_TOO_LOW",
+                                "severity": "error", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "min_dbfs": min_audio_peak_dbfs})
+                        if (max_audio_peak_dbfs is not None and
+                                measured_peak > max_audio_peak_dbfs):
+                            issues.append({
+                                "code": "EXPORT_SAMPLE_AUDIO_PEAK_TOO_HIGH",
+                                "severity": "error", "stream_ordinal": ordinal,
+                                "sample_start_seconds": round(start, 6),
+                                "max_dbfs": max_audio_peak_dbfs})
+                if (require_audio_peak_metrics and peak is None
+                        and not overall_silent and not channel_peaks):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_AUDIO_METRICS_UNAVAILABLE",
+                        "severity": "error", "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
                 if peak is not None:
-                    peak_event = {"sample_start_seconds": round(start, 3),
+                    peak_event = {"sample_start_seconds": round(start, 6),
+                                  "stream_ordinal": ordinal,
                                   "peak_dbfs": round(peak, 3)}
                     audio_peaks.append(peak_event)
                     # Near-0 dBFS samples may be clipped, but a peak alone
@@ -153,38 +1563,154 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
             # them as warnings, not as proof of an invalid export.
             start_name, end_name = (("black_start", "black_end") if kind == "video"
                                     else ("silence_start", "silence_end"))
-            for signal_start, signal_end in _signal_ranges(
+            if _invalid_signal_labels(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_LABEL_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_timestamps(decoded.stderr or "", start_name, end_name,
+                                          signal_window_length):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_sequence(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_ORDER_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_durations(decoded.stderr or "", start_name, end_name):
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_DURATION_INVALID",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            if _invalid_signal_duration_mismatch(
                     decoded.stderr or "", start_name, end_name):
-                event = {"sample_start_seconds": round(start, 3),
+                issues.append({
+                    "code": "EXPORT_SAMPLE_SIGNAL_DURATION_MISMATCH",
+                    "severity": "error", "stream_type": kind,
+                    "stream_ordinal": ordinal,
+                    "sample_start_seconds": round(start, 6)})
+            for signal_start, signal_end in _signal_ranges(
+                    decoded.stderr or "", start_name, end_name, signal_window_length):
+                signal_start = max(signal_start, signal_active_start)
+                if signal_start >= signal_end:
+                    continue
+                event = {"sample_start_seconds": round(start, 6),
+                         "stream_ordinal": ordinal,
                          "filter_start_seconds": round(signal_start, 3),
                          "filter_end_seconds": round(signal_end, 3),
+                          "video_start_seconds": round(start + signal_start, 6),
+                          "video_end_seconds": round(start + signal_end, 6),
                          "duration_seconds": round(signal_end - signal_start, 3)}
                 if kind == "video":
-                    black_frames.append(event)
-                    code = "EXPORT_SAMPLE_BLACK_FRAMES"
+                    if not record_signal("video", event, "EXPORT_SAMPLE_BLACK_FRAMES",
+                                         black_frames):
+                        return failure("EXPORT_SIGNAL_LIMIT",
+                                       "黒画面検出イベント数が上限を超えました")
                 else:
-                    long_silences.append(event)
-                    code = "EXPORT_SAMPLE_LONG_SILENCE"
-                issues.append({"code": code, "severity": "warning", **event})
+                    if not record_signal("audio", event, "EXPORT_SAMPLE_LONG_SILENCE",
+                                         long_silences):
+                        return failure("EXPORT_SIGNAL_LIMIT",
+                                       "無音検出イベント数が上限を超えました")
+            if kind == "video":
+                if _invalid_signal_labels(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_LABEL_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_timestamps(
+                        decoded.stderr or "", "freeze_start", "freeze_end",
+                        signal_window_length):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_TIMESTAMP_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_sequence(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_ORDER_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_durations(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_DURATION_INVALID",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                if _invalid_signal_duration_mismatch(
+                        decoded.stderr or "", "freeze_start", "freeze_end"):
+                    issues.append({
+                        "code": "EXPORT_SAMPLE_SIGNAL_DURATION_MISMATCH",
+                        "severity": "error", "stream_type": kind,
+                        "stream_ordinal": ordinal,
+                        "sample_start_seconds": round(start, 6)})
+                for freeze_start, freeze_end in _signal_ranges(
+                        decoded.stderr or "", "freeze_start", "freeze_end",
+                        signal_window_length):
+                    freeze_start = max(freeze_start, signal_active_start)
+                    if freeze_start >= freeze_end:
+                        continue
+                    event = {"sample_start_seconds": round(start, 6),
+                             "stream_ordinal": ordinal,
+                             "filter_start_seconds": round(freeze_start, 3),
+                             "filter_end_seconds": round(freeze_end, 3),
+                              "video_start_seconds": round(start + freeze_start, 6),
+                              "video_end_seconds": round(start + freeze_end, 6),
+                             "duration_seconds": round(freeze_end - freeze_start, 3)}
+                    if not record_signal("freeze", event, "EXPORT_SAMPLE_FROZEN_FRAMES",
+                                         frozen_frames):
+                        return failure("EXPORT_SIGNAL_LIMIT",
+                                       "フリーズ検出イベント数が上限を超えました")
+    # A short track may lie entirely between sample windows. Do not claim
+    # that QA passed when that track was never actually decoded.
+    for kind, tracks in (("video", videos), ("audio", audios)):
+        for ordinal in range(len(tracks)):
+            if (kind, ordinal) not in sampled_tracks:
+                issues.append({"code": "EXPORT_STREAM_NOT_SAMPLED",
+                               "severity": "error", "stream_type": kind,
+                               "stream_ordinal": ordinal})
     full_decode_ok = False
+    full_signal_scan_ok = False
     if full_decode and videos:
         full_decode_ok = True
         # -map 0:v / 0:a checks every video/audio stream, not only stream 0.
         # No signal filters are used here: sample-only diagnostics above remain
         # bounded, and full-file stderr is restricted to decoding errors.
         timeout = min(900, max(60, int(math.ceil(duration * 4))))
+        # Both video and audio share a single full-decode budget.
+        full_deadline = time.monotonic() + 900
         for kind, present in (("video", bool(videos)), ("audio", bool(audios))):
             if not present:
                 continue
+            mapping_args = ["-map", "0:v" if kind == "video" else "0:a"]
+            if kind == "video" and has_cover_art:
+                mapping_args = [part for stream in videos
+                                for part in ("-map", f"0:{stream['index']}")]
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
                        "-v", "error", "-xerror", "-i", str(target),
-                       "-map", "0:v" if kind == "video" else "0:a",
+                       *mapping_args,
                        # Every mapped stream must produce decoded output. A
                        # populated first track must not hide an empty second.
                        "-abort_on", "empty_output+empty_output_stream",
                        "-f", "null", "-"]
+            remaining = full_deadline - time.monotonic()
+            if remaining <= 0:
+                full_decode_ok = False
+                issues.append({"code": "EXPORT_FULL_DECODE_TIMEOUT",
+                               "severity": "error", "stream_type": kind})
+                break
             try:
-                decoded = run(command, timeout)
+                decoded = run(command, min(timeout, remaining))
             except FileNotFoundError:
                 return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
             except subprocess.TimeoutExpired:
@@ -192,7 +1718,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 issues.append({"code": "EXPORT_FULL_DECODE_TIMEOUT",
                                "severity": "error", "stream_type": kind})
                 continue
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 full_decode_ok = False
                 issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
                                "severity": "error", "stream_type": kind})
@@ -202,14 +1728,254 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False):
                 issues.append({"code": "EXPORT_FULL_DECODE_FAILED",
                                "severity": "error", "stream_type": kind,
                                "details": (decoded.stderr or "")[-500:]})
+    # Full decode proves stream decodability, but sample-only black/silence
+    # filters cannot find a defect entirely between the sample windows.
+    # Opt-in full signal scanning runs one bounded filter pass per stream,
+    # sharing the full-decode deadline. It never claims full signal coverage
+    # when a filter fails, times out, or emits untrustworthy diagnostics.
+    if full_signal_scan and videos and full_decode_ok:
+        full_signal_scan_ok = True
+        for kind, tracks in (("video", videos), ("audio", audios)):
+            for ordinal, stream in enumerate(tracks):
+                remaining = full_deadline - time.monotonic()
+                if remaining <= 0:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_TIMEOUT",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    break
+                # A successful filter pass cannot be placed on the export
+                # timeline without both the track origin and its end. Do not
+                # invent a container-wide duration for an unknown-length track.
+                track_start = _optional_stream_time(stream.get("start_time"), signed=True)
+                track_duration = _optional_stream_time(stream.get("duration"))
+                if track_start is None or track_duration is None:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_TIMING_UNVERIFIABLE",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    continue
+                # Reset presentation timestamps to zero before filtering.
+                # The original track start is restored in public video-time
+                # coordinates below (late-starting audio is not at t=0).
+                filters = (
+                    "setpts=PTS-STARTPTS,"
+                    f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
+                    f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}"
+                    if kind == "video" else
+                    "asetpts=PTS-STARTPTS,"
+                    f"silencedetect=noise=-50dB:d={silence_detect_seconds:.6f}")
+                selector = (f"0:{stream['index']}" if kind == "video" and has_cover_art
+                            else f"0:v:{ordinal}" if kind == "video"
+                            else f"0:a:{ordinal}")
+                command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
+                           "-v", "info", "-xerror", "-i", str(target),
+                           "-map", selector, "-vf" if kind == "video" else "-af",
+                           filters, "-abort_on", "empty_output+empty_output_stream",
+                           "-f", "null", "-"]
+                try:
+                    scanned = run(command, min(timeout, remaining))
+                except FileNotFoundError:
+                    return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
+                except subprocess.TimeoutExpired:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_TIMEOUT",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    continue
+                except (OSError, UnicodeDecodeError):
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_FAILED",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal})
+                    continue
+                if scanned.returncode:
+                    full_signal_scan_ok = False
+                    issues.append({"code": "EXPORT_FULL_SIGNAL_FAILED",
+                                   "severity": "error", "stream_type": kind,
+                                   "stream_ordinal": ordinal,
+                                   "details": (scanned.stderr or "")[-500:]})
+                    continue
+                offset = track_start - container_start
+                active_duration = track_duration
+                diagnostics = (scanned.stderr or "")
+                definitions = ([("black_start", "black_end", "video",
+                                 "EXPORT_SAMPLE_BLACK_FRAMES", black_frames),
+                                ("freeze_start", "freeze_end", "freeze",
+                                 "EXPORT_SAMPLE_FROZEN_FRAMES", frozen_frames)]
+                               if kind == "video" else
+                               [("silence_start", "silence_end", "audio",
+                                 "EXPORT_SAMPLE_LONG_SILENCE", long_silences)])
+                for start_name, end_name, signal_kind, issue_code, destination in definitions:
+                    if _invalid_signal_labels(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_LABEL_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_timestamps(
+                            diagnostics, start_name, end_name, active_duration):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_TIMESTAMP_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_sequence(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_ORDER_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_durations(diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_DURATION_INVALID",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    if _invalid_signal_duration_mismatch(
+                            diagnostics, start_name, end_name):
+                        full_signal_scan_ok = False
+                        issues.append({"code": "EXPORT_FULL_SIGNAL_DURATION_MISMATCH",
+                                       "severity": "error", "stream_type": kind,
+                                       "stream_ordinal": ordinal})
+                        continue
+                    for signal_start, signal_end in _signal_ranges(
+                            diagnostics, start_name, end_name, active_duration):
+                        if signal_start >= signal_end:
+                            continue
+                        absolute_start = max(0.0, offset + signal_start)
+                        absolute_end = min(duration, offset + signal_end)
+                        if absolute_start >= absolute_end:
+                            continue
+                        event = {"sample_start_seconds": 0.0,
+                                 "stream_ordinal": ordinal,
+                                 "filter_start_seconds": round(signal_start, 3),
+                                 "filter_end_seconds": round(signal_end, 3),
+                                 "video_start_seconds": round(absolute_start, 6),
+                                 "video_end_seconds": round(absolute_end, 6),
+                                 "duration_seconds": round(absolute_end - absolute_start, 3)}
+                        if not record_signal(signal_kind, event, issue_code, destination):
+                            return failure("EXPORT_SIGNAL_LIMIT",
+                                           "全尺信号検出イベント数が上限を超えました")
+            if full_deadline - time.monotonic() <= 0:
+                break
+    # Measure integrated loudness over each complete audio track, not a peak
+    # sampled from a few windows. This is opt-in because every track requires
+    # an additional full-length FFmpeg loudnorm first pass.
+    integrated_loudness = []
+    true_peaks = []
+    if loudness_requested and full_decode_ok and audios:
+        for ordinal in range(len(audios)):
+            remaining = full_deadline - time.monotonic()
+            if remaining <= 0:
+                issues.append({"code": "EXPORT_LOUDNESS_TIMEOUT", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
+                       "-v", "info", "-xerror", "-i", str(target),
+                       "-map", f"0:a:{ordinal}",
+                       "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json",
+                       "-abort_on", "empty_output+empty_output_stream",
+                       "-f", "null", "-"]
+            try:
+                measured = run(command, min(timeout, remaining))
+            except FileNotFoundError:
+                return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
+            except subprocess.TimeoutExpired:
+                issues.append({"code": "EXPORT_LOUDNESS_TIMEOUT", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            except (OSError, UnicodeDecodeError):
+                issues.append({"code": "EXPORT_LOUDNESS_FAILED", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            if measured.returncode:
+                issues.append({"code": "EXPORT_LOUDNESS_FAILED", "severity": "error",
+                               "stream_ordinal": ordinal})
+                continue
+            try:
+                lufs, true_peak = _loudnorm_measurements(measured.stderr or "")
+            except ValueError:
+                issues.append({"code": "EXPORT_LOUDNESS_UNVERIFIABLE",
+                               "severity": "error", "stream_ordinal": ordinal})
+                continue
+            integrated_loudness.append({"stream_ordinal": ordinal,
+                                        "integrated_lufs": round(lufs, 2)})
+            true_peaks.append({"stream_ordinal": ordinal,
+                               "true_peak_dbtp": round(true_peak, 2)})
+            if min_integrated_lufs is not None and lufs < min_integrated_lufs:
+                issues.append({"code": "EXPORT_LOUDNESS_TOO_QUIET",
+                               "severity": "error", "stream_ordinal": ordinal,
+                               "integrated_lufs": round(lufs, 2),
+                               "minimum_lufs": min_integrated_lufs})
+            if max_integrated_lufs is not None and lufs > max_integrated_lufs:
+                issues.append({"code": "EXPORT_LOUDNESS_TOO_LOUD",
+                               "severity": "error", "stream_ordinal": ordinal,
+                               "integrated_lufs": round(lufs, 2),
+                               "maximum_lufs": max_integrated_lufs})
+            if max_true_peak_dbtp is not None and true_peak > max_true_peak_dbtp:
+                issues.append({"code": "EXPORT_TRUE_PEAK_EXCEEDED",
+                               "severity": "error", "stream_ordinal": ordinal,
+                               "true_peak_dbtp": round(true_peak, 2),
+                               "maximum_dbtp": max_true_peak_dbtp})
+    # Explicit quality gates turn *observed* signal defects into blocking
+    # errors. They do not claim that sampled-only scans cover the entire file.
+    # Apply them after merging overlapping sample and full-scan intervals.
+    for signal_events, threshold, code in (
+            (black_frames, max_black_seconds, "EXPORT_BLACK_DURATION_EXCEEDED"),
+            (long_silences, max_silence_seconds, "EXPORT_SILENCE_DURATION_EXCEEDED"),
+            (frozen_frames, max_freeze_seconds, "EXPORT_FREEZE_DURATION_EXCEEDED")):
+        if threshold is None:
+            continue
+        for event in signal_events:
+            measured = event["video_end_seconds"] - event["video_start_seconds"]
+            if measured > threshold:
+                issues.append({
+                    "code": code, "severity": "error",
+                    "max_seconds": threshold, **event})
+    # A video replaced or modified during ffprobe/ffmpeg cannot be certified
+    # using observations from different file versions.
+    try:
+        final_stat = target.stat()
+    except OSError:
+        return failure("EXPORT_VERIFY_FAILED", "検証後に動画ファイルを読み取れません")
+    if _file_identity(initial_stat) != _file_identity(final_stat):
+        return failure("EXPORT_FILE_CHANGED", "検証中に動画ファイルが変更されました")
     passed = not any(issue["severity"] == "error" for issue in issues)
     fully_decoded = bool(full_decode and full_decode_ok and passed)
+    # A requested full decode is not proof it completed. Do not label a
+    # failed or interrupted verification as full_audio_video_decode.
+    scope = ("full_audio_video_decode" if fully_decoded and audios
+             else "full_video_decode" if fully_decoded
+             else "incomplete" if not passed
+             else "sampled_audio_video_decode" if audios
+             else "sampled_video_decode")
     return {"success": True,
             "passed": passed,
             "issues": issues,
-            "verification_scope": ("full_audio_video_decode" if full_decode else "sampled_audio_video_decode"),
+            "verification_scope": scope,
             "fully_decoded": fully_decoded,
-            "signal_scope": "sampled_only", "black_frames": black_frames,
+            "signal_scope": ("full" if full_signal_scan_ok and passed else "sampled_only"),
+            "black_frames": black_frames,
+            "frozen_frames": frozen_frames,
+            "video_details": video_details, "audio_details": audio_details,
+            "resolution": (f'{video_details[0]["width"]}x{video_details[0]["height"]}'
+                           if video_details and video_details[0]["width"] is not None
+                           else None),
+            "fps": video_details[0]["fps"] if video_details else None,
             "long_silences": long_silences, "audio_peaks": audio_peaks,
+            "integrated_loudness": integrated_loudness,
+            "true_peaks": true_peaks,
+            # Highest observed sample peak across every audio track/window.
+            # None means no finite measurement, not proof of silence.
+            "audio_peak_db": max((p["peak_dbfs"] for p in audio_peaks), default=None),
+            "audio_channel_peaks": audio_channel_peaks,
             "duration_seconds": duration, "video_streams": len(videos),
-            "audio_streams": len(audios), "samples": samples, "path": str(target)}
+            "audio_streams": len(audios), "samples": samples,
+            "sampled_stream_count": len(sampled_tracks),
+            "sampled_streams": [
+                {"stream_type": kind, "stream_ordinal": ordinal,
+                 "sample_count": sample_counts.get((kind, ordinal), 0)}
+                for kind, tracks in (("video", videos), ("audio", audios))
+                for ordinal in range(len(tracks))],
+            "path": str(target)}

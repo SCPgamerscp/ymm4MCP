@@ -227,17 +227,34 @@ TOOLS = [
                 "hash": {"type": "boolean", "description": "get_info/assets: 64 MiB 以下の素材の SHA-256 と重複候補を取得"},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "description": "get_info/assets: 返却件数。既定100"},
                 "output_path": {"type": "string", "description": "export: 書き出し先の絶対パス（pathの別名）"},
-                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa: 期待する動画の長さ"},
-                "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa: 尺の許容誤差。既定1秒"},
-                "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力幅"},
-                "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa: 期待する出力高さ"},
-                "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa: 期待する平均FPS"},
-                "expected_audio_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 384000, "description": "get_info/export_qa: 期待する音声サンプルレート (Hz)"},
-                "expected_audio_channels": {"type": "integer", "minimum": 1, "maximum": 8, "description": "get_info/export_qa: 期待する音声チャンネル数"},
-                "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa: 平均FPSの許容誤差。既定0.1"},
+                "expected_duration_seconds": {"type": "number", "exclusiveMinimum": 0, "description": "get_info/export_qa/decoded_export_qa: 期待する動画の長さ"},
+                "duration_tolerance_seconds": {"type": "number", "minimum": 0, "maximum": 60, "description": "get_info/export_qa/decoded_export_qa: 尺の許容誤差。既定1秒"},
+                "expected_width": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa/decoded_export_qa: 期待する出力幅"},
+                "expected_height": {"type": "integer", "minimum": 1, "maximum": 16384, "description": "get_info/export_qa/decoded_export_qa: 期待する出力高さ"},
+                "expected_fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 240, "description": "get_info/export_qa/decoded_export_qa: 期待する平均FPS"},
+                "expected_audio_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 384000, "description": "get_info/export_qa/decoded_export_qa: 期待する音声サンプルレート (Hz)"},
+                "expected_audio_channels": {"type": "integer", "minimum": 1, "maximum": 8, "description": "get_info/export_qa/decoded_export_qa: 期待する音声チャンネル数"},
+                "expected_video_streams": {"type": "integer", "minimum": 1, "maximum": 16, "description": "decoded_export_qa: 期待する映像ストリーム数（カバー画像を除く）"},
+                "expected_audio_streams": {"type": "integer", "minimum": 0, "maximum": 16, "description": "decoded_export_qa: 期待する音声ストリーム数（0の場合require_audio=false）"},
+                "fps_tolerance": {"type": "number", "minimum": 0, "maximum": 10, "description": "get_info/export_qa/decoded_export_qa: 平均FPSの許容誤差。既定0.1"},
                 "require_audio": {"type": "boolean", "description": "get_info/export_qa/decoded_export_qa: 音声トラックを必須とする"},
                 "sample_seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "decoded_export_qa: 冒頭・末尾のデコード秒数。既定8秒"},
-                "full_decode": {"type": "boolean", "description": "decoded_export_qa: 最大15分の動画を全尺デコード。既定false（冒頭・末尾のみ）"},
+                "full_decode": {"type": "boolean", "description": "decoded_export_qa: 全尺デコード（最大15分の検証予算）。既定false"},
+                "full_signal_scan": {"type": "boolean", "description": "decoded_export_qa: full_decode=true時、全尺で黒画面・フリーズ・無音を検出。既定false（サンプル区間のみ）"},
+                "require_tracks_to_end": {"type": "boolean", "description": "decoded_export_qa: 全映像・音声トラックが動画末尾まで続くことを必須とする。既定false（短いBGM等は警告のみ）"},
+                "expected_video_codec": {"type": "string", "pattern": "^[a-z0-9_]{1,32}$", "description": "decoded_export_qa: 全映像トラックに期待するFFmpegコーデック名（例h264）"},
+                "expected_audio_codec": {"type": "string", "pattern": "^[a-z0-9_]{1,32}$", "description": "decoded_export_qa: 全音声トラックに期待するFFmpegコーデック名（例aac）"},
+                "max_black_seconds": {"type": "number", "minimum": 0, "maximum": 900, "description": "decoded_export_qa: 観測された黒画面区間の最大許容秒数"},
+                "max_silence_seconds": {"type": "number", "minimum": 0, "maximum": 900, "description": "decoded_export_qa: 観測された無音区間の最大許容秒数"},
+                "max_freeze_seconds": {"type": "number", "minimum": 0, "maximum": 900, "description": "decoded_export_qa: 観測された静止区間の最大許容秒数"},
+                "require_audio_peak_metrics": {"type": "boolean", "description": "decoded_export_qa: 各音声サンプルに有効なastatsピーク測定を要求する"},
+                "expected_video_frames": {"type": "integer", "minimum": 1, "maximum": 1000000000, "description": "decoded_export_qa: 各映像トラックの期待フレーム数"},
+                "min_audio_peak_dbfs": {"type": "number", "minimum": -120, "maximum": 12, "description": "decoded_export_qa: 音声サンプルのピーク下限(dBFS)"},
+                "max_audio_peak_dbfs": {"type": "number", "minimum": -120, "maximum": 12, "description": "decoded_export_qa: 音声サンプルのピーク上限(dBFS)"},
+                "max_stereo_imbalance_db": {"type": "number", "minimum": 0, "maximum": 120, "description": "decoded_export_qa: ステレオ左右ピーク差の上限(dB)"},
+                "min_integrated_lufs": {"type": "number", "minimum": -70, "maximum": 10, "description": "decoded_export_qa: 全音声トラックの統合ラウドネス下限(LUFS)。full_decode必須"},
+                "max_integrated_lufs": {"type": "number", "minimum": -70, "maximum": 10, "description": "decoded_export_qa: 全音声トラックの統合ラウドネス上限(LUFS)。full_decode必須"},
+                "max_true_peak_dbtp": {"type": "number", "minimum": -60, "maximum": 12, "description": "decoded_export_qa: 全音声トラックのTrue Peak上限(dBTP)。full_decode必須"},
                 "format": {"type": "string", "enum": ["mp4", "wav", "avi", "mov", "mkv", "webm"], "description": "export: 出力形式。省略時は拡張子"},
                 "overwrite": {"type": "boolean", "description": "export/save_as: 既存ファイルを上書きする"},
                 "force": {"type": "boolean", "description": "open: 未保存変更または保存状態不明でもプロジェクトを開く"},
@@ -1051,7 +1068,23 @@ async def dispatch(args: dict) -> Any:
                         decoded_media_qa.inspect, args.get("path"),
                         require_audio=args.get("require_audio", True),
                         sample_seconds=args.get("sample_seconds", 8),
-                        full_decode=args.get("full_decode", False))
+                        full_decode=args.get("full_decode", False),
+                        **({"full_signal_scan": args["full_signal_scan"]}
+                           if "full_signal_scan" in args else {}),
+                        **{key: args[key] for key in (
+                            "expected_duration_seconds", "duration_tolerance_seconds",
+                            "expected_width", "expected_height", "expected_fps",
+                            "fps_tolerance", "expected_audio_sample_rate",
+                            "expected_audio_channels", "expected_video_streams",
+                            "expected_audio_streams", "require_tracks_to_end",
+                            "expected_video_codec", "expected_audio_codec",
+                            "max_black_seconds", "max_silence_seconds",
+                            "max_freeze_seconds", "require_audio_peak_metrics",
+                            "expected_video_frames", "min_audio_peak_dbfs",
+                            "max_audio_peak_dbfs", "max_stereo_imbalance_db",
+                            "min_integrated_lufs", "max_integrated_lufs",
+                            "max_true_peak_dbtp")
+                           if key in args})
                 case "export_qa":
                     path = args.get("path")
                     if not is_absolute_media_path(path) or not path.strip().lower().endswith(".mp4"):
@@ -1333,7 +1366,20 @@ async def dispatch(args: dict) -> Any:
             if "decoded_export_check" in args:
                 config = args["decoded_export_check"]
                 if not isinstance(config, dict) or "path" not in config or \
-                        set(config) - {"path", "require_audio", "sample_seconds", "full_decode"}:
+                        set(config) - {"path", "require_audio", "sample_seconds", "full_decode",
+                                       "full_signal_scan",
+                                       "require_tracks_to_end", "expected_duration_seconds", "duration_tolerance_seconds",
+                                       "expected_width", "expected_height", "expected_fps",
+                                       "fps_tolerance", "expected_audio_sample_rate",
+                                       "expected_audio_channels", "expected_video_streams",
+                                       "expected_video_codec", "expected_audio_codec",
+                                       "max_black_seconds", "max_silence_seconds",
+                                       "max_freeze_seconds", "require_audio_peak_metrics",
+                                       "expected_video_frames", "min_audio_peak_dbfs",
+                                       "max_audio_peak_dbfs", "max_stereo_imbalance_db",
+                                       "expected_audio_streams",
+                                       "min_integrated_lufs", "max_integrated_lufs",
+                                       "max_true_peak_dbtp"}:
                     raise ValueError("decoded_export_check requires path and supported options")
                 criteria["decoded_export"] = config
                 report = await dispatch({"action": "get_info", "sub_action": "decoded_export_qa", **config})
