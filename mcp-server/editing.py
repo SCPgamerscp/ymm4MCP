@@ -459,7 +459,21 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         timeline indices; frame moves alone must not imply a new failure.
         """
         ids = issue.get("item_ids") or []
-        return json.dumps([issue["code"], issue.get("source"), sorted(ids)],
+        # Missing expected selectors have no item IDs. Two different missing
+        # expectations must not cancel each other out when one is repaired
+        # and another becomes broken with the same QA code and score.
+        # expected_index is stable within a criteria_hash; unlike timeline
+        # indices, it is not affected by reordering the host's items.
+        stable_context = {}
+        if "expected_index" in issue:
+            stable_context["expected_index"] = issue["expected_index"]
+            if "expected" in issue:
+                stable_context["expected"] = issue["expected"]
+        # Anonymous voice/subtitle diagnostics also need their source text:
+        # fixing one missing subtitle must not conceal a new missing line.
+        if "expected_text" in issue:
+            stable_context["expected_text"] = issue["expected_text"]
+        return json.dumps([issue["code"], issue.get("source"), sorted(ids), stable_context],
                           sort_keys=True, ensure_ascii=False, allow_nan=False,
                           separators=(",", ":"))
 
