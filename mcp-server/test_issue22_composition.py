@@ -29,7 +29,7 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         audit = self.source.split(
             "  audit-open-pr-merge-compatibility:", 1
         )[1].split("  all-open-prs-python-integration:", 1)[0]
-        self.assertNotRegex(audit, r"(?m)^    if:.*pull_request\\.number")
+        self.assertNotRegex(audit, r"(?m)^    if:.*pull_request\.number")
         self.assertNotIn("github.event.pull_request.number == ", audit)
         self.assertIn('gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"', audit)
 
