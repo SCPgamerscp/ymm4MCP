@@ -401,6 +401,12 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         def canonical(issue):
             evidence = {key: value for key, value in issue.items()
                         if key not in ("index", "indices", "matches")}
+            # Timeline positions are unstable, but the number of selector
+            # matches is meaningful: resolving one of three anonymous matches
+            # must count as progress even while EXPECTED_AMBIGUOUS remains.
+            if "matches" in issue:
+                matches = issue["matches"]
+                evidence["match_count"] = len(matches) if isinstance(matches, list) else matches
             if "item_ids" in evidence:
                 evidence["item_ids"] = sorted(evidence["item_ids"])
             return json.dumps(evidence, sort_keys=True, ensure_ascii=False,
