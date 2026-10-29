@@ -10,60 +10,33 @@ permissions:
 
 jobs:
   setup-cross-pr-integration:
-    # Run for the active #22 settings PR as well as manual dispatches.
-    # No GitHub PR is merged or pushed by this job.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 259
+    # Exercise #22/#140 acceptance regressions on the *same immutable source*
+    # as the full Python and Windows package jobs. Historical merged PR refs
+    # must not be re-merged into a second, potentially divergent test tree.
+    needs: audit-open-pr-merge-compatibility
+    if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'
     runs-on: windows-latest
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: composed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-          persist-credentials: false
+          name: all-open-prs-composed-source
+      - name: Restore the exact audited all-open-PR tree for #22/#140 checks
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          mkdir -p composed
+          tar -xf all-open-prs-composed.tar -C composed
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compose main with the open Issue 22 and 140 PRs (runner only)
-        shell: bash
-        env:
-          # A queued/rerun PR check must test its exact event revision.
-          # Manual dispatches intentionally compose the latest open PR heads.
-          EVENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-          EVENT_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
-        run: |
-          set -euo pipefail
-          git config user.name "Issue 22 integration CI"
-          git config user.email "integration-ci@users.noreply.github.com"
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git checkout -B issue22-composed refs/remotes/origin/main
-          # These changes touch separate files but must work as one release:
-          # UI links, publishing/installer, HTTP host/body validation,
-          # connection discovery, settings persistence, and startup behavior.
-          # Also compose the five #140 keyframe fixes against the same plugin
-          # before shipping a .ymme. A successful standalone PR build cannot
-          # prove that both issue groups are compatible.
-          # PR #229 also modifies package-ymme.yml (export QA), so include
-          # it to catch cross-PR workflow conflicts before a manual merge.
-          # Merge in the same ascending order as the 50-PR audit. The prior
-          # hand-picked order merged #228/#229 before #219 and caused a
-          # package-ymme.yml conflict despite the all-PR audit succeeding.
-          # Keeping the order deterministic avoids a false release blocker.
-          # Include #260's Windows job-snapshot fix: the prior all-PR
-          # Windows integration failed without it even though #228 passed alone.
-          for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259 260; do
-            if [[ "$number" == "$EVENT_PR_NUMBER" && -n "$EVENT_PR_HEAD_SHA" ]]; then
-              # Pin the triggering PR to its event SHA, not a newer moving ref.
-              git fetch --no-tags origin "$EVENT_PR_HEAD_SHA:refs/remotes/pr/${number}"
-            else
-              git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
-            fi
-            printf 'Composing PR #%s at %s\n' "${number}" "$(git rev-parse "refs/remotes/pr/${number}")"
-            git merge --no-ff --no-edit "refs/remotes/pr/${number}"
-          done
-          git status --short
       - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
         shell: pwsh
         run: |
@@ -135,7 +108,7 @@ jobs:
       - name: State the remaining live acceptance gates
         shell: pwsh
         run: |
-          Write-Output 'Curated Issue #22/#140 regression suites passed; the all-open-PR Windows job separately gates the actual .ymme build. No PR was merged.'
+          Write-Output 'Issue #22/#140 regression suites passed on the exact audited all-open-PR tree; the Windows package job separately gates the .ymme build. No PR was merged.'
           Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, UI port-change E2E, and YMM4 4.56.1.1 keyframe E2E.'
 
   composed-real-export-qa:
