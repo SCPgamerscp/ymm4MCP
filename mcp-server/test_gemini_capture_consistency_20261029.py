@@ -79,8 +79,8 @@ class CaptureConsistencyTests(unittest.TestCase):
 
     def test_reject_oversized_or_malformed_instructions_before_upload(self):
         self.frame("a.png")
-        for instruction in (12, ["bad"], "x" * 32_769, "hello\\x00world",
-                            "bad\\ud800unicode"):
+        for instruction in (12, ["bad"], "x" * 32_769, "hello" + chr(0) + "world",
+                            "bad" + chr(0xD800) + "unicode"):
             with self.subTest(instruction_type=type(instruction).__name__):
                 with patch.object(gemini_video, "_client",
                                   side_effect=AssertionError("Gemini must not be called")):
