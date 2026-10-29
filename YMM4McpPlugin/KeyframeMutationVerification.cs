@@ -62,6 +62,14 @@ namespace YMM4McpPlugin
             return false;
         }
 
+        // A readable inventory must describe a complete, unambiguous set of
+        // frame/value pairs. A malformed layout must not be presented as
+        // valid animation data to callers or to the strict live smoke test.
+        internal static bool HasReadableLayout(
+            IReadOnlyList<int> frames, IReadOnlyList<double> values)
+            => frames != null && values != null &&
+               TrySnapshot(frames, values, out _);
+
         internal static bool Confirm(string action, int at, double? requested,
             IReadOnlyList<int> frames, IReadOnlyList<double> values, double? defaultValue)
         {
