@@ -540,7 +540,7 @@ def combine_qa_reports(structural, checks, criteria):
                 span = issue["frame_range"]
                 if (not isinstance(span, list) or len(span) != 2 or
                         type(span[0]) is not int or type(span[1]) is not int or
-                        not 0 <= span[0] < span[1] <= MAX_FRAME):
+                        not 0 <= span[0] <= span[1] <= MAX_FRAME):
                     raise ValueError(f"{source} returned an invalid QA frame_range")
             normalized = {**issue, "source": source}
             if source == "visual":
@@ -550,7 +550,7 @@ def combine_qa_reports(structural, checks, criteria):
                 if has_start:
                     start, end = issue["start_frame"], issue["end_frame"]
                     if (type(start) is not int or type(end) is not int or
-                            not 0 <= start < end <= MAX_FRAME or
+                            not 0 <= start <= end <= MAX_FRAME or
                             ("frame_range" in issue and issue["frame_range"] != [start, end])):
                         raise ValueError("visual QA returned an invalid or conflicting frame interval")
                     normalized["frame_range"] = [start, end]
