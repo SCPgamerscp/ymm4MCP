@@ -376,7 +376,11 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
                     type(summary.get("warnings")) is not int or
                     summary["errors"] != errors or summary["warnings"] != warnings):
                 raise ValueError("validate report summary disagrees with issue severities")
-        return score, errors, warnings
+        # The bounded report retains only the first 999 issues and a marker.
+        # Preserve the hidden count so worsening quality at the score floor is visible.
+        omitted = sum(issue.get("omitted_count", 0) for issue in report["issues"]
+                      if issue["code"] == "QA_ISSUES_TRUNCATED")
+        return score, errors, warnings, omitted
 
     metrics = [check_report(report) for report in [*history, current]]
     scores = [metric[0] for metric in metrics]
@@ -385,20 +389,19 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         raise ValueError("qa_history must use the same validation criteria as current QA")
 
     def signature(report):
-        # Compare problem sets as a whole: one persistent issue does not block
-        # progress if other issues were fixed in the same repair attempt.
-        # Item ordering in a fresh timeline snapshot is not a change to the
-        # affected set. Keep severity so escalation is still visible.
-        return sorted((issue["code"], str(issue.get("severity", "")), str(issue.get("source", "")),
-                       str(sorted(issue.get("item_ids") or [])),
-                       str(issue.get("frame_range", [])), str(issue.get("layer", "")),
-                       str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")),
-                       json.dumps({key: issue[key] for key in
-                                   ("expected_index", "expected", "scene_id", "path", "uncovered_ranges",
-                                     "expected_text", "actual_texts", "suggested_fix", "message",
-                                     "project_duration")
-                                   if key in issue}, sort_keys=True, ensure_ascii=False, allow_nan=False))
-                      for issue in report["issues"])
+        # Compare complete issue evidence, not a hand-picked list of fields.
+        # Positional indices change when the host reorders the timeline; stable
+        # item IDs and actual QA evidence do not. Keep unknown future fields so
+        # a meaningful repair cannot be mistaken for an unchanged QA result.
+        def canonical(issue):
+            evidence = {key: value for key, value in issue.items()
+                        if key not in ("index", "indices", "matches")}
+            if "item_ids" in evidence:
+                evidence["item_ids"] = sorted(evidence["item_ids"])
+            return json.dumps(evidence, sort_keys=True, ensure_ascii=False,
+                              allow_nan=False, separators=(",", ":"))
+
+        return sorted(canonical(issue) for issue in report["issues"])
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
     if not current["passed"]:
@@ -407,6 +410,7 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         elif max_api_calls is not None and api_calls >= max_api_calls:
             reason = "API_LIMIT_REACHED"
         elif history and (metrics[-1][1] > metrics[-2][1] or
+                          metrics[-1][3] > metrics[-2][3] or
                           scores[-1] < scores[-2] or
                           (scores[-1] == scores[-2] and
                            metrics[-1][1:] > metrics[-2][1:])):
