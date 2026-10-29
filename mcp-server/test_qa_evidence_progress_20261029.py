@@ -31,6 +31,21 @@ class QaEvidenceProgressTests(unittest.TestCase):
         self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
                          "QA_ISSUES_REMAIN")
 
+    def test_malformed_truncation_marker_is_rejected(self):
+        base = overflowing_report(1100)
+        for bad in (None, 0, -1, True, "101", 1.5):
+            report = copy.deepcopy(base)
+            report["issues"][-1]["omitted_count"] = bad
+            with self.subTest(bad=repr(bad)), self.assertRaisesRegex(ValueError, "omitted_count"):
+                editing.evaluate_qa_gate(report)
+
+    def test_truncation_marker_must_be_error(self):
+        report = overflowing_report(1100)
+        report["issues"][-1]["severity"] = "warning"
+        report["summary"] = {"errors": 999, "warnings": 1}
+        with self.assertRaisesRegex(ValueError, "omitted_count"):
+            editing.evaluate_qa_gate(report)
+
     def test_equal_truncation_evidence_stalls(self):
         before = overflowing_report(1100)
         after = overflowing_report(1100)
