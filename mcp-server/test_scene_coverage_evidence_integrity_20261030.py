@@ -40,7 +40,9 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
     def test_rejects_missing_or_invalid_scene_item_array(self):
         for invalid in (None, {}, "items", 5):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
-                with_coverage({"scenes": [scene(invalid)]})
+                bad = scene()
+                bad["items"] = invalid
+                with_coverage({"scenes": [bad]})
         with self.assertRaises(ValueError):
             with_coverage({"scenes": [{"start_frame": 0, "end_frame": 20}]})
 
