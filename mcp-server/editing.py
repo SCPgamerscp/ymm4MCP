@@ -350,6 +350,11 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
                 raise ValueError("validate report issues require a code")
             if issue.get("severity") not in ("error", "warning"):
                 raise ValueError("validate report issues require error or warning severity")
+            if issue["code"] == "QA_ISSUES_TRUNCATED" and (
+                    issue["severity"] != "error" or
+                    type(issue.get("omitted_count")) is not int or
+                    issue["omitted_count"] <= 0):
+                raise ValueError("QA_ISSUES_TRUNCATED requires a positive omitted_count and error severity")
             if "item_ids" in issue and (not isinstance(issue["item_ids"], list) or
                     any(not _valid_item_id(identity) for identity in issue["item_ids"])):
                 raise ValueError("validate report item_ids must be nonempty strings")
