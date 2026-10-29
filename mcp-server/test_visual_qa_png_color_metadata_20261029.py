@@ -7,6 +7,7 @@ import zlib
 
 from PIL import Image
 import visual_qa
+from _icc_test_profiles import rgb_icc_profile
 
 
 def png():
@@ -79,14 +80,10 @@ class PNGColorMetadataTests(unittest.TestCase):
                 self.invalid(candidate)
 
     def test_valid_bounded_icc_profile(self):
-        # A minimally structured RGB ICC profile with an empty tag table.
-        profile = bytearray(132)
-        profile[:4] = len(profile).to_bytes(4, "big")
-        profile[16:20] = b"RGB "
-        profile[20:24] = b"XYZ "
-        profile[36:40] = b"acsp"
+        # LittleCMS-generated sRGB profile includes real required tag payloads.
         self.valid(insert(png(), b"iCCP",
-                          b"Display profile\x00\x00" + zlib.compress(profile)))
+                          b"Display profile\\x00\\x00" +
+                          zlib.compress(rgb_icc_profile())))
 
     def test_reject_icc_missing_keyword_method_or_compression(self):
         for payload in (b"\x00\x00" + zlib.compress(b"ICC"),
