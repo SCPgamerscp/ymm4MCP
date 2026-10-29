@@ -64,6 +64,56 @@ namespace YMM4McpPlugin
             return SameValue(values[index], requested.Value);
         }
 
+        // A successful native call can update the requested key *and* silently
+        // overwrite/delete another key. Compare logical frame/value pairs,
+        // rather than raw list positions (which shift on insert/remove).
+        internal static bool PreservesUnrelatedKeys(
+            string action, int at,
+            IReadOnlyList<int> beforeFrames, IReadOnlyList<double> beforeValues,
+            IReadOnlyList<int> afterFrames, IReadOnlyList<double> afterValues)
+        {
+            if (action == "clear") return true; // Clearing all keys is intentional.
+            if (action != "set" && action != "remove") return false;
+            if (!TrySnapshot(beforeFrames, beforeValues, out var before) ||
+                !TrySnapshot(afterFrames, afterValues, out var after))
+                return false;
+            foreach (var pair in before)
+            {
+                if (pair.Key == at) continue;
+                if (!after.TryGetValue(pair.Key, out var value) ||
+                    !pair.Value.Equals(value))
+                    return false;
+            }
+            // A native method must not introduce unrelated keyframes either.
+            foreach (var frame in after.Keys)
+                if (frame != at && !before.ContainsKey(frame))
+                    return false;
+            return true;
+        }
+
+        private static bool TrySnapshot(
+            IReadOnlyList<int> frames, IReadOnlyList<double> values,
+            out Dictionary<int, double> snapshot)
+        {
+            snapshot = new Dictionary<int, double>();
+            bool implicitStart = values.Count == frames.Count + 1;
+            if (values.Count != frames.Count && !implicitStart) return false;
+            if (implicitStart)
+            {
+                if (!double.IsFinite(values[0])) return false;
+                snapshot[0] = values[0];
+            }
+            for (int i = 0; i < frames.Count; i++)
+            {
+                int frame = frames[i];
+                double value = values[i + (implicitStart ? 1 : 0)];
+                if (frame < 0 || !double.IsFinite(value) ||
+                    !snapshot.TryAdd(frame, value))
+                    return false;
+            }
+            return true;
+        }
+
         private static bool SameValue(double? observed, double requested)
         {
             if (!observed.HasValue || !double.IsFinite(observed.Value)) return false;
