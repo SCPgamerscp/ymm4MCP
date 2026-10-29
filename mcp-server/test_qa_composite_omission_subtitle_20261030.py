@@ -51,7 +51,7 @@ class CompositeOmissionAndSubtitleTests(unittest.TestCase):
         self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
                          "QA_REGRESSED")
 
-    def test_changed_item_count_prevents_false_stall(self):
+    def test_unrelated_item_count_change_does_not_mask_stall(self):
         expected = [{"item_id": "not-here"}]
         before = editing.validate_timeline(
             [{"frame": 0, "length": 1, "layer": 0}], expected=expected)
@@ -59,8 +59,9 @@ class CompositeOmissionAndSubtitleTests(unittest.TestCase):
             [{"frame": 0, "length": 1, "layer": 0},
              {"frame": 0, "length": 1, "layer": 1}], expected=expected)
         self.assertEqual(before["issues"], after["issues"])
+        # A new unrelated item is not progress on the still-missing expected ID.
         self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
-                         "QA_ISSUES_REMAIN")
+                         "QA_STALLED")
 
     def test_identical_item_count_and_issues_still_stalls(self):
         report = editing.validate_timeline([], expected=[{"item_id": "missing"}])
