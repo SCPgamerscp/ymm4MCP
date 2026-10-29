@@ -120,22 +120,24 @@ namespace YMM4McpPlugin
             });
         }
 
-        private List<string> SnapshotItemIds()
+        private List<string>? SnapshotItemIds()
         {
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var ids = new List<string>();
                 var vm = GetMainViewModel();
-                if (vm == null) return ids;
+                if (vm == null) return null;
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
-                if (tvm == null) return ids;
+                if (tvm == null) return null;
                 var rawItems = GetPropEnum(tvm, "Items");
-                if (rawItems == null) return ids;
+                if (rawItems == null) return null;
                 foreach (var iv in rawItems)
                 {
                     var info = ReadItemInfo(iv);
                     string id = GetItemIdentity(info.item).id;
-                    if (!string.IsNullOrEmpty(id)) ids.Add(id);
+                    // Preserve missing identities so checkpoint validation can fail closed.
+                    // Silently dropping one would allow rollback to delete that item.
+                    ids.Add(id);
                 }
                 return ids;
             });
@@ -185,11 +187,27 @@ namespace YMM4McpPlugin
                 UpdatedAt = DateTime.UtcNow.ToString("o"),
                 Items = items
             };
+            // Resolve current native IDs before taking the edits lock. Reconciliation
+            // can append newly committed scene bindings or replace a deleted item.
+            // A missing/ambiguous timeline must never authorize such a remap.
+            var liveItemIds = SnapshotItemIds();
             lock (_editsLock)
             {
                 var existing = _editBindings.FirstOrDefault(b => b.IdempotencyKey == key);
-                if (existing != null && !string.Equals(existing.PlanHash, hash, StringComparison.Ordinal))
-                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to a different EditPlan");
+                // Validate the first save as well as subsequent reconciliation.
+                // Otherwise a new idempotency key could persist nonexistent item IDs.
+                if (existing == null &&
+                    !EditCheckpointSafety.CompatibleBindingUpdate(
+                        Array.Empty<(string Id, string ItemId, string? Revision)>(),
+                        items.Select(i => (i.Id, i.ItemId, i.Revision)), liveItemIds))
+                    return Failure("BINDINGS_INVALID", "EditPlanバインディングが現在のタイムラインと一致しません");
+                if (existing != null &&
+                    (!string.Equals(existing.PlanHash, hash, StringComparison.Ordinal) ||
+                     existing.Items == null ||
+                     !EditCheckpointSafety.CompatibleBindingUpdate(
+                         existing.Items.Select(i => (i.Id, i.ItemId, i.Revision)),
+                         items.Select(i => (i.Id, i.ItemId, i.Revision)), liveItemIds)))
+                    return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key is already bound to conflicting EditPlan items");
                 var updated = _editBindings.Where(b => b.IdempotencyKey != key).Select(b => b.Clone()).ToList();
                 updated.Add(record);
                 if (updated.Count > 40)
@@ -221,8 +239,30 @@ namespace YMM4McpPlugin
                 if (!File.Exists(EditsFilePath)) return;
                 var records = JsonSerializer.Deserialize<List<EditBindingRecord>>(File.ReadAllText(EditsFilePath), EditJson);
                 if (records == null) return;
+                // The file may have been manually edited, truncated or left by an
+                // older version. Reject ambiguous keys and invalid item bindings
+                // before they can influence a later idempotent EditPlan replay.
+                var duplicateKeys = records.Where(r => r != null
+                        && !string.IsNullOrEmpty(r.IdempotencyKey))
+                    .GroupBy(r => r.IdempotencyKey, StringComparer.Ordinal)
+                    .Where(g => g.Count() > 1)
+                    .Select(g => g.Key)
+                    .ToHashSet(StringComparer.Ordinal);
+                var valid = new List<EditBindingRecord>();
+                foreach (var record in records)
+                {
+                    if (record == null || duplicateKeys.Contains(record.IdempotencyKey)
+                        || record.Items == null
+                        || !EditCheckpointSafety.ValidStoredBindingRecord(
+                            record.IdempotencyKey, record.PlanHash,
+                            record.Items.Select(i => ((string?)i?.Id, (string?)i?.ItemId))))
+                        continue;
+                    valid.Add(record);
+                }
+                if (valid.Count != records.Count)
+                    Log($"無効または重複したEditPlanバインディングを{records.Count - valid.Count}件スキップしました");
                 lock (_editsLock)
-                    _editBindings = records.TakeLast(30).ToList();
+                    _editBindings = valid.TakeLast(30).ToList();
             }
             catch (Exception ex) { Log("EditPlanバインディング復元に失敗: " + ex.Message); }
         }
@@ -272,25 +312,61 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("reason must be at most 200 characters");
             bool backup = GetBool(body, "backup", false);
             string id = "cp_" + Guid.NewGuid().ToString("N");
-            var itemIds = SnapshotItemIds();
-            string? projectPath = CurrentProjectPath();
+            // Capture the timeline, project identity, and save state in one UI
+            // dispatch. Separate dispatches can observe different projects if
+            // the user switches documents while a checkpoint is being created.
+            var captured = Application.Current.Dispatcher.Invoke(() => new
+            {
+                ItemIds = SnapshotItemIds(),
+                ProjectPath = CurrentProjectPath(),
+                IsSaved = CurrentProjectSaveState()
+            });
+            var itemIds = captured.ItemIds;
+            // An unavailable editor/timeline is not an empty timeline. Otherwise a
+            // later rollback could delete every item under an empty checkpoint.
+            if (itemIds == null)
+                return Failure("ITEMS_UNAVAILABLE", "チェックポイント用のタイムラインを取得できません");
+            try { EditCheckpointSafety.ValidateSnapshotItemIds(itemIds); }
+            catch (ArgumentException)
+            {
+                return Failure("ITEM_IDS_AMBIGUOUS", "タイムラインのアイテムIDが不正または重複しています");
+            }
+            string? projectPath = captured.ProjectPath;
             string? backupPath = null;
+            string? backupSha256 = null;
             string? backupWarning = null;
             if (backup)
             {
                 if (string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath))
                     backupWarning = "NO_PROJECT_FILE";
+                else if (!EditCheckpointSafety.IsStableSavedProject(
+                             projectPath, CurrentProjectPath(), captured.IsSaved) ||
+                         !EditCheckpointSafety.IsStableSavedProject(
+                             projectPath, CurrentProjectPath(), CurrentProjectSaveState()))
+                    backupWarning = "PROJECT_UNSAVED_OR_CHANGED";
                 else
                 {
                     try
                     {
                         Directory.CreateDirectory(CheckpointBackupDir);
                         backupPath = Path.Combine(CheckpointBackupDir, id + ".ymmp");
-                        EditCheckpointSafety.CopyBackupAtomically(projectPath, backupPath);
+                        backupSha256 = EditCheckpointSafety.CopyBackupVerified(projectPath, backupPath);
+                        // Copying is not a UI operation: edits or a project switch
+                        // may occur while the source .ymmp is being read. Never
+                        // advertise that copy as a restorable checkpoint.
+                        if (!EditCheckpointSafety.IsStableSavedProject(
+                                projectPath, CurrentProjectPath(), CurrentProjectSaveState()))
+                        {
+                            TryDeleteBackup(backupPath);
+                            backupPath = null;
+                            backupSha256 = null;
+                            backupWarning = "PROJECT_CHANGED_DURING_BACKUP";
+                        }
                     }
                     catch (Exception ex)
                     {
                         backupPath = null;
+                        backupSha256 = null;
                         backupWarning = "BACKUP_FAILED:" + ex.Message;
                     }
                 }
@@ -302,30 +378,38 @@ namespace YMM4McpPlugin
                 Reason = reason,
                 ProjectPath = projectPath,
                 BackupPath = backupPath,
+                BackupSha256 = backupSha256,
                 ItemIds = itemIds
             };
-            List<CheckpointRecord> kept;
             List<CheckpointRecord> pruned;
+            bool persisted = false;
+            // Read, persist and publish under one lock. Concurrent checkpoint
+            // requests must not overwrite each other's snapshots on disk.
             lock (_editsLock)
             {
-                kept = _checkpoints.Select(c => c.Clone()).ToList();
+                var kept = _checkpoints.Select(c => c.Clone()).ToList();
                 kept.Add(record);
                 pruned = kept.Count <= 20 ? new List<CheckpointRecord>() : kept.Take(kept.Count - 20).ToList();
                 if (pruned.Count > 0)
                     kept = kept.TakeLast(20).ToList();
+                try
+                {
+                    PersistCheckpoints(kept);
+                    _checkpoints = kept;
+                    persisted = true;
+                }
+                catch (Exception ex)
+                {
+                    Log("チェックポイント保存に失敗: " + ex.Message);
+                }
             }
-            try
+            // Do not dispatch to the UI thread for active-file protection while
+            // holding _editsLock; that can deadlock against an editor callback.
+            if (!persisted)
             {
-                PersistCheckpoints(kept);
-            }
-            catch (Exception ex)
-            {
-                Log("チェックポイント保存に失敗: " + ex.Message);
                 TryDeleteBackup(backupPath);
                 return Failure("CHECKPOINT_NOT_SAVED", "チェックポイントを保存できませんでした");
             }
-            lock (_editsLock)
-                _checkpoints = kept;
             foreach (var old in pruned)
                 TryDeleteBackup(old.BackupPath);
             return new
@@ -337,6 +421,7 @@ namespace YMM4McpPlugin
                 item_count = record.ItemIds.Count,
                 project_path = record.ProjectPath,
                 backup_path = record.BackupPath,
+                backup_sha256 = record.BackupSha256,
                 backup_warning = backupWarning,
                 note = "Rollback deletes items added after this snapshot. Deleted items and property edits are not restored unless you open backup_path."
             };
@@ -376,9 +461,36 @@ namespace YMM4McpPlugin
             if (record == null)
                 return Failure("CHECKPOINT_NOT_FOUND", "チェックポイントが見つかりません: " + id);
 
-            var kept = new HashSet<string>(record.ItemIds);
+            // The legacy mode only removes newly added items. Opt-in backup
+            // restoration opens the original on-disk checkpoint as a separate
+            // project, restoring deletions and property changes without writing
+            // over the current project file.
+            if (GetBool(body, "restore_backup", false))
+            {
+                if (!GetBool(body, "confirm_restore_backup", false))
+                    return Failure("RESTORE_CONFIRMATION_REQUIRED",
+                        "restore_backup requires confirm_restore_backup=true");
+                return await RestoreCheckpointBackup(record);
+            }
+
+            // Native item IDs are only meaningful within the project that created
+            // the checkpoint. Unknown/unsaved projects cannot be safely matched.
+            if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
+                return Failure("CHECKPOINT_PROJECT_MISMATCH", "チェックポイント作成時と現在のプロジェクトが異なります");
+            try { EditCheckpointSafety.ValidateSnapshotItemIds(record.ItemIds); }
+            catch (ArgumentException)
+            {
+                return Failure("ITEM_IDS_AMBIGUOUS", "チェックポイントのアイテムIDが不正または重複しています");
+            }
+            var kept = new HashSet<string>(record.ItemIds, StringComparer.Ordinal);
             return Application.Current.Dispatcher.Invoke(() =>
             {
+                // The initial HTTP-thread check is insufficient: a project may
+                // change while waiting for the UI dispatcher. Revalidate on the
+                // UI thread immediately before any destructive timeline edit.
+                if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
+                    return Failure("CHECKPOINT_PROJECT_MISMATCH",
+                        "チェックポイント作成時と現在のプロジェクトが異なります");
                 var vm = GetMainViewModel();
                 if (vm == null) return Failure("NO_MAIN_VIEW_MODEL", "VM失敗");
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
@@ -395,7 +507,15 @@ namespace YMM4McpPlugin
                     if (!kept.Contains(itemId))
                         toRemove.Add(info.item);
                 }
-                var missingSnapshot = record.ItemIds.Where(itemId => !currentIds.Contains(itemId)).ToArray();
+                // A duplicated/empty live identity makes deletion ambiguous even if
+                // the checkpoint itself was valid. Fail before removing any items.
+                try { EditCheckpointSafety.ValidateSnapshotItemIds(currentIds); }
+                catch (ArgumentException)
+                {
+                    return Failure("ITEM_IDS_AMBIGUOUS", "現在のタイムラインのアイテムIDが不正または重複しています");
+                }
+                var currentSet = new HashSet<string>(currentIds, StringComparer.Ordinal);
+                var missingSnapshot = record.ItemIds.Where(itemId => !currentSet.Contains(itemId)).ToArray();
                 if (toRemove.Count == 0)
                 {
                     return new
@@ -428,6 +548,69 @@ namespace YMM4McpPlugin
             });
         }
 
+        private async Task<object> RestoreCheckpointBackup(CheckpointRecord record)
+        {
+            if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
+                    record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
+                return Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
+                    "保存済みの同一プロジェクトに属する安全なバックアップがありません");
+            return await RunOnUi(async () =>
+            {
+                // Recheck the project and the backup immediately before invoking
+                // the host. Never discard unsaved changes, even when confirmed.
+                if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
+                    return (object)Failure("CHECKPOINT_PROJECT_MISMATCH",
+                        "チェックポイント作成時と現在のプロジェクトが異なります");
+                if (CurrentProjectSaveState() is not true)
+                    return (object)Failure("UNSAVED_CHANGES",
+                        "保存状態が不明か未保存の変更があります。保存してから復元してください");
+                if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
+                        record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
+                    return (object)Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
+                        "復元用バックアップが存在しないか安全ではありません");
+
+                var invoked = InvokeNamed(OpenMethodHints, record.BackupPath!);
+                if (!invoked.ok)
+                    return (object)Failure("OPEN_METHOD_UNAVAILABLE",
+                        "YMM4でバックアッププロジェクトを開くメソッドが見つかりません");
+                if (invoked.task != null)
+                    await invoked.task;
+                if (!EditCheckpointSafety.SameProject(record.BackupPath, CurrentProjectPath()))
+                    return (object)new
+                    {
+                        success = false,
+                        error_code = "RESTORE_OUTCOME_UNKNOWN",
+                        error = "バックアップを開く処理を呼びましたが、プロジェクトの切替を確認できません",
+                        outcome_unknown = true,
+                        checkpoint_id = record.Id,
+                        backup_path = record.BackupPath
+                    };
+                return (object)new
+                {
+                    success = true,
+                    action = "restore_backup",
+                    checkpoint_id = record.Id,
+                    backup_path = record.BackupPath,
+                    backup_sha256 = record.BackupSha256,
+                    original_project_path = record.ProjectPath,
+                    note = "バックアップを別プロジェクトとして開きました。元のプロジェクトは上書きしていません。チェックポイント領域のコピーは将来整理されるため、編集を続ける前に別の場所へ名前を付けて保存してください。"
+                };
+            });
+        }
+
+        private bool? CurrentProjectSaveState()
+        {
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (bool?)null;
+                var model = GetMainModel(vm);
+                object? state = GetPropValue(vm, "IsSaved") ??
+                    (model == null ? null : GetPropValue(model, "IsSaved"));
+                return state is bool saved ? saved : (bool?)null;
+            });
+        }
+
         private string? CurrentProjectPath()
         {
             return Application.Current.Dispatcher.Invoke(() =>
@@ -454,8 +637,20 @@ namespace YMM4McpPlugin
                 if (!File.Exists(CheckpointsFilePath)) return;
                 var records = JsonSerializer.Deserialize<List<CheckpointRecord>>(File.ReadAllText(CheckpointsFilePath), EditJson);
                 if (records == null) return;
+                // Treat the persisted index as untrusted state. Malformed IDs or
+                // duplicate native identities must not authorize later deletion.
+                var valid = new List<CheckpointRecord>();
+                foreach (var record in records)
+                {
+                    if (record == null || string.IsNullOrEmpty(record.Id) ||
+                        !CheckpointIdPattern.IsMatch(record.Id) || record.ItemIds == null)
+                        continue;
+                    try { EditCheckpointSafety.ValidateSnapshotItemIds(record.ItemIds); }
+                    catch (ArgumentException) { continue; }
+                    valid.Add(record);
+                }
                 lock (_editsLock)
-                    _checkpoints = records.TakeLast(20).ToList();
+                    _checkpoints = valid.TakeLast(20).ToList();
             }
             catch (Exception ex) { Log("チェックポイント復元に失敗: " + ex.Message); }
         }
@@ -468,9 +663,19 @@ namespace YMM4McpPlugin
             File.Move(temp, CheckpointsFilePath, true);
         }
 
-        private static void TryDeleteBackup(string? path)
+        private void TryDeleteBackup(string? path)
         {
-            if (string.IsNullOrEmpty(path)) return;
+            if (!EditCheckpointSafety.IsOwnedBackupPath(path, CheckpointBackupDir)) return;
+            // A restored backup may be the active document. On shutdown or an
+            // unavailable editor, skip pruning rather than delete blindly.
+            string? activeProject;
+            try { activeProject = CurrentProjectPath(); }
+            catch (Exception ex) when (ex is InvalidOperationException or TaskCanceledException)
+            {
+                return;
+            }
+            if (!EditCheckpointSafety.CanPruneBackup(path, CheckpointBackupDir, activeProject))
+                return;
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
@@ -484,6 +689,7 @@ namespace YMM4McpPlugin
             item_count = record.ItemIds.Count,
             project_path = record.ProjectPath,
             backup_path = record.BackupPath,
+            backup_sha256 = record.BackupSha256,
             item_ids = includeItems ? record.ItemIds.ToArray() : null
         };
 
@@ -517,6 +723,7 @@ namespace YMM4McpPlugin
             public string Reason { get; set; } = "";
             public string? ProjectPath { get; set; }
             public string? BackupPath { get; set; }
+            public string? BackupSha256 { get; set; }
             public List<string> ItemIds { get; set; } = new();
 
             public CheckpointRecord Clone() => new()
@@ -526,6 +733,7 @@ namespace YMM4McpPlugin
                 Reason = Reason,
                 ProjectPath = ProjectPath,
                 BackupPath = BackupPath,
+                BackupSha256 = BackupSha256,
                 ItemIds = ItemIds.ToList()
             };
         }
