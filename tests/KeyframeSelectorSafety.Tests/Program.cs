@@ -184,6 +184,33 @@ Check(!Verified("clear", 0, null, Array.Empty<int>(), new[] { 1.0, 2.5 }),
 Check(!Verified("clear", 0, null, new[] { 10 }, new[] { 1.0, 2.5 }),
     "native clear leaving frames must fail");
 
+// The GET inventory must not report broken frame/value layouts as valid.
+// Strict inventory fails closed; best-effort inventory skips that property.
+Check(KeyframeMutationVerification.HasReadableLayout(
+        Array.Empty<int>(), Array.Empty<double>()),
+    "a default-only animation without a Values array is readable");
+Check(KeyframeMutationVerification.HasReadableLayout(
+        new[] { 10, 20 }, new[] { 1.0, 2.0, 3.0 }),
+    "implicit start value with two explicit frames is readable");
+Check(KeyframeMutationVerification.HasReadableLayout(
+        new[] { 0, 10 }, new[] { 1.0, 2.0 }),
+    "explicit frame zero with aligned values is readable");
+Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 10, 20 }, new[] { 1.0 }),
+    "truncated host Values must not pass inventory readback");
+Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 10 }, new[] { 1.0, 2.0, 3.0 }),
+    "orphaned host Values must not pass inventory readback");
+Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 10, 10 }, new[] { 1.0, 2.0 }),
+    "duplicate host Frames must not pass inventory readback");
+Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 0, 10 }, new[] { 1.0, 2.0, 3.0 }),
+    "implicit start and explicit frame zero cannot coexist unambiguously");
+Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 10 }, new[] { double.NaN, 2.0 }),
+    "non-finite host values must not pass inventory readback");
+
 // Host reflection readback must never silently discard malformed entries.
 // Previously ReadFrameList/ReadValueList skipped them, which could make a
 // partially corrupted native animation look like a successful edit.
