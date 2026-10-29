@@ -72,5 +72,43 @@ class PNGIntegrityTests(unittest.TestCase):
             _decode(altered)
 
 
+    def test_unknown_critical_chunk_is_rejected(self):
+        raw = _png()
+        altered = raw[:33] + _chunk(b"ABCD", b"unsupported") + raw[33:]
+        with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
+            _decode(altered)
+
+    def test_unknown_ancillary_chunk_is_allowed(self):
+        raw = _png()
+        altered = raw[:33] + _chunk(b"abCD", b"metadata") + raw[33:]
+        self.assertEqual(len(_decode(altered)), 64 * 36 * 3)
+
+    def test_single_plte_before_idat_is_allowed(self):
+        raw = _png()
+        palette = _chunk(b"PLTE", bytes((40, 80, 120)))
+        self.assertEqual(len(_decode(raw[:33] + palette + raw[33:])),
+                         64 * 36 * 3)
+
+    def test_duplicate_plte_is_rejected(self):
+        raw = _png()
+        palette = _chunk(b"PLTE", bytes((40, 80, 120)))
+        altered = raw[:33] + palette + palette + raw[33:]
+        with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
+            _decode(altered)
+
+    def test_plte_after_idat_is_rejected(self):
+        raw = _png()
+        palette = _chunk(b"PLTE", bytes((40, 80, 120)))
+        altered = raw[:-12] + palette + raw[-12:]
+        with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
+            _decode(altered)
+
+    def test_invalid_reserved_chunk_type_is_rejected(self):
+        raw = _png()
+        altered = raw[:33] + _chunk(b"abCd".lower(), b"invalid") + raw[33:]
+        with self.assertRaisesRegex(ValueError, "invalid preview PNG"):
+            _decode(altered)
+
+
 if __name__ == "__main__":
     unittest.main()
