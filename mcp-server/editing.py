@@ -100,6 +100,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
     layers = {}
     voices = []
     subtitles = []
+    seen_item_ids = {}
     for index, item in enumerate(items):
         try:
             if not isinstance(item, dict):
@@ -113,6 +114,23 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             problems.append({"code": "INVALID_ITEM", "severity": "error", "index": index,
                              "item_ids": ids, "message": str(exc)})
             continue
+        # A repeated stable item_id makes follow-up edits and QA repairs target
+        # an arbitrary timeline item. Missing IDs are permitted for legacy
+        # snapshots, but any supplied non-null ID must be usable and unique.
+        if item.get("item_id") is not None:
+            item_id = item["item_id"]
+            if (not isinstance(item_id, str) or not item_id.strip() or
+                    any(ord(char) < 32 or ord(char) == 127 for char in item_id)):
+                problems.append({"code": "INVALID_ITEM_ID", "severity": "error",
+                                 "index": index, "item_ids": [],
+                                 "message": "Timeline item has an invalid stable item_id"})
+            elif item_id in seen_item_ids:
+                previous = seen_item_ids[item_id]
+                problems.append({"code": "DUPLICATE_ITEM_ID", "severity": "error",
+                                 "indices": [previous, index], "item_ids": [item_id],
+                                 "message": "Multiple timeline items share the same item_id"})
+            else:
+                seen_item_ids[item_id] = index
         layers.setdefault(layer, []).append((frame, end, index))
         if subtitle_layers is not None:
             kind = item.get("type")
@@ -302,9 +320,10 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             raise ValueError("validate report passed status disagrees with error issues")
         if score != max(0, 100 - errors * 20 - warnings * 5):
             raise ValueError("validate report score disagrees with issue severities")
-        return score
+        return score, errors, warnings
 
-    scores = [check_report(report) for report in [*history, current]]
+    metrics = [check_report(report) for report in [*history, current]]
+    scores = [metric[0] for metric in metrics]
     if not isinstance(current.get("criteria_hash"), str) or any(
             report.get("criteria_hash") != current["criteria_hash"] for report in history):
         raise ValueError("qa_history must use the same validation criteria as current QA")
@@ -329,7 +348,12 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             reason = "TIME_LIMIT_REACHED"
         elif max_api_calls is not None and api_calls >= max_api_calls:
             reason = "API_LIMIT_REACHED"
-        elif history and scores[-1] < scores[-2]:
+        elif history and (scores[-1] < scores[-2] or
+                          (scores[-1] == scores[-2] and
+                           metrics[-1][1:] > metrics[-2][1:])):
+            # Scores bottom out at zero after five errors. Without comparing
+            # counts, a repair that introduces more errors at that floor can
+            # silently continue instead of triggering rollback guidance.
             reason = "QA_REGRESSED"
         else:
             repeated = 1
