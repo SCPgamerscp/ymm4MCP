@@ -316,8 +316,8 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         if not isinstance(report, dict) or report.get("success") is not True or not isinstance(report.get("passed"), bool):
             raise ValueError("qa_history and current must contain successful validate reports")
         score = finite_number(report.get("score"), "score")
-        if not 0 <= score <= 100 or not isinstance(report.get("issues"), list):
-            raise ValueError("validate reports require a 0..100 score and issues array")
+        if not 0 <= score <= 100 or not isinstance(report.get("issues"), list) or len(report["issues"]) > 1000:
+            raise ValueError("validate reports require a 0..100 score and at most 1000 issues")
         has_errors = False
         errors = warnings = 0
         for issue in report["issues"]:
@@ -342,6 +342,8 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         if "issue_count" in report and (type(report["issue_count"]) is not int or
                                         report["issue_count"] != len(report["issues"])):
             raise ValueError("validate report issue_count disagrees with issues")
+        if "problems" in report and report["problems"] != report["issues"]:
+            raise ValueError("validate report problems disagrees with issues")
         if "summary" in report:
             summary = report["summary"]
             if (not isinstance(summary, dict) or
@@ -367,8 +369,10 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
                        str(issue.get("frame_range", [])), str(issue.get("layer", "")),
                        str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")),
                        json.dumps({key: issue[key] for key in
-                                   ("expected_index", "expected", "scene_id", "path", "uncovered_ranges")
-                                   if key in issue}, sort_keys=True, ensure_ascii=False))
+                                   ("expected_index", "expected", "scene_id", "path", "uncovered_ranges",
+                                     "expected_text", "actual_texts", "suggested_fix", "message",
+                                     "project_duration")
+                                   if key in issue}, sort_keys=True, ensure_ascii=False, allow_nan=False))
                       for issue in report["issues"])
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
@@ -431,6 +435,22 @@ def combine_qa_reports(structural, checks, criteria):
         has_errors = any(i["severity"] == "error" for i in report["issues"])
         if report["passed"] == has_errors:
             raise ValueError(f"{source} passed status disagrees with its error issues")
+        if "valid" in report and report["valid"] is not report["passed"]:
+            raise ValueError(f"{source} valid status disagrees with passed")
+        if "issue_count" in report and (type(report["issue_count"]) is not int or
+                                        report["issue_count"] != len(report["issues"])):
+            raise ValueError(f"{source} issue_count disagrees with issues")
+        if "problems" in report and report["problems"] != report["issues"]:
+            raise ValueError(f"{source} problems disagrees with issues")
+        if "summary" in report:
+            summary = report["summary"]
+            error_count = sum(i["severity"] == "error" for i in report["issues"])
+            warning_count = len(report["issues"]) - error_count
+            if (not isinstance(summary, dict) or
+                    type(summary.get("errors")) is not int or
+                    type(summary.get("warnings")) is not int or
+                    summary["errors"] != error_count or summary["warnings"] != warning_count):
+                raise ValueError(f"{source} summary disagrees with issue severities")
     if set(checks) != set(criteria):
         raise ValueError("QA check sources must match their criteria entries")
     errors = sum(i["severity"] == "error" for i in problems)
