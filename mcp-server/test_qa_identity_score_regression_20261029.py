@@ -31,8 +31,8 @@ class StableTimelineIdentityTests(unittest.TestCase):
                          [[0, 1], [0, 2]])
 
     def test_invalid_supplied_ids_fail_closed(self):
-        for invalid in ("", "   ", "bad\\nname", "bad\\x00name",
-                        "bad\\x7fname", 12, False, [], {}):
+        for invalid in ("", "   ", "bad\nname", "bad\x00name",
+                        "bad\x7fname", 12, False, [], {}):
             with self.subTest(invalid=invalid):
                 report = editing.validate_timeline([item(invalid)])
                 self.assertFalse(report["passed"])
