@@ -60,7 +60,7 @@ class ReadbackIntegrityTests(unittest.TestCase):
             report, "r2", [{"at": 20, "value": 30}], 100.0))
 
     def test_untrustworthy_revision_is_rejected(self):
-        for revision in (" r2", "r2 ", "r2\\n", "r2\\x00", "x" * 257):
+        for revision in (" r2", "r2 ", "r2\n", "r2\x00", "x" * 257):
             with self.subTest(revision=revision):
                 self.assertFalse(ducking.verify_keyframes(
                     readback(revision=revision), revision,
@@ -79,8 +79,8 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
             args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
             if selection is not None:
                 args["voice_item_ids"] = selection
-            with self.subTest(selection=selection), \\
-                 patch.object(server, "ymm4_get", AsyncMock(return_value=items)) as get, \\
+            with self.subTest(selection=selection), \
+                 patch.object(server, "ymm4_get", AsyncMock(return_value=items)) as get, \
                  patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
                 result = await server.dispatch(args)
             self.assertEqual(result["error_code"], "VOICE_ITEM_AMBIGUOUS")
@@ -90,8 +90,8 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_animation_payload_fails_closed(self):
         for animations in (None, 7, {}, "Volume", [None] * 257):
             state = {"success": True, "revision": "r1", "animations": animations}
-            with self.subTest(animations_type=type(animations).__name__), \\
-                 patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, state])), \\
+            with self.subTest(animations_type=type(animations).__name__), \
+                 patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, state])), \
                  patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
                 result = await server.dispatch(
                     {"action": "duck_bgm", "bgm_item_id": "bgm:1"})
@@ -102,8 +102,8 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
         for frame in (False, 0.0, "0"):
             state = {"success": True, "revision": "r1", "animations": [
                 {"prop": "Volume", "keyframes": [{"at": frame, "value": 100.0}]}]}
-            with self.subTest(frame=frame), \\
-                 patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, state])), \\
+            with self.subTest(frame=frame), \
+                 patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, state])), \
                  patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
                 result = await server.dispatch(
                     {"action": "duck_bgm", "bgm_item_id": "bgm:1"})
@@ -112,7 +112,7 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unchanged_revision_after_set_is_unknown_outcome(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS])), \\
+                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                  {"success": True, "backup_path": "C:/backup/cp.ymmp"},
                  {"success": True, "revision": "r1"}])) as post:
