@@ -46,6 +46,28 @@ class QaEvidenceProgressTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "omitted_count"):
             editing.evaluate_qa_gate(report)
 
+    def test_external_forged_truncation_marker_rejected_during_composition(self):
+        for omitted in (None, 0, -3, True, "3"):
+            issue = {"code": "QA_ISSUES_TRUNCATED", "severity": "error",
+                     "omitted_count": omitted}
+            with self.subTest(omitted=repr(omitted)), self.assertRaisesRegex(
+                    ValueError, "truncation marker"):
+                editing.combine_qa_reports(editing.validate_timeline([]),
+                                           {"visual": {"success": True, "passed": False,
+                                                       "issues": [issue]}},
+                                           {"visual": {}})
+
+    def test_valid_external_truncation_marker_remains_supported(self):
+        issue = {"code": "QA_ISSUES_TRUNCATED", "severity": "error",
+                 "omitted_count": 8}
+        result = editing.combine_qa_reports(
+            editing.validate_timeline([]),
+            {"visual": {"success": True, "passed": False, "issues": [issue]}},
+            {"visual": {}})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["issues"][0]["omitted_count"], 8)
+        self.assertEqual(editing.evaluate_qa_gate(result)["decision"], "repair")
+
     def test_equal_truncation_evidence_stalls(self):
         before = overflowing_report(1100)
         after = overflowing_report(1100)
