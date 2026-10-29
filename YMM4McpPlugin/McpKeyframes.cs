@@ -152,14 +152,29 @@ namespace YMM4McpPlugin
                 var framesBefore = ReadFrameList(anim);
                 var valuesBefore = ReadValueList(anim);
                 bool changed;
-                if (action == "clear")
-                    changed = ClearKeyframes(anim);
-                else if (action == "remove")
-                    changed = RemoveKeyframe(anim, relativeFrame);
-                else
-                    changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
-                var framesAfter = ReadFrameList(anim);
-                var valuesAfter = ReadValueList(anim);
+                List<int> framesAfter;
+                List<double> valuesAfter;
+                try
+                {
+                    if (action == "clear")
+                        changed = ClearKeyframes(anim);
+                    else if (action == "remove")
+                        changed = RemoveKeyframe(anim, relativeFrame);
+                    else
+                        changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
+                    // Both readbacks must succeed before a native result is trusted.
+                    framesAfter = ReadFrameList(anim);
+                    valuesAfter = ReadValueList(anim);
+                }
+                catch (Exception)
+                {
+                    // A native call may have modified the animation before
+                    // throwing, or the host may refuse to expose its new state.
+                    // Fail closed and invalidate any optimistic revision.
+                    MarkItemChanged(item);
+                    return Failure("KEYFRAME_PARTIAL_MUTATION",
+                        "YMM4の操作または読戻しで例外が発生しました。部分変更の可能性があるため再試行前に状態を確認してください");
+                }
                 if (!changed)
                 {
                     if (KeyframeMutationVerification.HasObservableChange(
