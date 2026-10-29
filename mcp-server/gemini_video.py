@@ -551,6 +551,13 @@ def analyze_frames_dir(
                     or wav_bytes[8:12] != b"WAVE"):
                 return {"success": False, "error": "Requested audio is not a RIFF/WAVE file",
                         "source": "frames_dir"}
+            # A RIFF/WAVE signature alone is insufficient: a truncated WAV
+            # can still start with RIFF and WAVE. Do not certify an incomplete
+            # audio track or upload appended bytes outside the RIFF container.
+            riff_size = int.from_bytes(wav_bytes[4:8], "little")
+            if riff_size < 4 or riff_size != len(wav_bytes) - 8:
+                return {"success": False, "source": "frames_dir",
+                        "error": "Requested audio RIFF/WAVE size does not match file length"}
             total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
             contents.append(genai_types.Part.from_text(
