@@ -463,6 +463,11 @@ def combine_qa_reports(structural, checks, criteria):
                     ("item_ids" in issue and (not isinstance(issue["item_ids"], list) or
                      any(not _valid_item_id(identity) for identity in issue["item_ids"])))):
                 raise ValueError(f"{source} returned an invalid QA issue")
+            if issue["code"] == "QA_ISSUES_TRUNCATED" and (
+                    issue["severity"] != "error" or
+                    type(issue.get("omitted_count")) is not int or
+                    issue["omitted_count"] <= 0):
+                raise ValueError(f"{source} returned an invalid QA truncation marker")
             normalized = {**issue, "source": source}
             if source == "visual" and "start_frame" in issue and "end_frame" in issue:
                 normalized["frame_range"] = [issue["start_frame"], issue["end_frame"]]
