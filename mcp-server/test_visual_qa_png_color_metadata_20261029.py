@@ -79,8 +79,14 @@ class PNGColorMetadataTests(unittest.TestCase):
                 self.invalid(candidate)
 
     def test_valid_bounded_icc_profile(self):
+        # A minimally structured RGB ICC profile with an empty tag table.
+        profile = bytearray(132)
+        profile[:4] = len(profile).to_bytes(4, "big")
+        profile[16:20] = b"RGB "
+        profile[20:24] = b"XYZ "
+        profile[36:40] = b"acsp"
         self.valid(insert(png(), b"iCCP",
-                          b"Display profile\x00\x00" + zlib.compress(b"ICC" * 100)))
+                          b"Display profile\x00\x00" + zlib.compress(profile)))
 
     def test_reject_icc_missing_keyword_method_or_compression(self):
         for payload in (b"\x00\x00" + zlib.compress(b"ICC"),
