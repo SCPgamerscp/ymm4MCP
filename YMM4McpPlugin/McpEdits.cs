@@ -312,7 +312,16 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("reason must be at most 200 characters");
             bool backup = GetBool(body, "backup", false);
             string id = "cp_" + Guid.NewGuid().ToString("N");
-            var itemIds = SnapshotItemIds();
+            // Capture the timeline, project identity, and save state in one UI
+            // dispatch. Separate dispatches can observe different projects if
+            // the user switches documents while a checkpoint is being created.
+            var captured = Application.Current.Dispatcher.Invoke(() => new
+            {
+                ItemIds = SnapshotItemIds(),
+                ProjectPath = CurrentProjectPath(),
+                IsSaved = CurrentProjectSaveState()
+            });
+            var itemIds = captured.ItemIds;
             // An unavailable editor/timeline is not an empty timeline. Otherwise a
             // later rollback could delete every item under an empty checkpoint.
             if (itemIds == null)
@@ -322,15 +331,18 @@ namespace YMM4McpPlugin
             {
                 return Failure("ITEM_IDS_AMBIGUOUS", "タイムラインのアイテムIDが不正または重複しています");
             }
-            string? projectPath = CurrentProjectPath();
+            string? projectPath = captured.ProjectPath;
             string? backupPath = null;
             string? backupWarning = null;
             if (backup)
             {
                 if (string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath))
                     backupWarning = "NO_PROJECT_FILE";
-                else if (CurrentProjectSaveState() is not true)
-                    backupWarning = "PROJECT_UNSAVED_OR_UNKNOWN";
+                else if (!EditCheckpointSafety.IsStableSavedProject(
+                             projectPath, CurrentProjectPath(), captured.IsSaved) ||
+                         !EditCheckpointSafety.IsStableSavedProject(
+                             projectPath, CurrentProjectPath(), CurrentProjectSaveState()))
+                    backupWarning = "PROJECT_UNSAVED_OR_CHANGED";
                 else
                 {
                     try
@@ -338,6 +350,16 @@ namespace YMM4McpPlugin
                         Directory.CreateDirectory(CheckpointBackupDir);
                         backupPath = Path.Combine(CheckpointBackupDir, id + ".ymmp");
                         EditCheckpointSafety.CopyBackupAtomically(projectPath, backupPath);
+                        // Copying is not a UI operation: edits or a project switch
+                        // may occur while the source .ymmp is being read. Never
+                        // advertise that copy as a restorable checkpoint.
+                        if (!EditCheckpointSafety.IsStableSavedProject(
+                                projectPath, CurrentProjectPath(), CurrentProjectSaveState()))
+                        {
+                            TryDeleteBackup(backupPath);
+                            backupPath = null;
+                            backupWarning = "PROJECT_CHANGED_DURING_BACKUP";
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -451,6 +473,12 @@ namespace YMM4McpPlugin
             var kept = new HashSet<string>(record.ItemIds, StringComparer.Ordinal);
             return Application.Current.Dispatcher.Invoke(() =>
             {
+                // The initial HTTP-thread check is insufficient: a project may
+                // change while waiting for the UI dispatcher. Revalidate on the
+                // UI thread immediately before any destructive timeline edit.
+                if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
+                    return Failure("CHECKPOINT_PROJECT_MISMATCH",
+                        "チェックポイント作成時と現在のプロジェクトが異なります");
                 var vm = GetMainViewModel();
                 if (vm == null) return Failure("NO_MAIN_VIEW_MODEL", "VM失敗");
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
