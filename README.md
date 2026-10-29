@@ -124,7 +124,9 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `POST /api/edits/bindings` | apply後の plan_id と item_id の対応を保存 |
 | `POST /api/edits/checkpoint` | 現在の `item_id` スナップショット。`backup=true` なら保存済み `.ymmp` をコピー |
 | `GET  /api/edits/checkpoints` | チェックポイント一覧 |
-| `POST /api/edits/rollback` | スナップショット以降に追加されたアイテムを削除（削除済みの復元はしない） |
+| `POST /api/edits/rollback` | 既定はスナップショット以降に追加されたアイテムを削除。保存済みバックアップがあれば、明示的な `restore_backup` モードでコピーを別プロジェクトとして開くことも可能 |
+
+**チェックポイントのバックアップ復元（#30 / #61、実機検証待ち）:** `POST /api/edits/checkpoint` に `{"backup":true}` を渡すと、YMM4で現在のプロジェクトが保存済みと確認できた場合のみ、ディスク上の `.ymmp` をコピーします。未保存・保存状態不明なら `backup_path=null` と `backup_warning=PROJECT_UNSAVED_OR_UNKNOWN` を返し、古いディスク内容をチェックポイントとして誤認しません。バックアップが存在する場合、`POST /api/edits/rollback` に `{"checkpoint_id":"cp_...","restore_backup":true,"confirm_restore_backup":true}` を渡すと、同じ元プロジェクトが開かれ保存済みであること、バックアップが専用ディレクトリ内の当該IDに対応する非空ファイルであることを確認し、YMM4のパス指定オープンAPIでバックアップを開きます。**元のプロジェクトファイルは上書きしません。** 保存・再読込後のプロジェクト切替を確認できない場合は `RESTORE_OUTCOME_UNKNOWN` を返します。既定の削除ベースrollbackの挙動は変わりません。YMM4実機での復元・保存・再読込確認が完了するまで、完全Rollbackの受け入れ条件達成とは見なしません。
 | `POST /api/timeline/duration` | タイムライン長を設定 |
 
 ### セリフ・アイテム操作系
