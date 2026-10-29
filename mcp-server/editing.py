@@ -236,17 +236,6 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                         isinstance(items[s_index].get("text"), str) and
                         "".join(items[s_index]["text"].split()) == normalized]
             if matching:
-                # A correct subtitle must not mask a second, conflicting
-                # subtitle on another configured subtitle layer.
-                conflicting = [(s_index, text) for s_index, text in overlapping
-                               if not isinstance(text, str) or "".join(text.split()) != normalized]
-                if conflicting:
-                    affected = [index, *(s_index for s_index, _ in conflicting)]
-                    problems.append({"code": "SUBTITLE_TEXT_MISMATCH", "severity": "error",
-                                     "index": index, "indices": affected,
-                                     "item_ids": _item_ids(items, affected),
-                                     "frame_range": [frame, end], "expected_text": voice_text,
-                                     "actual_texts": [text for _, text in conflicting]})
                 cursor, gaps = frame, []
                 for left, right, _ in sorted(matching):
                     if left - cursor > tolerance:
@@ -261,6 +250,17 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                                      "item_ids": _item_ids(items, affected),
                                      "frame_range": [frame, end], "uncovered_ranges": gaps,
                                      "expected_text": voice_text})
+                # A correct subtitle must not mask a second, conflicting
+                # subtitle on another configured subtitle layer.
+                conflicting = [(s_index, text) for s_index, text in overlapping
+                               if not isinstance(text, str) or "".join(text.split()) != normalized]
+                if conflicting:
+                    affected = [index, *(s_index for s_index, _ in conflicting)]
+                    problems.append({"code": "SUBTITLE_TEXT_MISMATCH", "severity": "error",
+                                     "index": index, "indices": affected,
+                                     "item_ids": _item_ids(items, affected),
+                                     "frame_range": [frame, end], "expected_text": voice_text,
+                                     "actual_texts": [text for _, text in conflicting]})
                 continue
             matches = [s_index for s_index, _ in overlapping]
             problems.append({
