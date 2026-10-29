@@ -36,14 +36,14 @@ namespace YMM4McpPlugin
             if (action != "set" || !requested.HasValue ||
                 !double.IsFinite(requested.Value)) return false;
 
+            // Some host animations expose only a DefaultValue/Value property
+            // and no Values array. Frame zero is still verifiable there.
+            if (frames.Count == 0 && values.Count == 0)
+                return at == 0 && SameValue(defaultValue, requested.Value);
+
             bool implicitStart = values.Count == frames.Count + 1;
             if (values.Count != frames.Count && !implicitStart)
-            {
-                // The only layout without a Values array that can be
-                // verified is a default-only animation at frame zero.
-                return frames.Count == 0 && values.Count == 0 && at == 0
-                    && SameValue(defaultValue, requested.Value);
-            }
+                return false;
 
             int index = -1;
             if (at == 0 && implicitStart && !unique.Contains(0))
