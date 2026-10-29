@@ -419,10 +419,10 @@ def combine_qa_reports(structural, checks, criteria):
                 len(report["issues"]) > 1000:
             raise ValueError(f"{source} did not return a complete QA report")
         for issue in report["issues"]:
-            if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"] or \
-                    issue.get("severity") not in ("error", "warning") or
+            if (not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or
+                    not issue["code"] or issue.get("severity") not in ("error", "warning") or
                     ("item_ids" in issue and (not isinstance(issue["item_ids"], list) or
-                     any(not _valid_item_id(identity) for identity in issue["item_ids"]))):
+                     any(not _valid_item_id(identity) for identity in issue["item_ids"])))):
                 raise ValueError(f"{source} returned an invalid QA issue")
             normalized = {**issue, "source": source}
             if source == "visual" and "start_frame" in issue and "end_frame" in issue:
