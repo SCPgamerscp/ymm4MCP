@@ -69,13 +69,13 @@ class GateEvidenceIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "problems disagrees"):
             editing.evaluate_qa_gate({**report, "problems": []})
 
-    def test_different_expected_text_does_not_look_stalled(self):
+    def test_different_expected_text_is_a_new_error(self):
         before = structural_failure()
         after = copy.deepcopy(before)
         before["issues"][0]["expected_text"] = "A"
         after["issues"][0]["expected_text"] = "B"
         self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
-                         "QA_ISSUES_REMAIN")
+                         "QA_REGRESSED")
 
     def test_different_actual_text_does_not_look_stalled(self):
         before = structural_failure()
