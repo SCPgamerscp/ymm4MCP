@@ -5,6 +5,14 @@ import math
 from editing import finite_number, integer
 
 
+def valid_identifier(value, *, max_length=1024):
+    """Reject ambiguous, unbounded, or unsafe host item IDs/revisions."""
+    return (isinstance(value, str) and 1 <= len(value) <= max_length and
+            value == value.strip() and
+            not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or
+                    0xD800 <= ord(ch) <= 0xDFFF for ch in value))
+
+
 def _finite_input(value, name):
     """Normalize very large Python integers to the same input error as NaN/inf."""
     try:
@@ -67,8 +75,7 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
 
 def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float) -> bool:
     """Verify the complete curve, including the unchanged original start key."""
-    if (not isinstance(revision, str) or not 1 <= len(revision) <= 256 or
-            revision != revision.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in revision) or
+    if (not valid_identifier(revision, max_length=256) or
             not isinstance(report, dict) or report.get("success") is not True or
             "error" in report or "error_code" in report or
             report.get("revision") != revision or not isinstance(report.get("animations"), list) or
