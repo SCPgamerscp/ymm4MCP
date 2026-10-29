@@ -88,6 +88,50 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
                 result = with_coverage({"scenes": [scene([video(kind)])]})
                 self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
 
+    def test_source_item_range_must_match_visible_evidence(self):
+        good = {"item_id": "v", "type": "VideoItem", "frame": 0,
+                "end_frame": 20, "visible_start_frame": 0,
+                "visible_end_frame": 20}
+        result = with_coverage({"scenes": [scene([good])]})
+        self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
+        for changed in ({"visible_end_frame": 19}, {"visible_start_frame": 1},
+                        {"end_frame": 19}, {"frame": 1},
+                        {"end_frame": 21}):
+            # A source extending beyond the scene is valid only when the
+            # visible range equals its clipped intersection.
+            item = {**good, **changed}
+            if changed == {"end_frame": 21}:
+                continue
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                    ValueError, "contradicts source"):
+                with_coverage({"scenes": [scene([item])]})
+
+    def test_source_range_requires_complete_valid_integer_fields(self):
+        good = {"item_id": "v", "type": "VideoItem", "frame": 0,
+                "end_frame": 20, "visible_start_frame": 0,
+                "visible_end_frame": 20}
+        for changed in ({"frame": True}, {"end_frame": 20.0},
+                        {"frame": -1}, {"end_frame": 0},
+                        {"end_frame": MAX_FRAME + 1}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                    ValueError, "source item range"):
+                with_coverage({"scenes": [scene([{**good, **changed}])]})
+        missing = dict(good)
+        del missing["end_frame"]
+        with self.assertRaisesRegex(ValueError, "source item range"):
+            with_coverage({"scenes": [scene([missing])]})
+
+    def test_rejects_duplicate_item_identity_within_scene(self):
+        one = {**video(), "item_id": "same"}
+        with self.assertRaisesRegex(ValueError, "scene item IDs"):
+            with_coverage({"scenes": [scene([one, dict(one)])]})
+
+    def test_rejects_invalid_item_identity_when_supplied(self):
+        for invalid in ("", " ", "x" * 257, None, True):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "scene item IDs"):
+                with_coverage({"scenes": [scene([{**video(), "item_id": invalid}])]})
+
     def test_later_invalid_scene_does_not_mutate_earlier_scene(self):
         index = {"scenes": [scene([video()], id="first"),
                             scene([video()], id="first")]}
