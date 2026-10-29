@@ -223,6 +223,24 @@ def analyze_video_file(
                 pass
 
 
+def _valid_capture_png_name(name: Any) -> bool:
+    """Accept only unambiguous Windows-exportable PNG basenames.
+
+    YMM4 exports on Windows. Reserved DOS device names and alternate data
+    stream separators are unsafe even if a POSIX test host can create them.
+    """
+    if (not isinstance(name, str) or not name or len(name) > 255
+            or name.strip() != name or not name.lower().endswith(".png")
+            or any(ord(ch) < 32 or ord(ch) == 127
+                   or ch in '<>:"/\\|?*' for ch in name)):
+        return False
+    stem = name.split(".", 1)[0].upper()
+    return stem not in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} and not (
+        len(stem) == 4 and stem[:3] in ("COM", "LPT")
+        and stem[3] in "123456789¹²³"
+    )
+
+
 def _safe_frame_path(frames_dir: str, filename: Any) -> Optional[str]:
     """Allow only existing PNG frames contained in the export directory.
 
@@ -318,12 +336,7 @@ def analyze_frames_dir(
         # A partial selection must never be reported as a complete QA pass.
         # The YMM4 export API emits plain basenames. Reject path aliases,
         # traversal, control characters and padded names before any disk I/O.
-        if any(not isinstance(m.get("file"), str) or not m["file"]
-               or len(m["file"]) > 255
-               or m["file"].strip() != m["file"]
-               or any(ord(c) < 32 or ord(c) == 127 for c in m["file"])
-               or "/" in m["file"] or "\\" in m["file"]
-               or not m["file"].lower().endswith(".png") for m in frames_meta):
+        if any(not _valid_capture_png_name(m.get("file")) for m in frames_meta):
             return {"success": False, "source": "frames_dir",
                     "error": "frames_meta contains an invalid PNG filename"}
         entries = list(frames_meta)
@@ -402,7 +415,15 @@ def analyze_frames_dir(
                         return {"success": False, "source": "frames_dir",
                                 "error": "PNG directory exceeds the 100000 entry scan limit"}
                     if item.name.lower().endswith(".png"):
+                        if not _valid_capture_png_name(item.name):
+                            return {"success": False, "source": "frames_dir",
+                                    "error": "PNG directory contains an invalid filename"}
                         files.append(item.name)
+            # Case-only aliases can be distinct on a POSIX test host but
+            # collide when YMM4's Windows export is opened again.
+            if len({name.casefold() for name in files}) != len(files):
+                return {"success": False, "source": "frames_dir",
+                        "error": "PNG directory contains case-insensitive duplicate filenames"}
             files.sort(key=_frame_filename_key)
         except OSError as exc:
             return {"success": False, "source": "frames_dir",
@@ -423,12 +444,11 @@ def analyze_frames_dir(
                     "error": "PNG frame is missing or outside export directory"}
         # Distinct names (including symlink aliases) may refer to the same
         # underlying frame. Treat such metadata as an incomplete capture.
-        if frames_meta is not None:
-            canonical = os.path.normcase(path)
-            if canonical in seen_capture_paths:
-                return {"success": False, "source": "frames_dir",
-                        "error": "frames_meta contains duplicate resolved PNG frames"}
-            seen_capture_paths.add(canonical)
+        canonical = os.path.normcase(path)
+        if canonical in seen_capture_paths:
+            return {"success": False, "source": "frames_dir",
+                    "error": "capture contains duplicate resolved PNG frames"}
+        seen_capture_paths.add(canonical)
         try:
             info = os.stat(path)
         except OSError as exc:
@@ -436,11 +456,11 @@ def analyze_frames_dir(
                     "error": f"Cannot inspect PNG frame: {exc}"}
         # Different hardlink names have different resolved paths but the
         # same file identity. They must not count as independent captures.
-        if frames_meta is not None and info.st_ino:
+        if info.st_ino:
             file_id = (info.st_dev, info.st_ino)
             if file_id in seen_capture_file_ids:
                 return {"success": False, "source": "frames_dir",
-                        "error": "frames_meta contains duplicate physical PNG frames"}
+                        "error": "capture contains duplicate physical PNG frames"}
             seen_capture_file_ids.add(file_id)
         # Keep the existing size-check seam used by preflight regression tests.
         try:
