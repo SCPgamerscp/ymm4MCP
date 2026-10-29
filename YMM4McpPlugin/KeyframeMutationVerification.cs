@@ -7,6 +7,45 @@ namespace YMM4McpPlugin
     // paths and collection fallbacks share the same readback contract.
     internal static class KeyframeMutationVerification
     {
+        // Do not silently omit malformed host entries during keyframe readback.
+        // Dropping one Frame or Value can turn a partial native mutation into a
+        // seemingly valid collection and cause the API to report false success.
+        internal static List<int> ParseObservedFrames(System.Collections.IEnumerable source)
+        {
+            var frames = new List<int>();
+            foreach (object? entry in source)
+            {
+                if (entry == null ||
+                    !int.TryParse(Convert.ToString(entry, System.Globalization.CultureInfo.InvariantCulture),
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out int frame) ||
+                    frame < 0)
+                    throw new InvalidOperationException("Animation contains an unreadable frame");
+                frames.Add(frame);
+            }
+            return frames;
+        }
+
+        internal static List<double> ParseObservedValues(
+            System.Collections.IEnumerable source, Func<object, object?> unwrap)
+        {
+            var values = new List<double>();
+            foreach (object? entry in source)
+            {
+                if (entry == null)
+                    throw new InvalidOperationException("Animation contains a null value");
+                object? raw = unwrap(entry);
+                if (raw == null ||
+                    !double.TryParse(Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture),
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out double value) ||
+                    !double.IsFinite(value))
+                    throw new InvalidOperationException("Animation contains an unreadable value");
+                values.Add(value);
+            }
+            return values;
+        }
+
         internal static bool IsInItemRange(int relativeFrame, int length)
             => length > 0 && relativeFrame >= 0 && relativeFrame < length;
 
