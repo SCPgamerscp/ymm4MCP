@@ -147,6 +147,10 @@ namespace YMM4McpPlugin
                 if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
                     return Failure("KEYFRAME_BINDING_UNAVAILABLE",
                         "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
+                // Capture observable state before invoking reflection-based
+                // native methods. They can partially mutate then return false.
+                var framesBefore = ReadFrameList(anim);
+                var valuesBefore = ReadValueList(anim);
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
@@ -154,16 +158,33 @@ namespace YMM4McpPlugin
                     changed = RemoveKeyframe(anim, relativeFrame);
                 else
                     changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
+                var framesAfter = ReadFrameList(anim);
+                var valuesAfter = ReadValueList(anim);
                 if (!changed)
+                {
+                    if (KeyframeMutationVerification.HasObservableChange(
+                            framesBefore, valuesBefore, framesAfter, valuesAfter))
+                    {
+                        // Even a failed call can have changed the host model.
+                        // Invalidate optimistic revisions and require inspection.
+                        MarkItemChanged(item);
+                        return Failure("KEYFRAME_PARTIAL_MUTATION",
+                            "YMM4の操作が失敗しましたが、Animationが部分変更されています。再試行前に状態を確認してください");
+                    }
                     return Failure("KEYFRAME_METHOD_UNAVAILABLE", "YMM4のAnimation/KeyFrames APIを呼べませんでした。inspectで署名を確認してください");
+                }
                 // A reflected native method can return successfully without
-                // changing the requested frame/value. Never acknowledge that
-                // as a successful edit or advance the item's revision.
+                // changing the requested frame/value. Do not acknowledge that
+                // as a successful edit. Invalidate stale revisions because the
+                // host may have been partially mutated despite the mismatch.
                 if (!KeyframeMutationVerification.Confirm(
-                        action, relativeFrame, value, ReadFrameList(anim),
-                        ReadValueList(anim), TryGetDefaultValue(anim)))
+                        action, relativeFrame, value, framesAfter,
+                        valuesAfter, TryGetDefaultValue(anim)))
+                {
+                    MarkItemChanged(item);
                     return Failure("KEYFRAME_READBACK_MISMATCH",
                         "YMM4が操作成功を返しましたが、キーフレームの読戻しが一致しません。再試行前にinspectで状態を確認してください");
+                }
                 MarkItemChanged(item);
                 var vm = GetMainViewModel();
                 if (vm != null)

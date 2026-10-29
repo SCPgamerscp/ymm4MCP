@@ -10,6 +10,19 @@ namespace YMM4McpPlugin
         internal static bool IsInItemRange(int relativeFrame, int length)
             => length > 0 && relativeFrame >= 0 && relativeFrame < length;
 
+        internal static bool HasObservableChange(
+            IReadOnlyList<int> beforeFrames, IReadOnlyList<double> beforeValues,
+            IReadOnlyList<int> afterFrames, IReadOnlyList<double> afterValues)
+        {
+            if (beforeFrames.Count != afterFrames.Count ||
+                beforeValues.Count != afterValues.Count) return true;
+            for (int i = 0; i < beforeFrames.Count; i++)
+                if (beforeFrames[i] != afterFrames[i]) return true;
+            for (int i = 0; i < beforeValues.Count; i++)
+                if (!beforeValues[i].Equals(afterValues[i])) return true;
+            return false;
+        }
+
         internal static bool Confirm(string action, int at, double? requested,
             IReadOnlyList<int> frames, IReadOnlyList<double> values, double? defaultValue)
         {

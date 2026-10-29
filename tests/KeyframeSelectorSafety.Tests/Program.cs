@@ -117,6 +117,15 @@ Check(Verified("set", 10, 1.25, new[] { 10 }, new[] { 1.0, (double)(float)1.25 }
     "float-backed animation values must be accepted");
 Check(!Verified("set", 10, double.NaN, new[] { 10 }, new[] { 1.0, 1.25 }),
     "non-finite requested value must fail");
+Check(KeyframeMutationVerification.HasObservableChange(
+        new[] { 0 }, new[] { 1.0 }, new[] { 0, 10 }, new[] { 1.0 }),
+    "partial frame-only insertion must invalidate optimistic revisions");
+Check(KeyframeMutationVerification.HasObservableChange(
+        new[] { 0 }, new[] { 1.0 }, new[] { 0 }, new[] { 2.0 }),
+    "failed native setter changing a value must invalidate revisions");
+Check(!KeyframeMutationVerification.HasObservableChange(
+        new[] { 0 }, new[] { 1.0 }, new[] { 0 }, new[] { 1.0 }),
+    "unchanged native failures must not spuriously advance revisions");
 Check(Verified("remove", 10, null, new[] { 0 }, new[] { 1.0 }),
     "native removal must confirm frame absence");
 Check(!Verified("remove", 10, null, new[] { 0, 10 }, new[] { 1.0, 2.5 }),
