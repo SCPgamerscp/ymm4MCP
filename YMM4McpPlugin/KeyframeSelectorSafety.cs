@@ -39,6 +39,26 @@ namespace YMM4McpPlugin
         internal static bool IsAmbiguousMatch(object? selected, object? candidate)
             => selected != null && candidate != null && !ReferenceEquals(selected, candidate);
 
+        // Scan the entire timeline before allowing a coordinate-only edit.
+        // Returning on the first match would silently edit the wrong item when
+        // multiple items share the same starting frame and layer.
+        internal static (object? item, bool ambiguous) FindUniqueCoordinateItem(
+            System.Collections.IEnumerable items, int frame, int layer,
+            Func<object, (object? item, int frame, int layer)> read)
+        {
+            object? selected = null;
+            foreach (object entry in items)
+            {
+                var info = read(entry);
+                if (info.item == null || info.frame != frame || info.layer != layer)
+                    continue;
+                if (IsAmbiguousMatch(selected, info.item))
+                    return (null, true);
+                selected = info.item;
+            }
+            return (selected, false);
+        }
+
         internal static long AbsoluteFrame(int itemStartFrame, int relativeFrame)
             => (long)itemStartFrame + relativeFrame;
     }
