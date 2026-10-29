@@ -145,6 +145,14 @@ namespace YMM4McpPlugin
             }
         }
 
+        // Do not prune the file currently opened by the editor. If the active
+        // project cannot be identified, preserve the backup rather than risk
+        // deleting a live project document.
+        internal static bool CanPruneBackup(string? path, string backupDirectory, string? currentProject) =>
+            !string.IsNullOrWhiteSpace(currentProject) &&
+            IsOwnedBackupPath(path, backupDirectory) &&
+            !SameProject(path, currentProject);
+
         // Bind a restorable backup to the bytes that were actually copied. An
         // external edit (even with preserved size and timestamps) invalidates it.
         internal static string ComputeBackupSha256(string path)
