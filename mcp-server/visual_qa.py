@@ -24,6 +24,8 @@ def _validate_png_container(raw: bytes) -> None:
     seen_plte = False
     color_type = bit_depth = None
     idat_payload_bytes = 0
+    palette_entries = 0
+    seen_trns = seen_bkgd = seen_sbit = seen_hist = False
     while offset < len(raw):
         chunk_count += 1
         if chunk_count > 4096 or len(raw) - offset < 12:
@@ -64,13 +66,54 @@ def _validate_png_container(raw: bytes) -> None:
         if (kind[0] & 0x20) == 0 and kind not in (b"IHDR", b"PLTE", b"IDAT", b"IEND"):
             raise ValueError("unknown critical PNG chunk")
         if kind == b"PLTE":
-            if seen_plte or seen_idat:
-                raise ValueError("PNG PLTE must be unique and precede IDAT")
+            if seen_plte or seen_idat or seen_trns or seen_bkgd or seen_hist:
+                raise ValueError("PNG PLTE must precede transparency and background metadata")
             if (color_type in (0, 4) or length == 0 or length > 768 or
                     length % 3 or
                     (color_type == 3 and length // 3 > 1 << bit_depth)):
                 raise ValueError("invalid PNG palette")
             seen_plte = True
+            palette_entries = length // 3
+        if kind == b"sBIT":
+            # Significant-bit metadata must precede the palette and image data.
+            expected_channels = {0: 1, 2: 3, 3: 3, 4: 2, 6: 4}[color_type]
+            maximum = 8 if color_type == 3 else bit_depth
+            if (seen_sbit or seen_plte or seen_idat or
+                    length != expected_channels or
+                    any(value < 1 or value > maximum for value in payload)):
+                raise ValueError("invalid PNG significant-bit metadata")
+            seen_sbit = True
+        if kind == b"tRNS":
+            if seen_trns or seen_idat or color_type in (4, 6):
+                raise ValueError("invalid PNG transparency metadata")
+            if color_type == 3:
+                if not seen_plte or not 1 <= length <= palette_entries:
+                    raise ValueError("invalid indexed PNG transparency table")
+            else:
+                expected = 2 if color_type == 0 else 6
+                if (length != expected or
+                        any(int.from_bytes(payload[i:i + 2], "big") >= (1 << bit_depth)
+                            for i in range(0, length, 2))):
+                    raise ValueError("invalid PNG transparent color")
+            seen_trns = True
+        if kind == b"bKGD":
+            if seen_bkgd or seen_idat:
+                raise ValueError("invalid PNG background metadata")
+            if color_type == 3:
+                if not seen_plte or length != 1 or payload[0] >= palette_entries:
+                    raise ValueError("invalid indexed PNG background")
+            else:
+                expected = 2 if color_type in (0, 4) else 6
+                if (length != expected or
+                        any(int.from_bytes(payload[i:i + 2], "big") >= (1 << bit_depth)
+                            for i in range(0, length, 2))):
+                    raise ValueError("invalid PNG background color")
+            seen_bkgd = True
+        if kind == b"hIST":
+            if (seen_hist or seen_idat or color_type != 3 or
+                    not seen_plte or length != 2 * palette_entries):
+                raise ValueError("invalid PNG palette histogram")
+            seen_hist = True
         if kind == b"IDAT":
             if idat_finished:
                 raise ValueError("nonconsecutive PNG IDAT chunks")
