@@ -1,9 +1,20 @@
 """Estimate independent visual and audio coverage from a read-only scene index."""
 
+import re
+
+from editing import MAX_FRAME
+
+MAX_SCENE_ITEMS = 50_000
+MAX_SCENES = 200
+
 
 def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
     """Match the exact CLR type name, optionally with namespace/nesting qualifiers."""
-    if not isinstance(value, str):
+    # An empty or malformed namespace component must not spoof a known
+    # rendering type (for example, "Other..VideoItem").
+    if (not isinstance(value, str) or len(value) > 128 or
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:[.+][A-Za-z_][A-Za-z0-9_]*)*",
+                         value) is None):
         return False
     leaf = value.rsplit(".", 1)[-1].rsplit("+", 1)[-1]
     return leaf.lower() in names
@@ -11,14 +22,17 @@ def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
 
 def _scene_range(scene: dict) -> tuple[int, int]:
     start, end = scene["start_frame"], scene["end_frame"]
-    if type(start) is not int or type(end) is not int or end <= start:
-        raise ValueError("scene range must have integer frames and positive duration")
+    if (type(start) is not int or type(end) is not int or
+            start < 0 or end > MAX_FRAME or end <= start):
+        raise ValueError("scene range must have bounded integer frames and positive duration")
     return start, end
 
 
 def _spans(scene: dict, names: tuple[str, ...], start: int, end: int) -> list[tuple[int, int]]:
     spans = []
     for item in scene["items"]:
+        if not isinstance(item, dict):
+            raise ValueError("scene item must be an object")
         if not is_known_item_type(item.get("type"), names):
             continue
         left, right = item["visible_start_frame"], item["visible_end_frame"]
@@ -32,6 +46,26 @@ def _spans(scene: dict, names: tuple[str, ...], start: int, end: int) -> list[tu
 
 
 def with_coverage(index: dict) -> dict:
+    """Add coverage only after validating the complete scene evidence."""
+    if (not isinstance(index, dict) or not isinstance(index.get("scenes"), list)
+            or not 1 <= len(index["scenes"]) <= MAX_SCENES):
+        raise ValueError("scene index requires 1..200 scenes")
+    seen_ids = set()
+    for scene in index["scenes"]:
+        if not isinstance(scene, dict):
+            raise ValueError("scene must be an object")
+        items = scene.get("items")
+        if not isinstance(items, list) or len(items) > MAX_SCENE_ITEMS:
+            raise ValueError("scene items must be a bounded array")
+        if "item_count" in scene and (type(scene["item_count"]) is not int or
+                                       scene["item_count"] != len(items)):
+            raise ValueError("scene item_count does not match item evidence")
+        if "id" in scene:
+            identifier = scene["id"]
+            if (not isinstance(identifier, str) or not identifier.strip() or
+                    len(identifier) > 64 or identifier in seen_ids):
+                raise ValueError("scene IDs must be distinct nonempty strings")
+            seen_ids.add(identifier)
     # Unknown host item types are excluded rather than assumed to provide a picture.
     categories = {"visual": ("videoitem", "imageitem", "textitem", "tachieitem",
                              "tachiefaceitem", "faceitem"),
