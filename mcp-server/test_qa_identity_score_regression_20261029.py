@@ -46,6 +46,30 @@ class StableTimelineIdentityTests(unittest.TestCase):
         self.assertEqual(report["issues"][1]["item_ids"], ["valid"])
         self.assertEqual(editing.evaluate_qa_gate(report)["decision"], "repair")
 
+    def test_invalid_timing_does_not_hide_duplicate_identity(self):
+        # A corrupt host item can still reuse an ID belonging to a valid item.
+        # The collision must be diagnosed regardless of which appears first.
+        good = item("native:shared", layer=1)
+        broken = {**item("native:shared", layer=2), "frame": "invalid"}
+        for items in ([good, broken], [broken, good]):
+            with self.subTest(first_is_valid=items[0] is good):
+                report = editing.validate_timeline(items)
+                self.assertFalse(report["passed"])
+                self.assertEqual(
+                    sorted(issue["code"] for issue in report["issues"]),
+                    ["DUPLICATE_ITEM_ID", "INVALID_ITEM"])
+                collision = next(issue for issue in report["issues"]
+                                 if issue["code"] == "DUPLICATE_ITEM_ID")
+                self.assertEqual(collision["indices"], [0, 1])
+                self.assertEqual(collision["item_ids"], ["native:shared"])
+
+    def test_malformed_timing_and_id_are_both_reported(self):
+        report = editing.validate_timeline([
+            {**item("bad\\nidentifier"), "length": 0}])
+        self.assertEqual(
+            sorted(issue["code"] for issue in report["issues"]),
+            ["INVALID_ITEM", "INVALID_ITEM_ID"])
+
     def test_missing_and_null_ids_are_supported_for_legacy_snapshots(self):
         anonymous = {"frame": 0, "length": 10, "layer": 1}
         null_id = {"item_id": None, "frame": 0, "length": 10, "layer": 2}
@@ -135,6 +159,22 @@ class SaturatedQaRegressionTests(unittest.TestCase):
         self.assertEqual(after["issues"][0]["matches"], [1, 2])
         self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
                          "QA_STALLED")
+
+    def test_unrelated_item_count_change_does_not_reset_stall(self):
+        # Repair loops must not evade QA_STALLED by adding/removing unrelated
+        # timeline items while leaving the actual overlap untouched.
+        broken = [item("left", frame=0), item("right", frame=5)]
+        unrelated = item("other", frame=50, layer=8)
+        before = editing.validate_timeline(broken, include_gaps=False)
+        after = editing.validate_timeline([*broken, unrelated], include_gaps=False)
+        self.assertEqual(before["item_count"], 2)
+        self.assertEqual(after["item_count"], 3)
+        self.assertEqual(before["issues"], after["issues"])
+        self.assertEqual(
+            editing.evaluate_qa_gate(after, [before])["reason_code"],
+            "QA_STALLED")
+        reverse = editing.evaluate_qa_gate(before, [after])
+        self.assertEqual(reverse["reason_code"], "QA_STALLED")
 
     def test_unchanged_zero_score_is_stalled_not_regressed(self):
         expected = missing_expected()
