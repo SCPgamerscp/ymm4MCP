@@ -36,12 +36,12 @@ class CaptureRaceAndWavTests(unittest.TestCase):
             from_text=lambda **kwargs: kwargs["text"])
 
     def analyze(self, **kwargs):
-        with patch.object(gemini_video, "_client", return_value=self.client), \\
+        with patch.object(gemini_video, "_client", return_value=self.client), \
              patch.object(gemini_video, "genai_types",
                           SimpleNamespace(Part=self.part)):
             return gemini_video.analyze_frames_dir(str(self.root), **kwargs)
 
-    def wav_bytes(self, samples=b"\\x00\\x00"):
+    def wav_bytes(self, samples=b"\x00\x00"):
         out = io.BytesIO()
         with wave.open(out, "wb") as wav:
             wav.setnchannels(1)
@@ -67,7 +67,7 @@ class CaptureRaceAndWavTests(unittest.TestCase):
             os.utime(self.png, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
             return self.client
 
-        with patch.object(gemini_video, "_client", side_effect=replace), \\
+        with patch.object(gemini_video, "_client", side_effect=replace), \
              patch.object(gemini_video, "genai_types",
                           SimpleNamespace(Part=self.part)):
             result = gemini_video.analyze_frames_dir(str(self.root))
@@ -111,7 +111,7 @@ class CaptureRaceAndWavTests(unittest.TestCase):
     def test_duplicate_data_chunks_are_rejected(self):
         audio = self.root / "audio.wav"
         payload = self.wav_bytes()
-        duplicate = b"data" + (2).to_bytes(4, "little") + b"\\x00\\x00"
+        duplicate = b"data" + (2).to_bytes(4, "little") + b"\x00\x00"
         changed = bytearray(payload + duplicate)
         changed[4:8] = (len(changed) - 8).to_bytes(4, "little")
         audio.write_bytes(changed)
@@ -134,7 +134,7 @@ class CaptureRaceAndWavTests(unittest.TestCase):
 
         def change_before_open(path, mode="r", *args, **kwargs):
             if str(path) == str(audio) and mode == "rb":
-                audio.write_bytes(self.wav_bytes(b"\\x01\\x02"))
+                audio.write_bytes(self.wav_bytes(b"\x01\x02"))
                 st = audio.stat()
                 os.utime(audio, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
             return real_open(path, mode, *args, **kwargs)
