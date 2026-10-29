@@ -103,7 +103,8 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
                  {"success": True, "revision": "r2"},
                  {"success": False, "error_code": "KEYFRAME_METHOD_UNAVAILABLE"}])):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
-        self.assertEqual(result["error_code"], "BGM_DUCKING_PARTIAL")
+        self.assertEqual(result["error_code"], "BGM_DUCKING_OUTCOME_UNKNOWN")
+        self.assertTrue(result["outcome_unknown"])
         self.assertEqual(len(result["applied"]), 1)
         self.assertEqual(result["backup_path"], "C:/backup/cp.ymmp")
 
