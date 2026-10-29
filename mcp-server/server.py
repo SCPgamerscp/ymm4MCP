@@ -695,7 +695,9 @@ async def run_bgm_ducking(args: dict) -> dict:
             state.get("revision") != revision):
         return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
     # A keyframe response for another item must never authorize a mutation.
-    if "item_id" in state and state["item_id"] != item_id:
+    if ("item_id" in state and state["item_id"] != item_id) or any(
+            field in state and field in bgm and state[field] != bgm[field]
+            for field in ("frame", "layer")):
         return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
     if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
         return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
@@ -781,6 +783,11 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
+        if ("keyframes" in changed and
+                not ducking.verify_mutation_point(changed["keyframes"], point)):
+            return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
+                    "applied": applied, "details": changed, "backup_path": backup,
+                    "outcome_unknown": True}
         if changed["revision"] in seen_revisions:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
@@ -795,7 +802,8 @@ async def run_bgm_ducking(args: dict) -> dict:
                 "error": str(exc), "applied": applied, "backup_path": backup,
                 "outcome_unknown": True}
     if not ducking.verify_keyframes(checked, revision, points, baseline,
-                                    expected_item_id=item_id):
+                                    expected_item_id=item_id,
+                                    expected_start_frame=bgm.get("frame")):
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_FAILED",
                 "applied": applied, "backup_path": backup, "details": checked}
     return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
