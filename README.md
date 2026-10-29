@@ -13,18 +13,20 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
 1. [Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) から最新版の `YMM4McpPlugin-*.ymme` をダウンロードします。YMM4を閉じて `.ymme` をダブルクリックし、YMM4の案内に従ってインストールします。利用者は `YMM4_PATH` や .NET SDK を設定する必要はありません。
 2. YMM4を起動します。新規インストールではプラグインのHTTPサーバーが自動起動します。「ツール」→「MCP連携サーバー」で状態を確認できます。既に自動起動を無効にしている場合は、この画面の「▶ 起動」を押します。
-3. 同じ Release の `YMM4McpServer-*.zip` を**すべて展開**し、`mcp-server/install.cmd` をダブルクリックします（Python 3 が必要です）。MCPサーバーは `%LOCALAPPDATA%\YMM4MCP\mcp-server` に永続インストールされ、展開したZIPのフォルダーを削除してもClaude Desktopから起動できます。管理者権限は不要です。専用の仮想環境を作成し、依存関係をインストールして、Claude Desktop の `mcpServers.ymm4` 設定を自動追加します。既存の他の設定は保持し、変更時にはバックアップを作ります。通常版の設定に加え、Microsoft Store版のClaude Desktopが初期化済みの場合は `%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json` も自動設定します。完了後にClaude Desktopを再起動してください。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
+3. 同じ Release の `YMM4McpServer-*.zip` を**すべて展開**し、`mcp-server/install.cmd` をダブルクリックします（**Python 3.10 以上**が必要です。`py -3` が古いPythonを指す場合は利用可能な `python.exe` も確認します）。MCPサーバーは `%LOCALAPPDATA%\YMM4MCP\mcp-server` に永続インストールされ、展開したZIPのフォルダーを削除してもClaude Desktopから起動できます。管理者権限は不要です。専用の仮想環境を作成し、依存関係をインストールして、Claude Desktop の `mcpServers.ymm4` 設定を自動追加します。既存の他の設定は保持し、変更時にはバックアップを作ります。通常版の設定に加え、Microsoft Store版のClaude Desktopが初期化済みの場合は `%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json` も自動設定します。完了後にClaude Desktopを再起動してください。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
 
    ```powershell
    cd C:\path\to\ymm4MCP\mcp-server
    .\setup.ps1 -ConfigureClaudeDesktop
    ```
 
-   PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同じ設定処理を実行します。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。
-   YMM4を起動した状態で `check_connection.cmd` をダブルクリックすると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。PowerShellからは `./setup.ps1 -CheckConnection` も利用できます（こちらは仮想環境の依存関係も再確認します）。
+   PowerShellでの手動セットアップも可能です。`./setup.ps1 -ConfigureClaudeDesktop` は `install.cmd` と同様に `%LOCALAPPDATA%\YMM4MCP\mcp-server` に**永続インストール**してからClaude Desktopを設定します。ダウンロードしたZIPの展開フォルダーを削除しても設定が壊れません。既存の `mcpServers` と他の設定を保持し、変更時には `.bak.*` を作成します。 `mcpServers.ymm4` に既に設定したAPIキー等の `env`、`timeout`、`disabled` も保持します。`-Port` を明示した場合のみ `YMM4_API_BASE` を指定ポートに更新します。
+   **再インストール時の設定保護:** 永続インストール先に既に存在する `config.json`（Geminiモデルなど）、`settings.local.json`、`.env` は、ZIP側のファイルで上書きしません。初回インストールでは同梱の `config.json` を配置します。既存のモデル選択を自動変更しないため、新しい既定モデルを利用したい場合は保存済みの `config.json` を確認・更新してください。ZIP展開フォルダー内の `connection.json` はインストール先へコピーしません。
+
+   YMM4を起動した状態で `check_connection.cmd` をダブルクリックすると、接続ファイルのトークンと設定ポートを使って認証付きの `/api/status` を検査できます。**正しいトークンで成功するだけでなく、同じ長さの誤ったトークンが HTTP 401 で拒否されることも確認します。** 認証が無効な応答なら導入成功と判定しません。PowerShellからは `./setup.ps1 -CheckConnection` も利用できます（こちらは仮想環境の依存関係も再確認します）。
    プラグインのポートを変更した場合は `./setup.ps1 -ConfigureClaudeDesktop -CheckConnection -Port 9000` のように同じポートを指定すると、Claude Desktop の `YMM4_API_BASE` と接続確認に反映します。省略時は接続ファイルの設定を使います。
 
-4. `install.cmd` を使った場合はClaude Desktopの設定は自動更新されるため、この手順は不要です。手動で設定する場合のみ、`%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示したJSONを設定します。展開したフォルダ内の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定してください。
+4. `install.cmd` または `setup.ps1 -ConfigureClaudeDesktop` を使った場合はClaude Desktopの設定は自動更新されるため、この手順は不要です。手動で設定する場合のみ、`%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers.ymm4` に、`setup.ps1` が表示したJSONを設定します。手動設定時は利用するインストール先（通常 `%LOCALAPPDATA%\YMM4MCP\mcp-server`）の `.venv\Scripts\python.exe` と `server.py` の実際のパスを指定してください。
 
    ```json
    {
@@ -98,7 +100,16 @@ dotnet build YMM4McpPlugin/YMM4McpPlugin.csproj -c Release -p:CreateYmme=true
 # → artifacts\YMM4McpPlugin-1.5.0.ymme
 ```
 
-PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。`v1.5.0` タグを `main` のコミットに付けると、バージョン一致を確認してGitHub Releaseへ添付します。YMM4本体のDLLは `.ymme` に含めません。
+PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` を検証します。YMM4本体のDLLは `.ymme` に含めません。
+
+**メンテナー向け Release 公開手順（Issue #22）:**
+
+1. `main` の `YMM4McpPlugin/YMM4McpPlugin.csproj` にある `Version` を確認します。既に同じバージョンの**Release**が存在する場合、上書きせず次のバージョンに更新してください。Release公開が途中で失敗して**タグだけが残った場合**は、タグが現在の`main`と同一コミットを指すときに限り、同じワークフローを再実行して安全に再開できます。タグが異なるコミットを指す場合は、タグを移動せずバージョンを更新してください。
+2. GitHubの **Actions → Package YMM4 plugin → Run workflow** からブランチ `main` を選んで実行します。手動公開は最新の `main` コミットに限定されます。
+3. Windowsのテスト、プラグインのビルド、`.ymme` とPython MCPサーバーZIPの内容検証がすべて成功した場合に限り、`v<Version>` タグとGitHub Releaseを作成します。既存のタグやReleaseは上書きしません。
+4. `Releases` で `YMM4McpPlugin-<Version>.ymme` と `YMM4McpServer-<Version>.zip` の**両方**が公開されたことを確認します。ワークフローも公開後に2ファイルの存在を検査します。
+
+従来どおり、`main` 上のコミットに `v<Version>` タグを付けてpushする方式でもReleaseを作成できます。タグ名とプロジェクトの `Version` が一致しない場合や、タグが `main` に含まれない場合は公開しません。**CI成果物だけでは一般ユーザー向けのRelease公開は完了しません。**
 
 ---
 

@@ -1,0 +1,374 @@
+name: Issue 22 and 140 combined setup, keyframe and release verification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  setup-cross-pr-integration:
+    # This workflow belongs to PR #228 until it is merged. A manual run can
+    # re-check the same set later; no GitHub PR is merged or pushed by this job.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compose main with the open Issue 22 and 140 PRs (runner only)
+        shell: bash
+        env:
+          # A queued/rerun PR check must test the exact #228 revision it reports.
+          # Manual dispatches intentionally compose the latest open PR heads.
+          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+          git config user.name "Issue 22 integration CI"
+          git config user.email "integration-ci@users.noreply.github.com"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git checkout -B issue22-composed refs/remotes/origin/main
+          # These changes touch separate files but must work as one release:
+          # UI links, publishing/installer, HTTP host/body validation,
+          # connection discovery, settings persistence, and startup behavior.
+          # Also compose the five #140 keyframe fixes against the same plugin
+          # before shipping a .ymme. A successful standalone PR build cannot
+          # prove that both issue groups are compatible.
+          # PR #229 also modifies package-ymme.yml (export QA), so include
+          # it to catch cross-PR workflow conflicts before a manual merge.
+          # Merge in the same ascending order as the 50-PR audit. The prior
+          # hand-picked order merged #228/#229 before #219 and caused a
+          # package-ymme.yml conflict despite the all-PR audit succeeding.
+          # Keeping the order deterministic avoids a false release blocker.
+          # Include #260's Windows job-snapshot fix: the prior all-PR
+          # Windows integration failed without it even though #228 passed alone.
+          for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259 260; do
+            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
+              # Pin the triggering PR to its event SHA, not a newer moving ref.
+              git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
+            else
+              git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
+            fi
+            printf 'Composing PR #%s at %s\n' "${number}" "$(git rev-parse "refs/remotes/pr/${number}")"
+            git merge --no-ff --no-edit "refs/remotes/pr/${number}"
+          done
+          git status --short
+      - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
+        shell: pwsh
+        run: |
+          python -m pip install -r mcp-server/requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+          # The full Python suite runs on Ubuntu in the existing packaging CI.
+          # A few unrelated tests hard-code POSIX /tmp paths and cannot pass on
+          # Windows. Here, test the combined Issue 22 modules on the same
+          # Windows runner as the YMM4 plugin and installer.
+          Push-Location mcp-server
+          try {
+            python -m unittest -q test_release_workflow test_connection_descriptor_integrity test_check_connection_version_integrity test_http_host_ipv6_aliases test_http_body_limit test_check_keyframe_compat test_check_keyframe_persistence
+            if ($LASTEXITCODE -ne 0) { throw 'Composed Issue 22 Python tests failed' }
+          }
+          finally { Pop-Location }
+      - name: Test composed export decode QA from PR 229 (#61)
+        shell: pwsh
+        run: |
+          Push-Location mcp-server
+          try {
+            # PR #229 adds new export QA regression modules over time. The
+            # previous hand-maintained module list silently omitted new tests,
+            # including expected output-format checks. Discover every matching
+            # module from the *composed* source tree, not PR #228 alone.
+            $qaTests = @(Get-ChildItem -LiteralPath . -Filter 'test_decoded_media_*.py' -File)
+            if ($qaTests.Count -lt 8) {
+              throw "Expected export decode QA regression modules from PR #229; found $($qaTests.Count)"
+            }
+            python -m unittest discover -s . -p 'test_decoded_media_*.py' -q
+            if ($LASTEXITCODE -ne 0) { throw 'Composed export decode QA regressions failed' }
+          }
+          finally { Pop-Location }
+      - name: Test composed setup and HTTP safety helpers
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'mcp-server/setup.ps1'), [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors) { throw ($parseErrors | Out-String) }
+          foreach ($project in @(
+            'tests/RepositoryLinkPolicy.Tests/RepositoryLinkPolicy.Tests.csproj',
+            'tests/SettingsFileSafety.Tests/SettingsFileSafety.Tests.csproj',
+            'tests/SettingsViewSnapshot.Tests/SettingsViewSnapshot.Tests.csproj',
+            'tests/RequestBodyValidation.Tests/RequestBodyValidation.Tests.csproj'
+          )) {
+            dotnet run --project $project --configuration Release
+            if ($LASTEXITCODE -ne 0) { throw "Failed composed test: $project" }
+          }
+      - name: Test all composed keyframe C# regression projects
+        shell: pwsh
+        run: |
+          $projects = @(Get-ChildItem -Path tests -Recurse -Filter 'Keyframe*.csproj' -File | Sort-Object FullName)
+          if ($projects.Count -lt 5) { throw "Expected at least five keyframe test projects; found $($projects.Count)" }
+          foreach ($project in $projects) {
+            dotnet run --project $project.FullName --configuration Release
+            if ($LASTEXITCODE -ne 0) { throw "Composed keyframe regression failed: $($project.FullName)" }
+          }
+      - name: Test composed cross-process job snapshot persistence (#30, #61)
+        shell: pwsh
+        run: |
+          # The previous all-open-PR Windows build exposed a concurrent
+          # File.Move failure that was invisible to single-process Linux CI.
+          # Require the Windows multi-process regression before release prep.
+          dotnet run --project tests/JobSnapshotSafety.Tests/JobSnapshotSafety.Tests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Composed job snapshot regression failed' }
+      - name: Regression-test interrupted and corrupt official reference downloads
+        shell: pwsh
+        run: ./ci/test-download-ymm4-lite.ps1
+      - name: State the remaining live acceptance gates
+        shell: pwsh
+        run: |
+          Write-Output 'Curated Issue #22/#140 regression suites passed; the all-open-PR Windows job separately gates the actual .ymme build. No PR was merged.'
+          Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, UI port-change E2E, and YMM4 4.56.1.1 keyframe E2E.'
+
+  composed-real-export-qa:
+    # Run real decoded-media QA on the EXACT all-open-PR source that passed
+    # Windows packaging and Python regressions. The curated Issue 22/140
+    # checks are an additional gate, not the source of this final verification.
+    # Never re-fetch moving PR heads or test a different source revision.
+    needs: [setup-cross-pr-integration, all-open-prs-windows-package, all-open-prs-python-integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-open-prs-composed-source
+      - name: Restore exact all-open-PR source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir composed
+          tar -xf all-open-prs-composed.tar -C composed
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Ensure FFmpeg and ffprobe are available for real export QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu runners generally include FFmpeg. Avoid unconditional
+          # apt update/install: package mirrors can stall the only remaining
+          # cross-platform QA job even after Windows integration succeeded.
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo 'Using FFmpeg and ffprobe already installed on the runner'
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+      - name: Install composed MCP dependencies
+        run: python -m pip install -r composed/mcp-server/requirements.txt
+      - name: Run real decoded-export MP4 and stream-tail smoke tests (not mocks)
+        working-directory: composed/mcp-server
+        run: python -m unittest -v test_decoded_media_real_ffmpeg test_decoded_media_ffmpeg_integration test_decoded_media_required_tail_20261028
+
+  audit-open-pr-merge-compatibility:
+    # Advisory merge-queue simulation: inspect ALL open PRs, not only the
+    # hand-picked 15-PR release composition. No remote ref is ever updated.
+    # A conflicting PR is skipped so the remaining PRs can still be checked;
+    # the summary explicitly states this is NOT a guarantee of mergeability.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      conflicts: ${{ steps.merge-audit.outputs.conflicts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Audit sequential integration of every open PR (no push)
+        id: merge-audit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Pin the triggering #228 revision in BOTH composed trees. A newer
+          # push during this run must not change the revision under test.
+          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+          git config user.name "Read-only PR integration audit"
+          git config user.email "pr-audit@users.noreply.github.com"
+          # Query the current open PRs, rather than silently ignoring newly
+          # opened fixes. Explicit API errors must fail, not mean "zero PRs".
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq '.[].number' > "$RUNNER_TEMP/open-pr-numbers.txt"
+          mapfile -t numbers < <(sort -n -u "$RUNNER_TEMP/open-pr-numbers.txt")
+          if (( ${#numbers[@]} == 0 )); then
+            echo "No open PRs to audit" >> "$GITHUB_STEP_SUMMARY"
+            echo "conflicts=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git checkout -B audit-open-prs refs/remotes/origin/main
+          passed=0
+          failed=0
+          {
+            echo "## Open PR sequential merge audit (advisory)"
+            echo
+            echo "Base: \`main\` at \`$(git rev-parse --short HEAD)\`; open PRs: ${#numbers[@]}."
+            echo "Only the runner's temporary branch is modified. No GitHub PR is merged."
+            echo "Conflicting PRs are skipped; later results depend on earlier successful merges."
+            echo
+            echo "| PR | Result | Conflicted files / error |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for number in "${numbers[@]}"; do
+            refspec="refs/pull/${number}/head:refs/remotes/audit-pr/${number}"
+            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
+              refspec="${EVENT_PR_228_HEAD_SHA}:refs/remotes/audit-pr/${number}"
+            fi
+            if ! git fetch --no-tags origin "$refspec" \
+              > "$RUNNER_TEMP/audit-fetch.log" 2>&1; then
+              failed=$((failed + 1))
+              echo "| #${number} | FETCH FAILED | Could not retrieve PR head |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::PR #${number} fetch failed: $(tail -n 2 "$RUNNER_TEMP/audit-fetch.log" | tr '\n' ' ')"
+              continue
+            fi
+            if git merge --no-ff --no-edit "refs/remotes/audit-pr/${number}" \
+              > "$RUNNER_TEMP/audit-merge.log" 2>&1; then
+              passed=$((passed + 1))
+              echo "| #${number} | clean | — |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              failed=$((failed + 1))
+              conflict_files="$(git diff --name-only --diff-filter=U | tr '\n' ',' | sed 's/,$//')"
+              if [[ -z "$conflict_files" ]]; then
+                conflict_files="merge failed (see workflow log)"
+              fi
+              # Escape Markdown table separators in path names.
+              conflict_files="${conflict_files//|/\\|}"
+              echo "| #${number} | CONFLICT / FAILED | ${conflict_files} |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::PR #${number} integration conflict: ${conflict_files}"
+              if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+                git merge --abort
+              fi
+              if [[ -n "$(git status --porcelain)" ]]; then
+                echo "Could not restore clean audit checkout after PR #${number}" >&2
+                exit 1
+              fi
+            fi
+          done
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "**Composed: ${passed}; skipped/failed: ${failed}; total: ${#numbers[@]}.**" >> "$GITHUB_STEP_SUMMARY"
+          echo "conflicts=$failed" >> "$GITHUB_OUTPUT"
+          if (( failed > 0 )); then
+            echo "::error::${failed} open PRs could not be composed in numeric order; see the job summary."
+            # A green audit with both all-PR test jobs skipped is misleading.
+            # Fail this job while leaving the independent #22 integration job
+            # runnable, so conflicts cannot masquerade as full CI success.
+            exit 1
+          fi
+
+      - name: Archive exact all-PR composition when conflict-free
+        if: steps.merge-audit.outputs.conflicts == '0'
+        shell: bash
+        run: git archive --format=tar --output=all-open-prs-composed.tar HEAD
+      - uses: actions/upload-artifact@v4
+        if: steps.merge-audit.outputs.conflicts == '0'
+        with:
+          name: all-open-prs-composed-source
+          path: all-open-prs-composed.tar
+          if-no-files-found: error
+
+  all-open-prs-python-integration:
+    # The audit's clean merge alone cannot prove 50 PRs work together.
+    # Test the exact archived tree; never re-fetch moving PR heads here.
+    needs: audit-open-pr-merge-compatibility
+    if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-open-prs-composed-source
+      - name: Restore the exact 50-PR candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir composed
+          tar -xf all-open-prs-composed.tar -C composed
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install combined Python dependencies
+        run: python -m pip install -r composed/mcp-server/requirements.txt
+      - name: Run all Python regressions against all open PRs
+        working-directory: composed
+        run: python -m unittest discover -s mcp-server -p 'test_*.py' -q
+
+  all-open-prs-windows-package:
+    # Build the *entire* conflict-free open-PR tree, not only the curated
+    # 15-PR subset. No release, tag, push, or PR merge is performed.
+    needs: audit-open-pr-merge-compatibility
+    if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: all-open-prs-composed-source
+      - name: Restore the exact 50-PR candidate
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path composed | Out-Null
+          tar -xf all-open-prs-composed.tar -C composed
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restore all-PR composition' }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run every standalone C# regression project from the full open-PR tree
+        shell: pwsh
+        run: |
+          # Keyframe-only checks missed settings, rollback, export and transport
+          # regressions from other PRs. Every standalone *.Tests.csproj must
+          # run against the exact composed source before packaging is green.
+          $projects = @(Get-ChildItem -Path composed/tests -Recurse -Filter '*.Tests.csproj' -File | Sort-Object FullName)
+          if ($projects.Count -lt 11) { throw "Expected at least 11 C# regression projects; found $($projects.Count)" }
+          foreach ($project in $projects) {
+            Write-Output "Running composed regression: $($project.FullName)"
+            dotnet run --project $project.FullName --configuration Release
+            if ($LASTEXITCODE -ne 0) { throw "Failed composed C# regression: $($project.FullName)" }
+          }
+      - name: Regression-test interrupted and corrupt official reference downloads
+        shell: pwsh
+        run: ./composed/ci/test-download-ymm4-lite.ps1
+      - name: Download official YMM4 Lite references
+        # Invoke-WebRequest -TimeoutSec bounds a socket wait, not the entire
+        # transfer. A stalled upstream must not occupy a runner for 40+ min.
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $libPath = & ./composed/ci/download-ymm4-lite.ps1
+          if (-not $libPath -or -not (Test-Path -LiteralPath $libPath -PathType Container)) {
+            throw 'Official YMM4 Lite reference download did not return a valid library path'
+          }
+          "YMM4_LIB_PATH=$libPath" >> $env:GITHUB_ENV
+      - name: Build complete all-PR .ymme package
+        shell: pwsh
+        run: |
+          dotnet build composed/YMM4McpPlugin/YMM4McpPlugin.csproj --configuration Release -p:CreateYmme=true "-p:YMM4LibPath=$env:YMM4_LIB_PATH"
+          if ($LASTEXITCODE -ne 0) { throw 'Full open-PR plugin build failed' }
+          $packages = @(Get-ChildItem -Path composed/artifacts -Filter 'YMM4McpPlugin-*.ymme' -File)
+          if ($packages.Count -ne 1 -or $packages[0].Length -le 0) {
+            throw "Expected one nonempty .ymme, found $($packages.Count)"
+          }
+          Write-Output "All-open-PR package built (not published): $($packages[0].Name)"

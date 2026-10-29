@@ -2,6 +2,7 @@ name: Package YMM4 plugin
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -11,7 +12,7 @@ permissions:
 
 jobs:
   python-tests:
-    if: github.event_name == 'pull_request'
+    # Release jobs must never ship a Python server whose tests were skipped.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +74,25 @@ jobs:
             [ref]$tokens, [ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -gt 0) { throw "Invalid setup.ps1: $($parseErrors -join '; ')" }
           $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
-          Compress-Archive -Path mcp-server -DestinationPath "artifacts/YMM4McpServer-$version.zip" -Force
+          # Archive only committed, reviewed sources, never the runner's local
+          # connection tokens, .env files, virtualenv or Python caches.
+          $serverPackage = "artifacts/YMM4McpServer-$version.zip"
+          $localToken = Join-Path 'mcp-server' 'connection.json'
+          $localEnv = Join-Path 'mcp-server' '.env'
+          if ((Test-Path -LiteralPath $localToken) -or (Test-Path -LiteralPath $localEnv)) {
+            throw 'Package smoke test requires a clean working directory'
+          }
+          # Regression: a directory-based ZIP would leak these untracked files.
+          try {
+            [IO.File]::WriteAllText($localToken, '{"token":"never-publish"}')
+            [IO.File]::WriteAllText($localEnv, 'YMM4MCP_PRIVATE_SENTINEL=never-publish')
+            git archive --format=zip "--output=$serverPackage" HEAD mcp-server
+            if ($LASTEXITCODE -ne 0) { throw 'Could not archive the reviewed MCP server sources' }
+          }
+          finally {
+            Remove-Item -LiteralPath $localToken -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $localEnv -Force -ErrorAction SilentlyContinue
+          }
       - name: Validate release package and tag
         shell: pwsh
         run: |
@@ -100,6 +119,13 @@ jobs:
             foreach ($required in @('mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/install.cmd', 'mcp-server/check_connection.cmd', 'mcp-server/check_connection.py', 'mcp-server/requirements.txt', 'mcp-server/skills/ymm4-jikkyou/SKILL.md')) {
               if ($paths -notcontains $required) { throw "Missing Python server file: $required" }
             }
+            # A mistakenly committed credential must also block publication.
+            $forbidden = @($paths | Where-Object {
+              $_ -match '(?i)(^|/)(connection\.json|settings\.local\.json|\.env(\.[^/]*)?|\.venv|__pycache__)(/|$)|\.pyc$'
+            })
+            if ($forbidden.Count -gt 0) {
+              throw "Sensitive or ephemeral files in Python release ZIP: $($forbidden -join ', ')"
+            }
           }
           finally { $serverZip.Dispose() }
       - uses: actions/setup-python@v5
@@ -118,14 +144,79 @@ jobs:
           $storeConfigDir = Join-Path $env:LOCALAPPDATA 'Packages/Claude_test/LocalCache/Roaming/Claude'
           [IO.Directory]::CreateDirectory($storeConfigDir) | Out-Null
           $storeConfigPath = Join-Path $storeConfigDir 'claude_desktop_config.json'
-          '{"theme":"store","mcpServers":{"other":{"command":"store.exe"}}}' |
+          # Existing ymm4 entries can contain user-managed API credentials and
+          # timeout/disabled settings. An installer upgrade must not erase them.
+          '{"theme":"store","mcpServers":{"other":{"command":"store.exe"},"ymm4":{"command":"old-store.exe","args":["old-store.py"],"env":{"GEMINI_API_KEY":"store-placeholder","YMM4_API_BASE":"http://127.0.0.1:8766/api"},"disabled":true}}}' |
             Set-Content -LiteralPath $storeConfigPath -Encoding UTF8
-          '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"}}}' |
+          '{"theme":"dark","mcpServers":{"other":{"command":"other.exe"},"ymm4":{"command":"old-classic.exe","args":["old-classic.py"],"env":{"GEMINI_API_KEY":"classic-placeholder","PYTHONUTF8":"1","YMM4_API_BASE":"http://127.0.0.1:8767/api"},"timeout":120}}}' |
             Set-Content -LiteralPath $configPath -Encoding UTF8
-          # Simulate an extracted Release ZIP that the user later deletes.
-          $extracted = Join-Path $env:RUNNER_TEMP 'ymm4mcp-extracted'
-          Copy-Item -LiteralPath 'mcp-server' -Destination $extracted -Recurse -Force
-          & (Join-Path $extracted 'install.cmd')
+          # Exercise the actual GitHub Release ZIP, not the working-tree
+          # mcp-server directory. A missing installer or bad archive layout
+          # must fail before publishing a one-click installation package.
+          $serverPackage = @(Get-ChildItem -LiteralPath artifacts -Filter 'YMM4McpServer-*.zip' -File)
+          if ($serverPackage.Count -ne 1) { throw 'Expected exactly one built MCP server ZIP' }
+          $extractedRoot = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-extracted'
+          Expand-Archive -LiteralPath $serverPackage[0].FullName -DestinationPath $extractedRoot -Force
+          $extracted = Join-Path $extractedRoot 'mcp-server'
+          foreach ($required in @('install.cmd', 'setup.ps1', 'server.py', 'requirements.txt')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $extracted $required) -PathType Leaf)) {
+              throw "Release ZIP extraction is missing $required"
+            }
+          }
+          # Regression: py -3 can select obsolete Python 3.9 while newer
+          # Python 3 versions are registered. The installer must probe the
+          # actual version, prefer the latest registered Python 3 (-V:3), and
+          # still support older launchers with explicit minor selectors.
+          $fakeLauncherDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-outdated-py'
+          [IO.Directory]::CreateDirectory($fakeLauncherDir) | Out-Null
+          $launcherLines = @(
+            '@echo off',
+            'setlocal EnableDelayedExpansion',
+            'if "%YMM4MCP_PY_FORCE_FAIL%"=="1" exit /b 91',
+            'if /I "%~1"=="-3" if /I "%~2"=="-c" (',
+            '  set "probe=%~3"',
+            '  set "probe=!probe:sys.version_info=(3,9)!"',
+            '  python.exe -c "!probe!"',
+            '  exit /b !errorlevel!',
+            ')',
+            'if /I "%~1"=="-3" exit /b 91',
+            'if /I "%~1"=="-V:3" (',
+            '  if /I "%~2"=="-c" (',
+            '    python.exe -c "%~3"',
+            '    exit /b !errorlevel!',
+            '  )',
+            '  if /I "%~2"=="-m" if /I "%~3"=="venv" (',
+            '    echo latest>"%YMM4MCP_PY_SELECT_MARKER%"',
+            '    python.exe -m venv "%~4"',
+            '    exit /b !errorlevel!',
+            '  )',
+            ')',
+            'if /I "%~1"=="-3.12" (',
+            '  if /I "%~2"=="-c" exit /b 0',
+            '  if /I "%~2"=="-m" if /I "%~3"=="venv" (',
+            '    echo selected>"%YMM4MCP_PY_SELECT_MARKER%"',
+            '    python.exe -m venv "%~4"',
+            '    exit /b !errorlevel!',
+            '  )',
+            ')',
+            'exit /b 91'
+          )
+          Set-Content -LiteralPath (Join-Path $fakeLauncherDir 'py.cmd') -Value $launcherLines -Encoding Ascii
+          $marker = Join-Path $env:RUNNER_TEMP 'ymm4mcp-explicit-py-selected.txt'
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = "$fakeLauncherDir;$originalPath"
+            $env:YMM4MCP_PY_SELECT_MARKER = $marker
+            & (Join-Path $extracted 'install.cmd')
+          }
+          finally {
+            $env:PATH = $originalPath
+            Remove-Item Env:YMM4MCP_PY_SELECT_MARKER -ErrorAction SilentlyContinue
+          }
+          if (-not (Test-Path -LiteralPath $marker) -or
+              [IO.File]::ReadAllText($marker).Trim() -cne 'latest') {
+            throw 'Installer did not select the newest registered Python 3 via -V:3'
+          }
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd failed' }
           $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($config.theme -ne 'dark' -or $config.mcpServers.other.command -ne 'other.exe') {
@@ -136,6 +227,15 @@ jobs:
               $storeConfig.mcpServers.other.command -ne 'store.exe' -or
               -not $storeConfig.mcpServers.ymm4.command) {
             throw 'Microsoft Store Claude Desktop settings were not configured safely'
+          }
+          if ($config.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'classic-placeholder' -or
+              $config.mcpServers.ymm4.env.PYTHONUTF8 -cne '1' -or
+              $config.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:8767/api' -or
+              $config.mcpServers.ymm4.timeout -ne 120 -or
+              $storeConfig.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'store-placeholder' -or
+              $storeConfig.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:8766/api' -or
+              $storeConfig.mcpServers.ymm4.disabled -ne $true) {
+            throw 'Installer erased existing ymm4 credentials, custom settings or ports'
           }
           if (-not $config.mcpServers.ymm4.command -or
               -not (Test-Path -LiteralPath $config.mcpServers.ymm4.command)) {
@@ -154,7 +254,41 @@ jobs:
               $storeConfig.mcpServers.ymm4.command -cne $installedPython) {
             throw 'Claude Desktop must use persistent installed paths'
           }
-          Remove-Item -LiteralPath $extracted -Recurse -Force
+          # Regression: a user who follows the documented manual PowerShell
+          # command after install.cmd must NOT overwrite the stable Claude
+          # settings with the disposable ZIP extraction directory.
+          # Separate regression: when every py launcher registration fails,
+          # python.exe must remain a supported fallback for manual setup.
+          try {
+            $env:PATH = "$fakeLauncherDir;$originalPath"
+            $env:YMM4MCP_PY_FORCE_FAIL = '1'
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extracted 'setup.ps1') -ConfigureClaudeDesktop -Port 9001
+          }
+          finally {
+            $env:PATH = $originalPath
+            Remove-Item Env:YMM4MCP_PY_FORCE_FAIL -ErrorAction SilentlyContinue
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Manual PowerShell setup failed' }
+          $manualClassic = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $manualStore = Get-Content -LiteralPath $storeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($manualClassic.mcpServers.ymm4.command -cne $installedPython -or
+              @($manualClassic.mcpServers.ymm4.args)[0] -cne $installedScript -or
+              $manualStore.mcpServers.ymm4.command -cne $installedPython -or
+              @($manualStore.mcpServers.ymm4.args)[0] -cne $installedScript) {
+            throw 'Manual setup must not register disposable ZIP extraction paths'
+          }
+          # -Port changes only YMM4_API_BASE; credentials and custom fields
+          # must survive both ordinary installs and explicit port updates.
+          if ($manualClassic.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:9001/api' -or
+              $manualStore.mcpServers.ymm4.env.YMM4_API_BASE -cne 'http://127.0.0.1:9001/api' -or
+              $manualClassic.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'classic-placeholder' -or
+              $manualClassic.mcpServers.ymm4.env.PYTHONUTF8 -cne '1' -or
+              $manualClassic.mcpServers.ymm4.timeout -ne 120 -or
+              $manualStore.mcpServers.ymm4.env.GEMINI_API_KEY -cne 'store-placeholder' -or
+              $manualStore.mcpServers.ymm4.disabled -ne $true) {
+            throw 'Manual setup damaged existing ymm4 settings during port update'
+          }
+          Remove-Item -LiteralPath $extractedRoot -Recurse -Force
           if (-not (Test-Path -LiteralPath $installedPython) -or
               -not (Test-Path -LiteralPath $installedScript)) {
             throw 'Deleting the ZIP extraction must not remove the installed server'
@@ -182,8 +316,36 @@ jobs:
               @(Get-ChildItem -LiteralPath $storeConfigDir -Filter 'claude_desktop_config.json.tmp.*').Count -ne 0) {
             throw 'Failed setup left staged config files behind'
           }
-          # Re-running from another extraction must preserve the same stable path.
-          & cmd.exe /c "mcp-server\install.cmd"
+          # The packaged default must be installed the first time, but a
+          # later upgrade must preserve the user's local MCP model/credentials.
+          $installedConfig = Join-Path $installedDir 'config.json'
+          if (-not (Test-Path -LiteralPath $installedConfig)) {
+            throw 'Fresh install did not copy the bundled MCP config.json'
+          }
+          $customConfig = '{"default_model":"gemini-3.8-flash","user_custom":"preserve-me"}'
+          $customLocal = '{"secret":"test-placeholder"}'
+          [IO.File]::WriteAllText($installedConfig, $customConfig)
+          $localSettings = Join-Path $installedDir 'settings.local.json'
+          [IO.File]::WriteAllText($localSettings, $customLocal)
+          # Simulate an upgrade from a second extraction of the same
+          # published ZIP. Its local connection descriptor must not leak into
+          # the persistent installation or replace the host's real token.
+          $upgradeRoot = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-upgrade'
+          Expand-Archive -LiteralPath $serverPackage[0].FullName -DestinationPath $upgradeRoot -Force
+          $upgrade = Join-Path $upgradeRoot 'mcp-server'
+          if (-not (Test-Path -LiteralPath (Join-Path $upgrade 'install.cmd') -PathType Leaf)) {
+            throw 'Release ZIP upgrade extraction has no installer'
+          }
+          [IO.File]::WriteAllText((Join-Path $upgrade 'connection.json'),
+                                  '{"token":"zip-must-not-be-installed"}')
+          & (Join-Path $upgrade 'install.cmd')
+          if ([IO.File]::ReadAllText($installedConfig) -cne $customConfig -or
+              [IO.File]::ReadAllText($localSettings) -cne $customLocal) {
+            throw 'Installer upgrade overwrote local MCP server configuration'
+          }
+          if (Test-Path -LiteralPath (Join-Path $installedDir 'connection.json')) {
+            throw 'Installer copied an extracted ZIP connection descriptor'
+          }
           if ($LASTEXITCODE -ne 0) { throw 'install.cmd rerun failed' }
           $again = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($again.theme -ne 'rollback-classic' -or $again.mcpServers.other.command -ne 'classic.exe' -or
@@ -204,22 +366,36 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: package
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    needs: [package, python-tests]
     runs-on: windows-latest
+    # Serialize manual and tag releases to avoid competing tag/asset writes.
+    concurrency:
+      group: ymm4mcp-release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify tag is on main
+      - name: Verify release source is the latest main or a tag on main
         shell: pwsh
         run: |
           git fetch origin main:refs/remotes/origin/main
           if ($LASTEXITCODE -ne 0) { throw 'Could not fetch main' }
-          git merge-base --is-ancestor HEAD origin/main
-          if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on main' }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Manual release must run from main' }
+            $current = (git rev-parse HEAD).Trim()
+            $latest = (git rev-parse origin/main).Trim()
+            if ($LASTEXITCODE -ne 0 -or $current -ne $latest) {
+              throw 'Manual release must use the latest main commit'
+            }
+          }
+          else {
+            git merge-base --is-ancestor HEAD origin/main
+            if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on main' }
+          }
       - uses: actions/download-artifact@v4
         with:
           name: ymm4mcp-ymme
@@ -234,4 +410,101 @@ jobs:
           $packagePath = $package[0].FullName
           $serverPackage = @(Get-ChildItem -LiteralPath release -Filter 'YMM4McpServer-*.zip' -File)
           if ($serverPackage.Count -ne 1) { throw "Expected one Python server zip; found $($serverPackage.Count)" }
-          gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'
+          $version = (dotnet msbuild YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Cannot read plugin version' }
+          $tag = "v$version"
+          # Tag-triggered releases must agree with the Version compiled into
+          # the package. Otherwise a stale/mistyped v* tag could publish
+          # artifacts for one version under a different public release name.
+          # Validate before any gh release create / asset upload.
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and
+              $env:GITHUB_REF_NAME -cne $tag) {
+            throw "Release tag $env:GITHUB_REF_NAME does not match packaged version $tag"
+          }
+          $notes = 'プラグインの .ymme をダブルクリックしてインストールし、Python MCPサーバーの zip を展開して README の手順で設定してください。'
+          $createdRelease = $false
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            # A manual release is explicit and cannot silently overwrite a tag or release.
+            gh release view $tag --json tagName *> $null
+            if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; bump Version for a new release" }
+            # Explicitly create the tag with an atomic Git ref API call.
+            # A failed release upload can leave this tag behind; reruns may
+            # resume ONLY when it still points to the exact tested main SHA.
+            # Distinguish a missing tag (exit 2) from network/auth errors.
+            $tagRef = "refs/tags/$tag"
+            $null = git ls-remote --exit-code --refs origin $tagRef
+            $tagProbeExit = $LASTEXITCODE
+            if ($tagProbeExit -eq 2) {
+              # POST fails instead of overwriting if another publisher races.
+              gh api -X POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=$tagRef" -f "sha=$env:GITHUB_SHA" --silent
+              if ($LASTEXITCODE -ne 0) { throw "Could not create immutable release tag $tag" }
+            }
+            elseif ($tagProbeExit -ne 0) {
+              throw "Could not check whether release tag $tag exists (git exit $tagProbeExit)"
+            }
+            git fetch --no-tags origin $tagRef
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect release tag $tag" }
+            $tagCommit = (git rev-list -n 1 FETCH_HEAD).Trim()
+            if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $env:GITHUB_SHA) {
+              throw "Tag $tag points to a different commit; bump Version instead of overwriting it"
+            }
+            # --verify-tag ensures the Release operation never silently
+            # creates or retargets a tag, including on safe retry.
+            gh release create $tag $packagePath $serverPackage[0].FullName --verify-tag --title $tag --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+            $createdRelease = $true
+          }
+          else {
+            # A manual release creates a tag. GitHub normally suppresses
+            # GITHUB_TOKEN-triggered runs, but externally triggered tag events
+            # and reruns can still encounter an existing Release. Verify it
+            # instead of failing or overwriting it; concurrency serializes
+            # simultaneous release jobs.
+            gh release view $tag --json tagName *> $null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Output "Release $tag already exists; verifying without modifying it"
+            }
+            else {
+              gh release create $env:GITHUB_REF_NAME $packagePath $serverPackage[0].FullName --verify-tag --title $env:GITHUB_REF_NAME --notes $notes
+              if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $tag" }
+              $createdRelease = $true
+            }
+          }
+          $publishedAssets = @(gh release view $tag --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw "Cannot verify GitHub Release $tag assets" }
+          $expectedAssets = @($package[0].Name, $serverPackage[0].Name)
+          if (@(Compare-Object $expectedAssets $publishedAssets).Count -ne 0) {
+            throw "Release $tag assets do not match expected packages: $($publishedAssets -join ', ')"
+          }
+          # A tag-triggered run after a manual release rebuilds ZIP archives
+          # with potentially different timestamps. Never compare those rebuilt
+          # ZIP bytes against an already-published release: verify existence,
+          # nonempty downloads and archive readability instead. Only compare
+          # SHA-256 to the local artifacts in the run that actually published.
+          $verifyDir = Join-Path $env:RUNNER_TEMP 'ymm4mcp-release-verify'
+          [IO.Directory]::CreateDirectory($verifyDir) | Out-Null
+          gh release download $tag --dir $verifyDir --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not download published assets for $tag" }
+          foreach ($localAsset in @($package[0], $serverPackage[0])) {
+            $downloaded = Join-Path $verifyDir $localAsset.Name
+            if (-not (Test-Path -LiteralPath $downloaded -PathType Leaf)) {
+              throw "Published asset missing after download: $($localAsset.Name)"
+            }
+            if ((Get-Item -LiteralPath $downloaded).Length -eq 0) {
+              throw "Published asset is empty: $($localAsset.Name)"
+            }
+            $archive = [IO.Compression.ZipFile]::OpenRead($downloaded)
+            try {
+              if ($archive.Entries.Count -eq 0) {
+                throw "Published archive has no entries: $($localAsset.Name)"
+              }
+            }
+            finally { $archive.Dispose() }
+            if ($createdRelease) {
+              $localHash = (Get-FileHash -LiteralPath $localAsset.FullName -Algorithm SHA256).Hash
+              $publishedHash = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash
+              if ($localHash -cne $publishedHash) {
+                throw "Published asset differs from tested package: $($localAsset.Name)"
+              }
+            }
+          }
