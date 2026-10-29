@@ -13,9 +13,8 @@ from editing import MAX_FRAME
 def _validate_png_container(raw: bytes) -> None:
     """Reject malformed PNG chunks before Pillow discards their metadata.
 
-    Pillow can decode the pixels of a PNG even when an ancillary chunk has a
-    corrupt CRC or arbitrary bytes follow IEND. Neither is a trustworthy
-    single-frame preview from YMM4.
+    Validate critical PNG structure and color/palette semantics independently
+    of Pillow, which may recover from malformed input while decoding pixels.
     """
     if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("invalid PNG signature")
@@ -23,6 +22,8 @@ def _validate_png_container(raw: bytes) -> None:
     chunk_count = 0
     seen_ihdr = seen_idat = seen_iend = idat_finished = False
     seen_plte = False
+    color_type = bit_depth = None
+    idat_payload_bytes = 0
     while offset < len(raw):
         chunk_count += 1
         if chunk_count > 4096 or len(raw) - offset < 12:
@@ -32,17 +33,30 @@ def _validate_png_container(raw: bytes) -> None:
         end = offset + 12 + length
         if end > len(raw):
             raise ValueError("truncated PNG chunk")
+        payload = raw[offset + 8:offset + 8 + length]
         expected_crc = int.from_bytes(raw[offset + 8 + length:end], "big")
         if zlib.crc32(raw[offset + 4:offset + 8 + length]) != expected_crc:
             raise ValueError("PNG chunk CRC mismatch")
         if not seen_ihdr:
             if kind != b"IHDR" or length != 13:
                 raise ValueError("PNG must begin with IHDR")
+            width = int.from_bytes(payload[:4], "big")
+            height = int.from_bytes(payload[4:8], "big")
+            bit_depth, color_type, compression, filtering, interlace = payload[8:]
+            legal_depths = {
+                0: (1, 2, 4, 8, 16),
+                2: (8, 16),
+                3: (1, 2, 4, 8),
+                4: (8, 16),
+                6: (8, 16),
+            }
+            if (not width or not height or
+                    bit_depth not in legal_depths.get(color_type, ()) or
+                    compression != 0 or filtering != 0 or interlace not in (0, 1)):
+                raise ValueError("invalid PNG IHDR fields")
             seen_ihdr = True
         elif kind == b"IHDR":
             raise ValueError("duplicate PNG IHDR")
-        # Unknown critical chunks can change how the pixels are interpreted.
-        # Pillow may skip them, so reject before using the image for QA.
         if any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in kind):
             raise ValueError("invalid PNG chunk type")
         if kind[2] & 0x20:
@@ -52,15 +66,22 @@ def _validate_png_container(raw: bytes) -> None:
         if kind == b"PLTE":
             if seen_plte or seen_idat:
                 raise ValueError("PNG PLTE must be unique and precede IDAT")
+            if (color_type in (0, 4) or length == 0 or length > 768 or
+                    length % 3 or
+                    (color_type == 3 and length // 3 > 1 << bit_depth)):
+                raise ValueError("invalid PNG palette")
             seen_plte = True
         if kind == b"IDAT":
             if idat_finished:
                 raise ValueError("nonconsecutive PNG IDAT chunks")
+            if color_type == 3 and not seen_plte:
+                raise ValueError("indexed PNG requires PLTE")
             seen_idat = True
+            idat_payload_bytes += length
         elif seen_idat:
             idat_finished = True
         if kind == b"IEND":
-            if length != 0 or not seen_idat or end != len(raw):
+            if length != 0 or not seen_idat or not idat_payload_bytes or end != len(raw):
                 raise ValueError("invalid PNG end")
             seen_iend = True
             break
