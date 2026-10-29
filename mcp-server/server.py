@@ -614,8 +614,8 @@ async def create_from_template(args: dict) -> dict:
 
 async def run_bgm_ducking(args: dict) -> dict:
     item_id = args.get("bgm_item_id")
-    if not isinstance(item_id, str) or not item_id.strip():
-        raise ValueError("duck_bgm requires bgm_item_id")
+    if not ducking.valid_identifier(item_id):
+        raise ValueError("duck_bgm requires a valid bgm_item_id")
     dry_run = args.get("dry_run", True)
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
@@ -626,14 +626,18 @@ async def run_bgm_ducking(args: dict) -> dict:
             not isinstance(snapshot.get("items"), list)):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
     matches = [i for i in snapshot["items"] if isinstance(i, dict) and i.get("item_id") == item_id]
+    if len(matches) > 1:
+        return {"success": False, "error_code": "ITEM_ID_AMBIGUOUS", "item_id": item_id}
     if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("audioitem"):
         return {"success": False, "error_code": "BGM_ITEM_NOT_FOUND"}
     bgm = matches[0]
     revision = bgm.get("revision")
-    if not isinstance(revision, str) or not revision:
+    if not ducking.valid_identifier(revision, max_length=256):
         return {"success": False, "error_code": "BGM_REVISION_UNAVAILABLE"}
     voices = [i for i in snapshot["items"] if isinstance(i, dict) and
               str(i.get("type", "")).lower().endswith("voiceitem")]
+    if any(not ducking.valid_identifier(voice.get("item_id")) for voice in voices):
+        return {"success": False, "error_code": "VOICE_ITEM_ID_INVALID"}
     # Duplicate host IDs make an explicit selection ambiguous and can also
     # silently double-count an automatic voice selection.
     voice_ids = [voice.get("item_id") for voice in voices
@@ -643,7 +647,7 @@ async def run_bgm_ducking(args: dict) -> dict:
     selected = args.get("voice_item_ids")
     if selected is not None:
         if (not isinstance(selected, list) or not 1 <= len(selected) <= 500 or
-                any(not isinstance(value, str) or not value.strip() for value in selected) or
+                any(not ducking.valid_identifier(value) for value in selected) or
                 len(set(selected)) != len(selected)):
             raise ValueError("voice_item_ids must contain 1..500 distinct nonempty IDs")
         found = {voice.get("item_id") for voice in voices}
@@ -664,6 +668,18 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "VOICE_TIMING_UNAVAILABLE", "error": str(exc)}
         if outside:
             return {"success": False, "error_code": "VOICE_OUTSIDE_BGM", "item_ids": outside}
+    # A stable ID must identify one item across the *whole* timeline, not
+    # merely within the selected VoiceItem/AudioItem type.
+    relevant_ids = {item_id, *(voice["item_id"] for voice in voices)}
+    seen_ids = set()
+    for item in snapshot["items"]:
+        if not isinstance(item, dict):
+            return {"success": False, "error_code": "ITEMS_UNAVAILABLE"}
+        key = item.get("item_id")
+        if isinstance(key, str) and key in relevant_ids:
+            if key in seen_ids:
+                return {"success": False, "error_code": "ITEM_ID_AMBIGUOUS", "item_id": key}
+            seen_ids.add(key)
     key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
     state = await ymm4_get(key_path)
     if (not isinstance(state, dict) or state.get("success") is not True or
@@ -680,12 +696,21 @@ async def run_bgm_ducking(args: dict) -> dict:
     if (len(keys) != 1 or not isinstance(keys[0], dict) or
             type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
         return {"success": False, "error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
-    points = ducking.plan(bgm, voices, keys[0].get("value"),
+    baseline = keys[0].get("value")
+    if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
+        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+    try:
+        baseline = ducking._finite_input(baseline, "base_volume")
+    except ValueError:
+        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+    if baseline <= 0:
+        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+    points = ducking.plan(bgm, voices, baseline,
                           ratio=args.get("duck_ratio", .3),
                           attack_frames=args.get("attack_frames", 5),
                           release_frames=args.get("release_frames", 10))
     result = {"success": True, "dry_run": dry_run, "bgm_item_id": item_id,
-              "voice_count": len(voices), "keyframes": points, "base_volume": keys[0]["value"]}
+              "voice_count": len(voices), "keyframes": points, "base_volume": baseline}
     if dry_run or not points:
         return result
     project = await ymm4_get("/project")
@@ -727,11 +752,14 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
+        # A rejected/ill-formed response does not prove that the host made no
+        # change. Never retry or apply another point without a fresh snapshot.
         if (not isinstance(changed, dict) or changed.get("success") is not True or
-                not isinstance(changed.get("revision"), str) or not changed["revision"]):
-            return {"success": False, "error_code": "BGM_DUCKING_PARTIAL",
-                    "applied": applied, "details": changed, "backup_path": backup}
-        if changed["revision"] == revision or changed["revision"] != changed["revision"].strip():
+                not ducking.valid_identifier(changed.get("revision"), max_length=256)):
+            return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
+                    "applied": applied, "details": changed, "backup_path": backup,
+                    "outcome_unknown": True}
+        if changed["revision"] == revision:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
@@ -743,7 +771,7 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_UNKNOWN",
                 "error": str(exc), "applied": applied, "backup_path": backup,
                 "outcome_unknown": True}
-    if not ducking.verify_keyframes(checked, revision, points, keys[0]["value"]):
+    if not ducking.verify_keyframes(checked, revision, points, baseline):
         return {"success": False, "error_code": "BGM_DUCKING_VERIFY_FAILED",
                 "applied": applied, "backup_path": backup, "details": checked}
     return {**result, "dry_run": False, "applied": applied, "backup_path": backup, "verified": True}
