@@ -17,7 +17,7 @@ def _validate_png_container(raw: bytes) -> None:
     corrupt CRC or arbitrary bytes follow IEND. Neither is a trustworthy
     single-frame preview from YMM4.
     """
-    if not raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("invalid PNG signature")
     offset = 8
     chunk_count = 0
