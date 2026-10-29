@@ -329,6 +329,8 @@ namespace YMM4McpPlugin
             {
                 if (string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath))
                     backupWarning = "NO_PROJECT_FILE";
+                else if (CurrentProjectSaveState() is not true)
+                    backupWarning = "PROJECT_UNSAVED_OR_UNKNOWN";
                 else
                 {
                     try
@@ -425,6 +427,18 @@ namespace YMM4McpPlugin
             if (record == null)
                 return Failure("CHECKPOINT_NOT_FOUND", "チェックポイントが見つかりません: " + id);
 
+            // The legacy mode only removes newly added items. Opt-in backup
+            // restoration opens the original on-disk checkpoint as a separate
+            // project, restoring deletions and property changes without writing
+            // over the current project file.
+            if (GetBool(body, "restore_backup", false))
+            {
+                if (!GetBool(body, "confirm_restore_backup", false))
+                    return Failure("RESTORE_CONFIRMATION_REQUIRED",
+                        "restore_backup requires confirm_restore_backup=true");
+                return await RestoreCheckpointBackup(record);
+            }
+
             // Native item IDs are only meaningful within the project that created
             // the checkpoint. Unknown/unsaved projects cannot be safely matched.
             if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
@@ -491,6 +505,68 @@ namespace YMM4McpPlugin
                         ? "Items added after the checkpoint were deleted. Property mutations on surviving items were not reverted."
                         : "Some snapshot items are gone and cannot be recreated. Open backup_path for a full restore if one exists."
                 };
+            });
+        }
+
+        private async Task<object> RestoreCheckpointBackup(CheckpointRecord record)
+        {
+            if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
+                    record.Id, record.ProjectPath, CurrentProjectPath()))
+                return Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
+                    "保存済みの同一プロジェクトに属する安全なバックアップがありません");
+            return await RunOnUi(async () =>
+            {
+                // Recheck the project and the backup immediately before invoking
+                // the host. Never discard unsaved changes, even when confirmed.
+                if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
+                    return (object)Failure("CHECKPOINT_PROJECT_MISMATCH",
+                        "チェックポイント作成時と現在のプロジェクトが異なります");
+                if (CurrentProjectSaveState() is not true)
+                    return (object)Failure("UNSAVED_CHANGES",
+                        "保存状態が不明か未保存の変更があります。保存してから復元してください");
+                if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
+                        record.Id, record.ProjectPath, CurrentProjectPath()))
+                    return (object)Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
+                        "復元用バックアップが存在しないか安全ではありません");
+
+                var invoked = InvokeNamed(OpenMethodHints, record.BackupPath!);
+                if (!invoked.ok)
+                    return (object)Failure("OPEN_METHOD_UNAVAILABLE",
+                        "YMM4でバックアッププロジェクトを開くメソッドが見つかりません");
+                if (invoked.task != null)
+                    await invoked.task;
+                if (!EditCheckpointSafety.SameProject(record.BackupPath, CurrentProjectPath()))
+                    return (object)new
+                    {
+                        success = false,
+                        error_code = "RESTORE_OUTCOME_UNKNOWN",
+                        error = "バックアップを開く処理を呼びましたが、プロジェクトの切替を確認できません",
+                        outcome_unknown = true,
+                        checkpoint_id = record.Id,
+                        backup_path = record.BackupPath
+                    };
+                return (object)new
+                {
+                    success = true,
+                    action = "restore_backup",
+                    checkpoint_id = record.Id,
+                    backup_path = record.BackupPath,
+                    original_project_path = record.ProjectPath,
+                    note = "チェックポイントの保存済みコピーを別プロジェクトとして開きました。元のプロジェクトファイルは上書きしていません。"
+                };
+            });
+        }
+
+        private bool? CurrentProjectSaveState()
+        {
+            return Application.Current.Dispatcher.Invoke(() =>
+            {
+                var vm = GetMainViewModel();
+                if (vm == null) return (bool?)null;
+                var model = GetMainModel(vm);
+                object? state = GetPropValue(vm, "IsSaved") ??
+                    (model == null ? null : GetPropValue(model, "IsSaved"));
+                return state is bool saved ? saved : (bool?)null;
             });
         }
 
