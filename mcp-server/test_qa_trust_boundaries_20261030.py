@@ -82,9 +82,13 @@ class QaTrustBoundaryTests(unittest.TestCase):
                                "frame_range": span}], source="audio")
 
     def test_invalid_external_qa_code_rejected(self):
-        for code in (" ", "BAD CODE", "BAD\nCODE", "\ud800", "X" * 129):
+        for code in (" ", "BAD CODE", "BAD\nCODE", "X" * 129):
             with self.subTest(code=repr(code)), self.assertRaisesRegex(ValueError, "invalid QA issue"):
                 self.combine([{"code": code, "severity": "error"}])
+
+    def test_unpaired_surrogate_in_external_code(self):
+        with self.assertRaisesRegex(ValueError, "UTF-8"):
+            self.combine([{"code": "\ud800", "severity": "error"}])
 
     def test_invalid_structural_qa_code_rejected(self):
         report = editing.validate_timeline([], expected=[{"item_id": "missing"}])
