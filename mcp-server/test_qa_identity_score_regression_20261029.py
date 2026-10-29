@@ -40,7 +40,7 @@ class StableTimelineIdentityTests(unittest.TestCase):
 
     def test_invalid_id_does_not_poison_overlap_repair_report(self):
         report = editing.validate_timeline([
-            item("bad\\nidentity", frame=0), item("valid", frame=5)])
+            item("bad\nidentity", frame=0), item("valid", frame=5)])
         self.assertEqual([issue["code"] for issue in report["issues"]],
                          ["INVALID_ITEM_ID", "OVERLAP"])
         self.assertEqual(report["issues"][1]["item_ids"], ["valid"])
