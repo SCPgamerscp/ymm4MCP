@@ -465,6 +465,10 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         # expected_index is stable within a criteria_hash; unlike timeline
         # indices, it is not affected by reordering the host's items.
         stable_context = {}
+        # Scene coverage diagnostics are scoped by a stable configured scene ID.
+        # A gap fixed in scene A must not mask a new gap in scene B.
+        if "scene_id" in issue:
+            stable_context["scene_id"] = issue["scene_id"]
         if "expected_index" in issue:
             stable_context["expected_index"] = issue["expected_index"]
             if "expected" in issue:
