@@ -728,7 +728,8 @@ async def run_bgm_ducking(args: dict) -> dict:
     if (not isinstance(checkpoint, dict) or checkpoint.get("success") is not True or
             "error" in checkpoint or "error_code" in checkpoint or
             not isinstance(backup, str) or backup != backup.strip() or
-            not is_absolute_media_path(backup)):
+            not is_absolute_media_path(backup) or len(backup) > 4096 or
+            not backup.lower().endswith(".ymmp")):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
     try:
         conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
