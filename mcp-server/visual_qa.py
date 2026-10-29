@@ -2,12 +2,22 @@
 
 import base64
 import binascii
+import calendar
 import zlib
 from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
 
 from editing import MAX_FRAME
+
+
+def _valid_png_keyword(keyword: bytes) -> bool:
+    """PNG Latin-1 keyword: 1..79 printable bytes, with no edge/double spaces."""
+    return (1 <= len(keyword) <= 79 and
+            keyword[0] != 32 and keyword[-1] != 32 and
+            b"  " not in keyword and
+            all(32 <= byte <= 126 or 161 <= byte <= 255
+                for byte in keyword))
 
 
 def _validate_png_container(raw: bytes) -> None:
@@ -26,6 +36,9 @@ def _validate_png_container(raw: bytes) -> None:
     idat_payload_bytes = 0
     palette_entries = 0
     seen_trns = seen_bkgd = seen_sbit = seen_hist = False
+    seen_gamma = seen_chrm = seen_srgb = seen_iccp = False
+    seen_phys = seen_time = False
+    splt_names = set()
     while offset < len(raw):
         chunk_count += 1
         if chunk_count > 4096 or len(raw) - offset < 12:
@@ -114,6 +127,62 @@ def _validate_png_container(raw: bytes) -> None:
                     not seen_plte or length != 2 * palette_entries):
                 raise ValueError("invalid PNG palette histogram")
             seen_hist = True
+        if kind == b"gAMA":
+            if (seen_gamma or seen_plte or seen_idat or length != 4 or
+                    not int.from_bytes(payload, "big")):
+                raise ValueError("invalid PNG gamma metadata")
+            seen_gamma = True
+        if kind == b"cHRM":
+            if seen_chrm or seen_plte or seen_idat or length != 32:
+                raise ValueError("invalid PNG chromaticity metadata")
+            seen_chrm = True
+        if kind == b"sRGB":
+            if (seen_srgb or seen_iccp or seen_plte or seen_idat or
+                    length != 1 or payload[0] > 3):
+                raise ValueError("invalid PNG sRGB metadata")
+            seen_srgb = True
+        if kind == b"iCCP":
+            # Do not trust embedded profiles without checking the bounded
+            # compressed payload; malformed ICC data may be ignored by Pillow.
+            keyword, sep, remainder = payload.partition(b"\x00")
+            if (seen_iccp or seen_srgb or seen_plte or seen_idat or
+                    not sep or not _valid_png_keyword(keyword) or
+                    len(remainder) < 2 or remainder[0] != 0):
+                raise ValueError("invalid PNG ICC profile metadata")
+            try:
+                decoder = zlib.decompressobj()
+                profile = decoder.decompress(remainder[1:], 2_000_001)
+                if (len(profile) > 2_000_000 or not decoder.eof or
+                        decoder.unused_data or decoder.unconsumed_tail):
+                    raise ValueError("invalid PNG ICC profile compression")
+            except zlib.error as exc:
+                raise ValueError("invalid PNG ICC profile compression") from exc
+            seen_iccp = True
+        if kind == b"pHYs":
+            if (seen_phys or seen_idat or length != 9 or
+                    payload[8] not in (0, 1)):
+                raise ValueError("invalid PNG physical pixel metadata")
+            seen_phys = True
+        if kind == b"tIME":
+            if seen_time or length != 7:
+                raise ValueError("invalid PNG modification time metadata")
+            year = int.from_bytes(payload[:2], "big")
+            month, day, hour, minute, second = payload[2:]
+            if (not year or not 1 <= month <= 12 or
+                    not 1 <= day <= calendar.monthrange(year, month)[1] or
+                    hour > 23 or minute > 59 or second > 60):
+                raise ValueError("invalid PNG modification time")
+            seen_time = True
+        if kind == b"sPLT":
+            keyword, sep, remainder = payload.partition(b"\x00")
+            if (seen_idat or not sep or not _valid_png_keyword(keyword) or
+                    keyword in splt_names or not remainder or
+                    remainder[0] not in (8, 16)):
+                raise ValueError("invalid PNG suggested palette metadata")
+            entry_size = 6 if remainder[0] == 8 else 10
+            if len(remainder) <= 1 or (len(remainder) - 1) % entry_size:
+                raise ValueError("invalid PNG suggested palette entries")
+            splt_names.add(keyword)
         if kind == b"IDAT":
             if idat_finished:
                 raise ValueError("nonconsecutive PNG IDAT chunks")
