@@ -9,6 +9,7 @@ from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 
 from editing import MAX_FRAME
+from png_scanlines import validate_idat_scanlines
 
 # PNG sRGB requires the standardized gAMA/cHRM values when those chunks exist.
 _SRGB_CHRM = b"".join(value.to_bytes(4, "big") for value in (
@@ -51,6 +52,7 @@ def _validate_png_container(raw: bytes) -> None:
     seen_plte = False
     color_type = bit_depth = None
     idat_payload_bytes = 0
+    idat_chunks = []
     palette_entries = 0
     seen_trns = seen_bkgd = seen_sbit = seen_hist = False
     seen_gamma = seen_chrm = seen_srgb = seen_iccp = False
@@ -88,7 +90,7 @@ def _validate_png_container(raw: bytes) -> None:
                 4: (8, 16),
                 6: (8, 16),
             }
-            if (not width or not height or
+            if (not width or not height or width * height > 32_000_000 or
                     bit_depth not in legal_depths.get(color_type, ()) or
                     compression != 0 or filtering != 0 or interlace not in (0, 1)):
                 raise ValueError("invalid PNG IHDR fields")
@@ -251,6 +253,7 @@ def _validate_png_container(raw: bytes) -> None:
                 raise ValueError("indexed PNG requires PLTE")
             seen_idat = True
             idat_payload_bytes += length
+            idat_chunks.append(payload)
         elif seen_idat:
             idat_finished = True
         if kind == b"IEND":
@@ -261,6 +264,7 @@ def _validate_png_container(raw: bytes) -> None:
         offset = end
     if not seen_iend:
         raise ValueError("PNG is missing IEND")
+    validate_idat_scanlines(idat_chunks, width, height, bit_depth, color_type, interlace)
 
 
 def thumbnail(image_b64: str) -> bytes:
