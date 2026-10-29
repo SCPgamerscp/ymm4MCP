@@ -634,6 +634,12 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_REVISION_UNAVAILABLE"}
     voices = [i for i in snapshot["items"] if isinstance(i, dict) and
               str(i.get("type", "")).lower().endswith("voiceitem")]
+    # Duplicate host IDs make an explicit selection ambiguous and can also
+    # silently double-count an automatic voice selection.
+    voice_ids = [voice.get("item_id") for voice in voices
+                 if isinstance(voice.get("item_id"), str) and voice["item_id"].strip()]
+    if len(voice_ids) != len(set(voice_ids)):
+        return {"success": False, "error_code": "VOICE_ITEM_AMBIGUOUS"}
     selected = args.get("voice_item_ids")
     if selected is not None:
         if (not isinstance(selected, list) or not 1 <= len(selected) <= 500 or
@@ -664,12 +670,15 @@ async def run_bgm_ducking(args: dict) -> dict:
             "error" in state or "error_code" in state or
             state.get("revision") != revision):
         return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
-    animations = [a for a in (state.get("animations") or [])
+    if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
+        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+    animations = [a for a in state["animations"]
                   if isinstance(a, dict) and a.get("prop") == "Volume"]
     if len(animations) != 1 or not isinstance(animations[0].get("keyframes"), list):
         return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
     keys = animations[0]["keyframes"]
-    if len(keys) != 1 or not isinstance(keys[0], dict) or keys[0].get("at") != 0:
+    if (len(keys) != 1 or not isinstance(keys[0], dict) or
+            type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
         return {"success": False, "error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
     points = ducking.plan(bgm, voices, keys[0].get("value"),
                           ratio=args.get("duck_ratio", .3),
@@ -712,6 +721,10 @@ async def run_bgm_ducking(args: dict) -> dict:
                 not isinstance(changed.get("revision"), str) or not changed["revision"]):
             return {"success": False, "error_code": "BGM_DUCKING_PARTIAL",
                     "applied": applied, "details": changed, "backup_path": backup}
+        if changed["revision"] == revision or changed["revision"] != changed["revision"].strip():
+            return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
+                    "applied": applied, "details": changed, "backup_path": backup,
+                    "outcome_unknown": True}
         applied.append(point)
         revision = changed["revision"]
     try:
