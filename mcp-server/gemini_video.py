@@ -607,21 +607,11 @@ def analyze_frames_dir(
                     not audio_path.lower().endswith(".wav") or not os.path.isfile(audio_path)):
                 return {"success": False, "source": "frames_dir",
                         "error": "Requested audio file must be an existing WAV"}
-            audio_snapshot = _file_snapshot(os.stat(audio_path))
-            if audio_snapshot[2] > MAX_AUDIO_BYTES:
+            if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
                 return {"success": False, "error": "Audio exceeds the upload size limit",
                         "source": "frames_dir"}
             with open(audio_path, "rb") as fh:
-                if _file_snapshot(os.fstat(fh.fileno())) != audio_snapshot:
-                    return {"success": False, "source": "frames_dir",
-                            "error": "Requested audio changed before reading"}
                 wav_bytes = fh.read(MAX_AUDIO_BYTES + 1)
-                if _file_snapshot(os.fstat(fh.fileno())) != audio_snapshot:
-                    return {"success": False, "source": "frames_dir",
-                            "error": "Requested audio changed while reading"}
-            if _file_snapshot(os.stat(audio_path)) != audio_snapshot:
-                return {"success": False, "source": "frames_dir",
-                        "error": "Requested audio changed during upload preparation"}
             if (len(wav_bytes) > MAX_AUDIO_BYTES
                     or total_payload_bytes + len(wav_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Audio payload exceeds the upload size limit",
