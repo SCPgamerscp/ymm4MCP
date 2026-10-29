@@ -1,4 +1,5 @@
 """Export and project paths must not target Windows devices or ambiguous files."""
+import os
 import unittest
 
 import jobs
@@ -6,9 +7,11 @@ import jobs
 
 class WindowsJobPathSafetyTests(unittest.TestCase):
     def test_valid_drive_unc_and_posix_paths(self):
-        for path in ("C:/Videos/final.mp4", r"C:\Videos\final.mp4",
-                     r"\\nas\share\final.mp4", r"\\nas\share\dir\final.mp4",
-                     "/tmp/final.mp4"):
+        paths = ("C:/Videos/final.mp4", r"C:\Videos\final.mp4",
+                     r"\\nas\share\final.mp4", r"\\nas\share\dir\final.mp4")
+        if os.name != "nt":
+            paths += ("/tmp/final.mp4",)
+        for path in paths:
             with self.subTest(path=path):
                 self.assertTrue(jobs.is_absolute_media_path(path))
                 self.assertEqual(jobs.validate_export_request({"path": path})["format"], "mp4")
@@ -35,6 +38,16 @@ class WindowsJobPathSafetyTests(unittest.TestCase):
                 self.assertFalse(jobs.is_absolute_media_path(path))
                 with self.assertRaises(ValueError):
                     jobs.validate_export_request({"path": path})
+
+    def test_rejects_reserved_device_stems_with_spaces_before_extension(self):
+        for stem in ("NUL ", "NUL  ", "COM1 ", "COM1  ", "LPT9 ", "CONIN$ "):
+            for prefix in ("C:/Videos/", r"\\\\nas\\share\\"):
+                path = f"{prefix}{stem}.mp4"
+                with self.subTest(path=path):
+                    self.assertFalse(jobs.is_absolute_media_path(path))
+                    with self.assertRaises(ValueError):
+                        jobs.validate_export_request({"path": path})
+        self.assertTrue(jobs.is_absolute_media_path("C:/Videos/normal name.mp4"))
 
     def test_rejects_unicode_superscript_com_lpt_devices(self):
         for stem in ("COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³"):
