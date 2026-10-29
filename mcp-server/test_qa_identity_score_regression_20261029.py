@@ -38,6 +38,14 @@ class StableTimelineIdentityTests(unittest.TestCase):
                 self.assertFalse(report["passed"])
                 self.assertEqual(report["issues"][0]["code"], "INVALID_ITEM_ID")
 
+    def test_invalid_id_does_not_poison_overlap_repair_report(self):
+        report = editing.validate_timeline([
+            item("bad\\nidentity", frame=0), item("valid", frame=5)])
+        self.assertEqual([issue["code"] for issue in report["issues"]],
+                         ["INVALID_ITEM_ID", "OVERLAP"])
+        self.assertEqual(report["issues"][1]["item_ids"], ["valid"])
+        self.assertEqual(editing.evaluate_qa_gate(report)["decision"], "repair")
+
     def test_missing_and_null_ids_are_supported_for_legacy_snapshots(self):
         anonymous = {"frame": 0, "length": 10, "layer": 1}
         null_id = {"item_id": None, "frame": 0, "length": 10, "layer": 2}
