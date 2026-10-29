@@ -73,12 +73,33 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
     return [{"at": at, "value": value} for at, value in sorted(points.items())]
 
 
+def verify_mutation_point(keyframes: list, point: dict) -> bool:
+    """Check a host mutation echo before allowing the next write."""
+    if not isinstance(keyframes, list) or len(keyframes) > 2001:
+        return False
+    matches = [key for key in keyframes if isinstance(key, dict) and
+               type(key.get("at")) is int and key["at"] == point["at"]]
+    if len(matches) != 1:
+        return False
+    try:
+        actual = finite_number(matches[0].get("value"), "keyframe.value")
+        expected = finite_number(point["value"], "keyframe.value")
+    except (ValueError, OverflowError, KeyError):
+        return False
+    return actual > 0 and expected > 0 and math.isclose(
+        actual, expected, rel_tol=1e-9, abs_tol=0.0)
+
+
 def verify_keyframes(report: dict, revision: str, points: list[dict], base_volume: float,
-                     *, expected_item_id: str | None = None) -> bool:
+                     *, expected_item_id: str | None = None,
+                     expected_start_frame: int | None = None) -> bool:
     """Verify the complete curve and, when provided, the host item identity."""
     if (expected_item_id is not None and
             (not valid_identifier(expected_item_id) or
              not isinstance(report, dict) or report.get("item_id") != expected_item_id)):
+        return False
+    if (expected_start_frame is not None and
+            (type(expected_start_frame) is not int or expected_start_frame < 0)):
         return False
     if (not valid_identifier(revision, max_length=256) or
             not isinstance(report, dict) or report.get("success") is not True or
@@ -124,6 +145,10 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             return False
         if (at in seen or at not in expected or value <= 0 or
                 not math.isclose(value, expected[at], rel_tol=1e-9, abs_tol=0.0)):
+            return False
+        if (expected_start_frame is not None and "absolute_frame" in key and
+                (type(key["absolute_frame"]) is not int or
+                 key["absolute_frame"] != expected_start_frame + at)):
             return False
         seen.add(at)
     return True
