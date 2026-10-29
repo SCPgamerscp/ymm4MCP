@@ -666,9 +666,16 @@ namespace YMM4McpPlugin
         private void TryDeleteBackup(string? path)
         {
             if (!EditCheckpointSafety.IsOwnedBackupPath(path, CheckpointBackupDir)) return;
-            // A restored backup can itself be the currently open YMM4 project.
-            // Never prune or clean up the active document's backing file.
-            if (EditCheckpointSafety.SameProject(path, CurrentProjectPath())) return;
+            // A restored backup may be the active document. On shutdown or an
+            // unavailable editor, skip pruning rather than delete blindly.
+            string? activeProject;
+            try { activeProject = CurrentProjectPath(); }
+            catch (Exception ex) when (ex is InvalidOperationException or TaskCanceledException)
+            {
+                return;
+            }
+            if (!EditCheckpointSafety.CanPruneBackup(path, CheckpointBackupDir, activeProject))
+                return;
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
