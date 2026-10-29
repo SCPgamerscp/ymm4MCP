@@ -2,11 +2,58 @@
 
 import base64
 import binascii
+import zlib
 from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
 
 from editing import MAX_FRAME
+
+
+def _validate_png_container(raw: bytes) -> None:
+    """Reject malformed PNG chunks before Pillow discards their metadata.
+
+    Pillow can decode the pixels of a PNG even when an ancillary chunk has a
+    corrupt CRC or arbitrary bytes follow IEND. Neither is a trustworthy
+    single-frame preview from YMM4.
+    """
+    if not raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+        raise ValueError("invalid PNG signature")
+    offset = 8
+    chunk_count = 0
+    seen_ihdr = seen_idat = seen_iend = idat_finished = False
+    while offset < len(raw):
+        chunk_count += 1
+        if chunk_count > 4096 or len(raw) - offset < 12:
+            raise ValueError("invalid PNG chunk count or header")
+        length = int.from_bytes(raw[offset:offset + 4], "big")
+        kind = raw[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if end > len(raw):
+            raise ValueError("truncated PNG chunk")
+        expected_crc = int.from_bytes(raw[offset + 8 + length:end], "big")
+        if zlib.crc32(raw[offset + 4:offset + 8 + length]) != expected_crc:
+            raise ValueError("PNG chunk CRC mismatch")
+        if not seen_ihdr:
+            if kind != b"IHDR" or length != 13:
+                raise ValueError("PNG must begin with IHDR")
+            seen_ihdr = True
+        elif kind == b"IHDR":
+            raise ValueError("duplicate PNG IHDR")
+        if kind == b"IDAT":
+            if idat_finished:
+                raise ValueError("nonconsecutive PNG IDAT chunks")
+            seen_idat = True
+        elif seen_idat:
+            idat_finished = True
+        if kind == b"IEND":
+            if length != 0 or not seen_idat or end != len(raw):
+                raise ValueError("invalid PNG end")
+            seen_iend = True
+            break
+        offset = end
+    if not seen_iend:
+        raise ValueError("PNG is missing IEND")
 
 
 def thumbnail(image_b64: str) -> bytes:
@@ -16,6 +63,7 @@ def thumbnail(image_b64: str) -> bytes:
         raw = base64.b64decode(image_b64, validate=True)
         if len(raw) > 10_000_000:
             raise ValueError("preview image is too large")
+        _validate_png_container(raw)
         with Image.open(BytesIO(raw)) as image:
             if image.format != "PNG" or image.width * image.height > 32_000_000:
                 raise ValueError("preview must be a PNG of at most 32 megapixels")
