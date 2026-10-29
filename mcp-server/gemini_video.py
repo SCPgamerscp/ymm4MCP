@@ -307,7 +307,7 @@ def analyze_frames_dir(
     if event_instruction is not None and (
             not isinstance(event_instruction, str)
             or len(event_instruction) > 32_768
-            or any(0xD800 <= ord(ch) <= 0xDFFF or ch == "\\x00"
+            or any(0xD800 <= ord(ch) <= 0xDFFF or ord(ch) == 0
                    for ch in event_instruction)):
         return {"success": False, "source": "frames_dir",
                 "error": "event_instruction must be valid text of at most 32768 characters"}
