@@ -37,6 +37,20 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
             with self.subTest(start=start, end=end), self.assertRaises(ValueError):
                 with_coverage({"scenes": [scene(start=start, end=end)]})
 
+    def test_missing_scene_frame_fields_raise_validation_error(self):
+        for missing in ("start_frame", "end_frame"):
+            bad = scene()
+            del bad[missing]
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                with_coverage({"scenes": [bad]})
+
+    def test_missing_known_item_visible_fields_raise_validation_error(self):
+        for missing in ("visible_start_frame", "visible_end_frame"):
+            bad = video()
+            del bad[missing]
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                with_coverage({"scenes": [scene([bad])]})
+
     def test_rejects_missing_or_invalid_scene_item_array(self):
         for invalid in (None, {}, "items", 5):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
