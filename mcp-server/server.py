@@ -750,12 +750,23 @@ async def run_bgm_ducking(args: dict) -> dict:
             not is_absolute_media_path(backup) or len(backup) > 4096 or
             not backup.lower().endswith(".ymmp")):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
+    # A backup that aliases the active project is not a recoverable copy.
+    active_path = project.get("projectPath")
+    if (isinstance(active_path, str) and active_path and
+            _same_project_path(backup, active_path)):
+        return {"success": False, "error_code": "BGM_BACKUP_REQUIRED",
+                "details": checkpoint}
     try:
         conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
     except Exception as exc:
         return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN",
                 "error": str(exc), "backup_path": backup, "applied": []}
     if conflict is not None:
+        if (not isinstance(conflict, dict) or
+                not isinstance(conflict.get("error_code"), str) or
+                not conflict["error_code"]):
+            return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN",
+                    "backup_path": backup, "applied": [], "outcome_unknown": True}
         return {**conflict, "error_code": "BGM_DUCKING_" + conflict["error_code"],
                 "applied": [], "backup_path": backup}
     applied = []
