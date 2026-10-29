@@ -77,7 +77,13 @@ class PNGAncillaryIntegrityTests(unittest.TestCase):
 
     def test_reject_background_bad_length_or_palette_index(self):
         self.invalid(insert(png(), b"bKGD", b"\x00"))
-        self.invalid(insert(png("P"), b"bKGD", b"\xff"))
+        # Pillow normally writes a 256-entry palette: index 255 is valid.
+        # Reduce the PLTE to two entries to exercise an out-of-range index.
+        indexed = png("P")
+        small_palette = indexed[:8] + b"".join(
+            chunk(kind, data[:6] if kind == b"PLTE" else data)
+            for kind, data in chunks(indexed))
+        self.invalid(insert(small_palette, b"bKGD", b"\x02"))
         self.invalid(insert(png("L"), b"bKGD", b"\x01\x00"))
 
     def test_reject_duplicate_and_late_background(self):
