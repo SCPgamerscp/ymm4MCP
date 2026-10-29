@@ -137,6 +137,19 @@ Check(!EditCheckpointSafety.SameProject("C:\\one.ymmp", "C:\\two.ymmp"),
 Check(EditCheckpointSafety.SameProject("C:\\one.ymmp", "C:\\ONE.ymmp"),
     "Windows project path comparison should be case-insensitive");
 
+// A checkpoint backup is only valid while the same project remains saved.
+// A project switch or an edit during the copy must invalidate the backup.
+Check(EditCheckpointSafety.IsStableSavedProject("C:\\video\\one.ymmp",
+        "C:\\VIDEO\\ONE.ymmp", true), "stable saved project rejected");
+Check(!EditCheckpointSafety.IsStableSavedProject("C:\\video\\one.ymmp",
+        "C:\\video\\two.ymmp", true), "project switch accepted during backup");
+Check(!EditCheckpointSafety.IsStableSavedProject("C:\\video\\one.ymmp",
+        "C:\\video\\one.ymmp", false), "unsaved edit accepted during backup");
+Check(!EditCheckpointSafety.IsStableSavedProject("C:\\video\\one.ymmp",
+        "C:\\video\\one.ymmp", null), "unknown save state accepted during backup");
+Check(!EditCheckpointSafety.IsStableSavedProject("C:\\video\\one.ymmp",
+        null, true), "unknown project accepted during backup");
+
 string ownedDir = Path.Combine(Path.GetTempPath(), "ymm4-owned-backups");
 Check(EditCheckpointSafety.IsOwnedBackupPath(Path.Combine(ownedDir, "cp_12345678.ymmp"), ownedDir),
     "owned checkpoint backup rejected");
