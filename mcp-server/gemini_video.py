@@ -321,6 +321,11 @@ def analyze_frames_dir(
         if len({e["file"] for e in entries}) != len(entries):
             return {"success": False, "source": "frames_dir",
                     "error": "frames_meta contains duplicate PNG filenames"}
+        # Captures are produced by YMM4 on Windows. Case-only aliases can
+        # resolve to the same file there even if tests run on a POSIX host.
+        if len({e["file"].casefold() for e in entries}) != len(entries):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta contains case-insensitive duplicate PNG filenames"}
         # The YMM4 exporter numbers captures from zero. An incomplete or
         # duplicated index sequence can conceal missing frames even when all
         # remaining filenames and timestamps look valid.
@@ -337,6 +342,12 @@ def analyze_frames_dir(
                    for e in entries for axis in ("width", "height")):
                 return {"success": False, "source": "frames_dir",
                         "error": "frames_meta contains invalid capture dimensions"}
+            # A single export-clip capture has one fixed preview size.
+            # Mixing dimensions means the capture changed mid-export and
+            # cannot be treated as a consistent video QA sample.
+            if len({(e["width"], e["height"]) for e in entries}) != 1:
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains inconsistent capture dimensions"}
         time_present = ["timeMs" in e for e in entries]
         frame_present = ["frame" in e for e in entries]
         has_time = [_valid_time_ms(e.get("timeMs")) for e in entries]
@@ -353,6 +364,13 @@ def analyze_frames_dir(
             entries.sort(key=lambda e: e["frame"])
         else:
             entries.sort(key=lambda e: _frame_filename_key(e["file"]))
+        # The exporter's capture index is chronological. Even individually
+        # valid indices must agree with the timestamp/frame sequence.
+        if (len(entries) > 1 and all("index" in e for e in entries)
+                and (all(has_time) or all(has_frame))
+                and [e["index"] for e in entries] != list(range(len(entries)))):
+            return {"success": False, "source": "frames_dir",
+                    "error": "frames_meta capture indices conflict with chronological order"}
         # Timestamp order and frame order must agree when both are supplied.
         if len(entries) > 1:
             if all(has_time) and any(entries[i]["timeMs"] <= entries[i - 1]["timeMs"]
@@ -388,6 +406,7 @@ def analyze_frames_dir(
     # Check the complete capture before downsampling, even without explicit
     # metadata. A broken unselected PNG must not yield a successful QA result.
     seen_capture_paths = set()
+    seen_capture_file_ids = set()
     for e in entries:
         path = _safe_frame_path(frames_dir, e["file"])
         if path is None:
@@ -402,10 +421,19 @@ def analyze_frames_dir(
                         "error": "frames_meta contains duplicate resolved PNG frames"}
             seen_capture_paths.add(canonical)
         try:
-            size = os.path.getsize(path)
+            info = os.stat(path)
         except OSError as exc:
             return {"success": False, "source": "frames_dir",
                     "error": f"Cannot inspect PNG frame: {exc}"}
+        # Different hardlink names have different resolved paths but the
+        # same file identity. They must not count as independent captures.
+        if frames_meta is not None and info.st_ino:
+            file_id = (info.st_dev, info.st_ino)
+            if file_id in seen_capture_file_ids:
+                return {"success": False, "source": "frames_dir",
+                        "error": "frames_meta contains duplicate physical PNG frames"}
+            seen_capture_file_ids.add(file_id)
+        size = info.st_size
         if size == 0:
             return {"success": False, "source": "frames_dir",
                     "error": "PNG frame is empty"}
