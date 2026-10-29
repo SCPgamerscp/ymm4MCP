@@ -149,11 +149,24 @@ namespace YMM4McpPlugin
                         "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
                 // Capture observable state before invoking reflection-based
                 // native methods. They can partially mutate then return false.
-                var framesBefore = ReadFrameList(anim);
-                var valuesBefore = ReadValueList(anim);
+                List<int> framesBefore;
+                List<double> valuesBefore;
+                try
+                {
+                    framesBefore = ReadFrameList(anim);
+                    valuesBefore = ReadValueList(anim);
+                }
+                catch (Exception)
+                {
+                    // No native edit has started. Never mutate an animation
+                    // whose initial state cannot be represented faithfully.
+                    return Failure("KEYFRAME_READBACK_INVALID",
+                        "変更前のAnimationに読取不能なFrames/Valuesがあります。編集せず中止しました");
+                }
                 bool changed;
                 List<int> framesAfter;
                 List<double> valuesAfter;
+                double? defaultAfter;
                 try
                 {
                     if (action == "clear")
@@ -165,6 +178,9 @@ namespace YMM4McpPlugin
                     // Both readbacks must succeed before a native result is trusted.
                     framesAfter = ReadFrameList(anim);
                     valuesAfter = ReadValueList(anim);
+                    // A throwing default getter must invalidate the revision
+                    // too: it executes after the host has already mutated.
+                    defaultAfter = action == "set" ? TryGetDefaultValue(anim) : null;
                 }
                 catch (Exception)
                 {
@@ -194,7 +210,7 @@ namespace YMM4McpPlugin
                 // host may have been partially mutated despite the mismatch.
                 if (!KeyframeMutationVerification.Confirm(
                         action, relativeFrame, value, framesAfter,
-                        valuesAfter, TryGetDefaultValue(anim)) ||
+                        valuesAfter, defaultAfter) ||
                     !KeyframeMutationVerification.PreservesUnrelatedKeys(
                         action, relativeFrame, framesBefore, valuesBefore,
                         framesAfter, valuesAfter))
@@ -352,36 +368,22 @@ namespace YMM4McpPlugin
         private static List<int> ReadFrameList(object anim)
         {
             var keyFrames = GetPropObj(anim, "KeyFrames") ?? anim;
-            var framesObj = GetPropObj(keyFrames, "Frames") ?? GetPropObj(keyFrames, "FrameList") ?? GetPropEnum(keyFrames, "Frames");
-            var list = new List<int>();
-            if (framesObj is IEnumerable enumerable && framesObj is not string)
-            {
-                foreach (var x in enumerable)
-                {
-                    if (x == null) continue;
-                    if (int.TryParse(Convert.ToString(x, CultureInfo.InvariantCulture), out int frame) && frame >= 0)
-                        list.Add(frame);
-                }
-            }
-            return list;
+            var framesObj = GetPropObj(keyFrames, "Frames") ??
+                GetPropObj(keyFrames, "FrameList") ?? GetPropEnum(keyFrames, "Frames");
+            if (framesObj == null) return new List<int>();
+            if (framesObj is not IEnumerable enumerable || framesObj is string)
+                throw new InvalidOperationException("Animation Frames is not enumerable");
+            return KeyframeMutationVerification.ParseObservedFrames(enumerable);
         }
 
         private static List<double> ReadValueList(object anim)
         {
             var valuesObj = GetPropObj(anim, "Values") ?? GetPropEnum(anim, "Values");
-            var list = new List<double>();
-            if (valuesObj is IEnumerable enumerable && valuesObj is not string)
-            {
-                foreach (var x in enumerable)
-                {
-                    if (x == null) continue;
-                    var inner = GetPropObj(x, "Value") ?? x;
-                    if (double.TryParse(Convert.ToString(inner, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
-                        && double.IsFinite(value))
-                        list.Add(value);
-                }
-            }
-            return list;
+            if (valuesObj == null) return new List<double>();
+            if (valuesObj is not IEnumerable enumerable || valuesObj is string)
+                throw new InvalidOperationException("Animation Values is not enumerable");
+            return KeyframeMutationVerification.ParseObservedValues(
+                enumerable, entry => GetPropObj(entry, "Value") ?? entry);
         }
 
         private static double? TryGetDefaultValue(object anim)
