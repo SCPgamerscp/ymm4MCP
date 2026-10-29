@@ -158,6 +158,16 @@ class CompositeIntegrityTests(unittest.TestCase):
                 "visual": {"success": True, "passed": False, "issues": [
                     {"code": "OUTSIDE", "severity": "error", "item_ids": ["bad\x00id"]}]}}, {})
 
+    def test_missing_check_criteria_cannot_reuse_wrong_history(self):
+        with self.assertRaisesRegex(ValueError, "criteria"):
+            editing.combine_qa_reports(self.structural, {
+                "visual": {"success": True, "passed": True, "issues": []}}, {})
+
+    def test_unused_check_criteria_cannot_reuse_wrong_history(self):
+        with self.assertRaisesRegex(ValueError, "criteria"):
+            editing.combine_qa_reports(self.structural, {},
+                                       {"audio": {"path": "C:/audio.wav"}})
+
     def test_valid_composite_still_passes(self):
         result = editing.combine_qa_reports(self.structural, {
             "visual": {"success": True, "passed": True, "issues": []}}, {"visual": {"end_frame": 30}})
