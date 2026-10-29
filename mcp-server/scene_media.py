@@ -57,6 +57,28 @@ def with_coverage(index: dict) -> dict:
         items = scene.get("items")
         if not isinstance(items, list) or len(items) > MAX_SCENE_ITEMS:
             raise ValueError("scene items must be a bounded array")
+        item_ids = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("scene item must be an object")
+            if "item_id" in item:
+                identity = item["item_id"]
+                if (not isinstance(identity, str) or not identity.strip() or
+                        len(identity) > 256 or identity in item_ids):
+                    raise ValueError("scene item IDs must be distinct nonempty strings")
+                item_ids.add(identity)
+            if "frame" in item or "end_frame" in item:
+                frame, source_end = item.get("frame"), item.get("end_frame")
+                if (type(frame) is not int or type(source_end) is not int or
+                        frame < 0 or source_end <= frame or source_end > MAX_FRAME):
+                    raise ValueError("scene source item range is invalid")
+                visible_start = item.get("visible_start_frame")
+                visible_end = item.get("visible_end_frame")
+                start, end = _scene_range(scene)
+                if (visible_start != max(start, frame) or
+                        visible_end != min(end, source_end) or
+                        type(visible_start) is not int or type(visible_end) is not int):
+                    raise ValueError("scene visible range contradicts source item")
         if "item_count" in scene and (type(scene["item_count"]) is not int or
                                        scene["item_count"] != len(items)):
             raise ValueError("scene item_count does not match item evidence")
