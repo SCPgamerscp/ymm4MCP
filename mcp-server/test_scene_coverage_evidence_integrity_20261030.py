@@ -86,7 +86,7 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
                     ValueError, "scene IDs"):
                 with_coverage({"scenes": [scene(id=invalid)]})
         with self.assertRaisesRegex(ValueError, "scene IDs"):
-            with_coverage({"scenes": [scene(id="intro"), scene(id="intro")]})
+            with_coverage({"scenes": [scene(id="intro"), scene(start=20, end=40, id="intro")]})
 
     def test_malformed_type_qualifiers_cannot_hide_gaps(self):
         for kind in ("Other..VideoItem", ".VideoItem", "Other+.VideoItem",
@@ -152,7 +152,7 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
 
     def test_later_invalid_scene_does_not_mutate_earlier_scene(self):
         index = {"scenes": [scene([video()], id="first"),
-                            scene([video()], id="first")]}
+                            scene([video()], start=20, end=40, id="first")]}
         original = copy.deepcopy(index)
         with self.assertRaises(ValueError):
             with_coverage(index)
