@@ -293,6 +293,13 @@ def thumbnail(image_b64: str) -> bytes:
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("preview must contain exactly one PNG frame")
             image.load()
+            # Pillow can silently map an out-of-range palette index to black
+            # when converting to RGB. Never let a missing color masquerade as
+            # a genuine dark pixel in visual QA.
+            if image.mode == "P":
+                palette = image.getpalette()
+                if not palette or image.getextrema()[1] >= len(palette) // 3:
+                    raise ValueError("indexed PNG references an absent palette color")
             # Alpha is not represented in RGB thumbnails. Discarding it can
             # turn an invisible black/white pixel into a false QA observation.
             # Reject partially transparent captures instead of guessing which
