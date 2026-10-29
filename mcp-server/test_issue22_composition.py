@@ -1,7 +1,7 @@
 """Regression contract for Issue #22/#140 composed PR CI.
 
-A queued pull_request check must test the #228 head SHA from its event, not a
-newer revision fetched from the moving refs/pull/228/head. Manual dispatches
+A queued pull_request check must test the triggering PR head SHA from its event,
+not a newer revision fetched from the moving refs/pull/<number>/head. Manual dispatches
 are allowed to compose the latest available heads.
 """
 from pathlib import Path
@@ -22,15 +22,16 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
 
     def test_pull_request_uses_triggering_head_sha(self):
         self.assertIn(
-            "EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}",
+            "EVENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}",
+            self.source,
+        )
+        self.assertIn("EVENT_PR_NUMBER: ${{ github.event.pull_request.number || '' }}", self.source)
+        self.assertIn(
+            'if [[ "$number" == "$EVENT_PR_NUMBER" && -n "$EVENT_PR_HEAD_SHA" ]]; then',
             self.source,
         )
         self.assertIn(
-            'if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then',
-            self.source,
-        )
-        self.assertIn(
-            'git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"',
+            'git fetch --no-tags origin "$EVENT_PR_HEAD_SHA:refs/remotes/pr/${number}"',
             self.source,
         )
 
@@ -158,20 +159,21 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         self.assertNotIn("git push", self.source)
 
     def test_all_open_pr_audit_pins_the_triggering_pr_head(self):
-        # The 15-PR suite already pins PR #228 to the event SHA. The 50-PR
-        # audit must not silently test a newer #228 revision if it is pushed
+        # The curated suite already pins the triggering PR to the event SHA. The 50-PR
+        # audit must not silently test a newer triggering PR revision if it is pushed
         # after the run starts, or the two green jobs prove different code.
         audit = self.source.split(
             "  audit-open-pr-merge-compatibility:", 1
         )[1].split("  all-open-prs-python-integration:", 1)[0]
         self.assertIn(
-            "EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}",
+            "EVENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}",
             audit,
         )
-        self.assertIn('if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then',
+        self.assertIn("EVENT_PR_NUMBER: ${{ github.event.pull_request.number || '' }}", audit)
+        self.assertIn('if [[ "$number" == "$EVENT_PR_NUMBER" && -n "$EVENT_PR_HEAD_SHA" ]]; then',
                       audit)
         self.assertIn(
-            'refspec="${EVENT_PR_228_HEAD_SHA}:refs/remotes/audit-pr/${number}"',
+            'refspec="${EVENT_PR_HEAD_SHA}:refs/remotes/audit-pr/${number}"',
             audit,
         )
         self.assertIn('git fetch --no-tags origin "$refspec"', audit)
