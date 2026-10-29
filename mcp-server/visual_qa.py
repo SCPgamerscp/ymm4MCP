@@ -10,6 +10,10 @@ from PIL import Image, UnidentifiedImageError
 
 from editing import MAX_FRAME
 
+# PNG sRGB requires the standardized gAMA/cHRM values when those chunks exist.
+_SRGB_CHRM = b"".join(value.to_bytes(4, "big") for value in (
+    31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000))
+
 
 def _inflate_png_metadata(data: bytes, limit: int = 2_000_000) -> bytes:
     """Decode ancillary zlib streams without accepting bombs or trailing bytes."""
@@ -51,6 +55,7 @@ def _validate_png_container(raw: bytes) -> None:
     seen_trns = seen_bkgd = seen_sbit = seen_hist = False
     seen_gamma = seen_chrm = seen_srgb = seen_iccp = False
     seen_phys = seen_time = False
+    gamma_value = chromaticity = None
     splt_names = set()
     # Bound the aggregate *expanded* metadata, not just each compressed chunk.
     # Many individually small zTXt/iTXt/iCCP chunks can otherwise expand to
@@ -146,17 +151,23 @@ def _validate_png_container(raw: bytes) -> None:
                 raise ValueError("invalid PNG palette histogram")
             seen_hist = True
         if kind == b"gAMA":
+            value = int.from_bytes(payload, "big")
             if (seen_gamma or seen_plte or seen_idat or length != 4 or
-                    not int.from_bytes(payload, "big")):
+                    not value or (seen_srgb and value != 45455)):
                 raise ValueError("invalid PNG gamma metadata")
+            gamma_value = value
             seen_gamma = True
         if kind == b"cHRM":
-            if seen_chrm or seen_plte or seen_idat or length != 32:
+            if (seen_chrm or seen_plte or seen_idat or length != 32 or
+                    (seen_srgb and payload != _SRGB_CHRM)):
                 raise ValueError("invalid PNG chromaticity metadata")
+            chromaticity = payload
             seen_chrm = True
         if kind == b"sRGB":
             if (seen_srgb or seen_iccp or seen_plte or seen_idat or
-                    length != 1 or payload[0] > 3):
+                    length != 1 or payload[0] > 3 or
+                    (gamma_value is not None and gamma_value != 45455) or
+                    (chromaticity is not None and chromaticity != _SRGB_CHRM)):
                 raise ValueError("invalid PNG sRGB metadata")
             seen_srgb = True
         if kind == b"iCCP":
