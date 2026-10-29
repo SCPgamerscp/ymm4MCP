@@ -117,6 +117,29 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_code"], "BGM_KEYFRAMES_UNAVAILABLE")
         post.assert_not_awaited()
 
+    async def test_initial_baseline_absolute_frame_mismatch_is_rejected(self):
+        for absolute in (1, False, "0"):
+            wrong = {**KEYS, "animations": [
+                {"prop": "Volume", "keyframes": [
+                    {"at": 0, "value": 100.0, "absolute_frame": absolute}]}]}
+            with (self.subTest(absolute=repr(absolute)),
+                  patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, wrong])),
+                  patch.object(server, "ymm4_post", new_callable=AsyncMock) as post):
+                result = await server.dispatch({
+                    "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+            self.assertEqual(result["error_code"], "BGM_VOLUME_UNSUPPORTED")
+            post.assert_not_awaited()
+
+    async def test_initial_baseline_absolute_frame_matches_bgm(self):
+        state = {**KEYS, "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 100.0, "absolute_frame": 0}]}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, state])):
+            result = await server.dispatch({
+                "action": "duck_bgm", "bgm_item_id": "bgm:1"})
+        self.assertTrue(result["success"])
+        self.assertTrue(result["dry_run"])
+
     async def _apply(self, mutation_responses, *, final_readback=None):
         gets = [ITEMS, KEYS, {"success": True, "isSaved": True}]
         if final_readback is not None:
