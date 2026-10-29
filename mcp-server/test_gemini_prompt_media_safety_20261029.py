@@ -76,8 +76,13 @@ class GeminiPromptSafetyTests(unittest.TestCase):
 
     def test_audio_present_prompt_does_not_warn_audio_missing(self):
         audio = self.root / "audio.wav"
-        # A minimal RIFF/WAVE envelope sufficient for this prompt-path test.
-        audio.write_bytes(b"RIFF" + (4).to_bytes(4, "little") + b"WAVE")
+        # A minimal but complete WAV capture: fmt + one 16-bit sample.
+        import wave
+        with wave.open(str(audio), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(8000)
+            wav.writeframes(b"\x00\x00")
         prompt = self._run_frames(str(audio))
         self.assertIn("その区間の音声です", prompt)
         self.assertNotIn("音声データは提供されていません", prompt)
