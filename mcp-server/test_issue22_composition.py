@@ -47,7 +47,7 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         # The export QA branch modifies the same packaging workflow as #228;
         # composing it is required before claiming release integration passed.
         # This order must match the numeric all-open-PR merge audit.
-        match = re.search(r"for number in ((?:\\d+\\s+)*\\d+); do", self.source)
+        match = re.search(r"for number in ((?:\d+\s+)*\d+); do", self.source)
         self.assertIsNotNone(match, "Curated PR merge loop missing")
         numbers = [int(value) for value in match.group(1).split()]
         self.assertEqual(numbers, sorted(set(numbers)))
