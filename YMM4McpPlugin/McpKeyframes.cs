@@ -194,7 +194,10 @@ namespace YMM4McpPlugin
                 // host may have been partially mutated despite the mismatch.
                 if (!KeyframeMutationVerification.Confirm(
                         action, relativeFrame, value, framesAfter,
-                        valuesAfter, TryGetDefaultValue(anim)))
+                        valuesAfter, TryGetDefaultValue(anim)) ||
+                    !KeyframeMutationVerification.PreservesUnrelatedKeys(
+                        action, relativeFrame, framesBefore, valuesBefore,
+                        framesAfter, valuesAfter))
                 {
                     MarkItemChanged(item);
                     return Failure("KEYFRAME_READBACK_MISMATCH",
