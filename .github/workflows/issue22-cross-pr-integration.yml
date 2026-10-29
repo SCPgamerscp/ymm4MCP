@@ -186,7 +186,7 @@ jobs:
     # hand-picked 15-PR release composition. No remote ref is ever updated.
     # A conflicting PR is skipped so the remaining PRs can still be checked;
     # the summary explicitly states this is NOT a guarantee of mergeability.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 259
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
