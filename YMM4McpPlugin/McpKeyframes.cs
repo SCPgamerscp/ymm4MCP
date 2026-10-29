@@ -129,8 +129,9 @@ namespace YMM4McpPlugin
                 if (KeyframeHostBinding.HasConflictingBinding(item, anim))
                     return Failure("KEYFRAME_BINDING_CONFLICT",
                         "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
-                if (action == "set" && relativeFrame > 0)
-                    KeyframeHostBinding.TryBind(item, anim);
+                if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
+                    return Failure("KEYFRAME_BINDING_UNAVAILABLE",
+                        "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
                 bool changed;
                 if (action == "clear")
                     changed = ClearKeyframes(anim);
