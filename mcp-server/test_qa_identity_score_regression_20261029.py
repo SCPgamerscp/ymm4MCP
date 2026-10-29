@@ -65,7 +65,7 @@ class StableTimelineIdentityTests(unittest.TestCase):
 
     def test_malformed_timing_and_id_are_both_reported(self):
         report = editing.validate_timeline([
-            {**item("bad\\nidentifier"), "length": 0}])
+            {**item("bad\nidentifier"), "length": 0}])
         self.assertEqual(
             sorted(issue["code"] for issue in report["issues"]),
             ["INVALID_ITEM", "INVALID_ITEM_ID"])
