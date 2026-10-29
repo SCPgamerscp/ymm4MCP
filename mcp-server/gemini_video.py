@@ -707,6 +707,7 @@ def analyze_frames_dir(
             prompt += (
                 "\n\n重要: 音声データがないため、BGM・効果音・声・無音などの"
                 "音響イベントを観測したと推測して報告しないでください。"
+                "全イベントの audio は必ず null とし、type に sound を使わないこと。"
             )
         contents.append(genai_types.Part.from_text(text=prompt))
 
