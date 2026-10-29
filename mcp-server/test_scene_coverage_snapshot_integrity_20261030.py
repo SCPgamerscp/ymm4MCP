@@ -132,5 +132,39 @@ class SceneCoverageSnapshotIntegrityTests(unittest.TestCase):
         self.assertEqual(index, before)
 
 
+    def test_cross_scene_identity_rejects_changed_source_span(self):
+        first = video(identity="shared", frame=0, end=30,
+                      visible_end_frame=20)
+        second = {**first, "end_frame": 31, "visible_start_frame": 20,
+                  "visible_end_frame": 30}
+        with self.assertRaisesRegex(ValueError, "conflicting source evidence"):
+            with_coverage({"scenes": [scene(0, 20, [first]),
+                                      scene(20, 30, [second])]})
+
+    def test_cross_scene_identity_rejects_changed_type_or_layer(self):
+        first = video(identity="shared", frame=0, end=30,
+                      visible_end_frame=20, layer=1)
+        for change in ({"type": "AudioItem"}, {"layer": 2}):
+            second = {**first, "visible_start_frame": 20,
+                      "visible_end_frame": 30, **change}
+            with self.subTest(change=change), self.assertRaisesRegex(
+                    ValueError, "conflicting source evidence"):
+                with_coverage({"scenes": [scene(0, 20, [first]),
+                                          scene(20, 30, [second])]})
+
+    def test_layer_metadata_requires_integer_or_none(self):
+        for bad in (True, 1.5, "1", []):
+            with self.subTest(bad=bad), self.assertRaisesRegex(
+                    ValueError, "item layer"):
+                with_coverage({"scenes": [scene(items=[video(layer=bad)])]})
+        with_coverage({"scenes": [scene(items=[video(layer=None)])]})
+
+    def test_relative_evidence_cannot_escape_scene_bounds(self):
+        item = {"type": "VideoItem", "visible_start_frame": -5,
+                "visible_end_frame": 20, "relative_start_frame": -5,
+                "relative_end_frame": 20}
+        with self.assertRaisesRegex(ValueError, "relative item range"):
+            with_coverage({"scenes": [scene(items=[item])]})
+
 if __name__ == "__main__":
     unittest.main()
