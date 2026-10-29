@@ -101,6 +101,19 @@ class HostBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["dry_run"])
         self.assertGreater(len(result["keyframes"]), 1)
 
+    async def test_backup_must_be_a_bounded_project_file(self):
+        for backup in ("C:/backup/not-a-project.txt", "C:/backup/file.ymmp:stream",
+                       "C:/backup/" + "x" * 4096 + ".ymmp"):
+            with (self.subTest(backup=backup[:50]),
+                  patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                      ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                  patch.object(server, "ymm4_post", AsyncMock(return_value={
+                      "success": True, "backup_path": backup})) as post):
+                result = await server.dispatch({"action": "duck_bgm",
+                                                "bgm_item_id": "bgm:1", "dry_run": False})
+                self.assertEqual(result["error_code"], "BGM_BACKUP_REQUIRED")
+                self.assertEqual(post.await_count, 1)
+
     async def _attempt_mutation(self, response):
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[
                   ITEMS, KEYS, {"success": True, "isSaved": True}])),
