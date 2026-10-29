@@ -163,10 +163,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
              251, 254, 255, 257, 259, 260}.issubset(set(numbers)),
             "Do not omit setup, keyframe, export-QA or job-snapshot integration PRs",
         )
-        # The event's PR #228 revision must remain pinned, not a moving head.
-        self.assertIn("EVENT_PR_228_HEAD_SHA", composed)
+        # The triggering PR revision must remain pinned, not a moving head.
+        self.assertIn("EVENT_PR_HEAD_SHA", composed)
         self.assertIn(
-            'git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"',
+            'git fetch --no-tags origin "$EVENT_PR_HEAD_SHA:refs/remotes/pr/${number}"',
             composed,
         )
 
