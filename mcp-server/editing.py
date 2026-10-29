@@ -27,11 +27,17 @@ def _bounded_qa_issues(issues):
 def _require_json_safe_issues(issues, source):
     """Reject non-JSON and non-finite evidence before storing QA history."""
     try:
-        json.dumps(issues, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{source} issues must contain JSON-safe finite values") from exc
+        json.dumps(issues, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, OverflowError, UnicodeError) as exc:
+        raise ValueError(f"{source} issues must contain JSON-safe finite UTF-8 values") from exc
 
 
+
+
+def _valid_qa_code(value):
+    """Machine-readable QA codes must be bounded printable ASCII tokens."""
+    return (isinstance(value, str) and 1 <= len(value) <= 128 and
+            all(33 <= ord(char) <= 126 for char in value))
 
 
 def integer(value, name, minimum=0, maximum=MAX_FRAME):
@@ -48,9 +54,14 @@ def finite_number(value, name):
             value = float(value)
         except ValueError as exc:
             raise ValueError(f"{name} must be a finite number") from exc
-    if not isinstance(value, (int, float)) or not math.isfinite(value):
+    if not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite number")
-    return float(value)
+    try:
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite number")
+        return float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
 
 
 def plan_script(args):
@@ -59,7 +70,7 @@ def plan_script(args):
         raise ValueError("lines must contain 1..500 dialogue entries")
     fps = integer(args.get("fps", 30), "fps", 1, 240)
     speed = args.get("chars_per_sec", 5)
-    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or not 0 < speed <= 1000:
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0 < speed <= 1000 or not math.isfinite(speed):
         raise ValueError("chars_per_sec must be finite and in (0, 1000]")
     frame = integer(args.get("start_frame", 0), "start_frame")
     gap = integer(args.get("gap", 0), "gap")
@@ -106,7 +117,8 @@ def plan_script(args):
 def _valid_item_id(value):
     """Only usable host IDs may be referenced in repair suggestions."""
     return (isinstance(value, str) and bool(value.strip()) and
-            not any(ord(char) < 32 or ord(char) == 127 for char in value))
+            not any(ord(char) < 32 or ord(char) == 127 or
+                    0xD800 <= ord(char) <= 0xDFFF for char in value))
 
 
 def _item_ids(items, indices):
@@ -287,6 +299,11 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                 elif not isinstance(value, str) or (key != "text" and not value.strip()) or (
                         key in ("id", "item_id") and not _valid_item_id(value)):
                     raise ValueError(f"expected[{index}].{key} must be a valid string")
+                if isinstance(value, str):
+                    try:
+                        value.encode("utf-8")
+                    except UnicodeError as exc:
+                        raise ValueError(f"expected[{index}].{key} must be valid UTF-8") from exc
             selector = dict(wanted)
             if "id" in selector:
                 legacy_id = selector.pop("id")
@@ -361,7 +378,7 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         has_errors = False
         errors = warnings = 0
         for issue in report["issues"]:
-            if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"]:
+            if not isinstance(issue, dict) or not _valid_qa_code(issue.get("code")):
                 raise ValueError("validate report issues require a code")
             if issue.get("severity") not in ("error", "warning"):
                 raise ValueError("validate report issues require error or warning severity")
@@ -494,6 +511,8 @@ def combine_qa_reports(structural, checks, criteria):
     """Fold freshly run quality checks into the existing gate's score and history scope."""
     if not isinstance(checks, dict) or not isinstance(criteria, dict):
         raise ValueError("QA checks and criteria must be objects")
+    if isinstance(structural, dict) and "checks" in structural:
+        raise ValueError("structural QA must be a raw timeline report, not a composite QA report")
     # Never launder a forged structural result into a passing composite report.
     evaluate_qa_gate(structural)
     problems = list(structural["issues"])
@@ -507,8 +526,8 @@ def combine_qa_reports(structural, checks, criteria):
             raise ValueError(f"{source} did not return a complete QA report")
         _require_json_safe_issues(report["issues"], f"{source} QA")
         for issue in report["issues"]:
-            if (not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or
-                    not issue["code"] or issue.get("severity") not in ("error", "warning") or
+            if (not isinstance(issue, dict) or not _valid_qa_code(issue.get("code")) or
+                    issue.get("severity") not in ("error", "warning") or
                     ("item_ids" in issue and (not isinstance(issue["item_ids"], list) or
                      any(not _valid_item_id(identity) for identity in issue["item_ids"])))):
                 raise ValueError(f"{source} returned an invalid QA issue")
@@ -517,9 +536,24 @@ def combine_qa_reports(structural, checks, criteria):
                     type(issue.get("omitted_count")) is not int or
                     issue["omitted_count"] <= 0):
                 raise ValueError(f"{source} returned an invalid QA truncation marker")
+            if "frame_range" in issue:
+                span = issue["frame_range"]
+                if (not isinstance(span, list) or len(span) != 2 or
+                        type(span[0]) is not int or type(span[1]) is not int or
+                        not 0 <= span[0] < span[1] <= MAX_FRAME):
+                    raise ValueError(f"{source} returned an invalid QA frame_range")
             normalized = {**issue, "source": source}
-            if source == "visual" and "start_frame" in issue and "end_frame" in issue:
-                normalized["frame_range"] = [issue["start_frame"], issue["end_frame"]]
+            if source == "visual":
+                has_start, has_end = "start_frame" in issue, "end_frame" in issue
+                if has_start != has_end:
+                    raise ValueError("visual QA start_frame and end_frame must be supplied together")
+                if has_start:
+                    start, end = issue["start_frame"], issue["end_frame"]
+                    if (type(start) is not int or type(end) is not int or
+                            not 0 <= start < end <= MAX_FRAME or
+                            ("frame_range" in issue and issue["frame_range"] != [start, end])):
+                        raise ValueError("visual QA returned an invalid or conflicting frame interval")
+                    normalized["frame_range"] = [start, end]
             problems.append(normalized)
         has_errors = any(i["severity"] == "error" for i in report["issues"])
         if report["passed"] == has_errors:
@@ -549,9 +583,10 @@ def combine_qa_reports(structural, checks, criteria):
         criteria_json = json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
                                    sort_keys=True, ensure_ascii=False, separators=(",", ":"),
                                    allow_nan=False)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("QA criteria must be JSON-safe and finite") from exc
-    digest = hashlib.sha256(criteria_json.encode("utf-8")).hexdigest()
+        criteria_bytes = criteria_json.encode("utf-8")
+    except (TypeError, ValueError, OverflowError, UnicodeError) as exc:
+        raise ValueError("QA criteria must be JSON-safe, finite and UTF-8") from exc
+    digest = hashlib.sha256(criteria_bytes).hexdigest()
     return {**structural, "passed": errors == 0, "valid": errors == 0,
             "score": max(0, 100 - errors * 20 - warnings * 5),
             "issue_count": len(problems), "summary": {"errors": errors, "warnings": warnings},
