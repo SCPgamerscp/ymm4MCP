@@ -52,6 +52,11 @@ def _validate_png_container(raw: bytes) -> None:
     seen_gamma = seen_chrm = seen_srgb = seen_iccp = False
     seen_phys = seen_time = False
     splt_names = set()
+    # Bound the aggregate *expanded* metadata, not just each compressed chunk.
+    # Many individually small zTXt/iTXt/iCCP chunks can otherwise expand to
+    # gigabytes across a single (at most 10 MB) preview PNG.
+    metadata_bytes = 0
+    metadata_limit = 2_000_000
     while offset < len(raw):
         chunk_count += 1
         if chunk_count > 4096 or len(raw) - offset < 12:
@@ -162,7 +167,9 @@ def _validate_png_container(raw: bytes) -> None:
                     not sep or not _valid_png_keyword(keyword) or
                     len(remainder) < 2 or remainder[0] != 0):
                 raise ValueError("invalid PNG ICC profile metadata")
-            _inflate_png_metadata(remainder[1:])
+            profile = _inflate_png_metadata(
+                remainder[1:], limit=metadata_limit - metadata_bytes)
+            metadata_bytes += len(profile)
             seen_iccp = True
         if kind == b"pHYs":
             if (seen_phys or seen_idat or length != 9 or
@@ -192,14 +199,17 @@ def _validate_png_container(raw: bytes) -> None:
         if kind == b"tEXt":
             keyword, sep, text = payload.partition(b"\x00")
             if (not sep or not _valid_png_keyword(keyword) or
-                    len(text) > 2_000_000):
+                    len(text) > metadata_limit - metadata_bytes):
                 raise ValueError("invalid PNG Latin-1 text metadata")
+            metadata_bytes += len(text)
         if kind == b"zTXt":
             keyword, sep, remainder = payload.partition(b"\x00")
             if (not sep or not _valid_png_keyword(keyword) or
                     len(remainder) < 2 or remainder[0] != 0):
                 raise ValueError("invalid PNG compressed text metadata")
-            _inflate_png_metadata(remainder[1:])
+            decoded_text = _inflate_png_metadata(
+                remainder[1:], limit=metadata_limit - metadata_bytes)
+            metadata_bytes += len(decoded_text)
         if kind == b"iTXt":
             keyword, sep, remainder = payload.partition(b"\x00")
             if (not sep or not _valid_png_keyword(keyword) or
@@ -214,11 +224,13 @@ def _validate_png_container(raw: bytes) -> None:
                 raise ValueError("invalid PNG international text language")
             try:
                 translated.decode("utf-8")
-                decoded = (_inflate_png_metadata(encoded_text)
-                           if remainder[0] else encoded_text)
-                if len(decoded) > 2_000_000:
+                decoded = (_inflate_png_metadata(
+                    encoded_text, limit=metadata_limit - metadata_bytes)
+                    if remainder[0] else encoded_text)
+                if len(decoded) > metadata_limit - metadata_bytes:
                     raise ValueError("oversized PNG international text")
                 decoded.decode("utf-8")
+                metadata_bytes += len(decoded)
             except UnicodeDecodeError as exc:
                 raise ValueError("invalid PNG international text UTF-8") from exc
         if kind == b"IDAT":
