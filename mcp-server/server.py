@@ -634,6 +634,13 @@ async def run_bgm_ducking(args: dict) -> dict:
     revision = bgm.get("revision")
     if not ducking.valid_identifier(revision, max_length=256):
         return {"success": False, "error_code": "BGM_REVISION_UNAVAILABLE"}
+    expected_revision = args.get("expected_revision")
+    if expected_revision is not None:
+        if not ducking.valid_identifier(expected_revision, max_length=256):
+            raise ValueError("expected_revision must be a valid revision identifier")
+        if expected_revision != revision:
+            return {"success": False, "error_code": "REVISION_CONFLICT",
+                    "bgm_item_id": item_id}
     voices = [i for i in snapshot["items"] if isinstance(i, dict) and
               str(i.get("type", "")).lower().endswith("voiceitem")]
     if any(not ducking.valid_identifier(voice.get("item_id")) for voice in voices):
