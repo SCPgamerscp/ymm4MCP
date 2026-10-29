@@ -5,6 +5,7 @@ newer revision fetched from the moving refs/pull/228/head. Manual dispatches
 are allowed to compose the latest available heads.
 """
 from pathlib import Path
+import re
 import unittest
 
 
@@ -46,9 +47,14 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
         # The export QA branch modifies the same packaging workflow as #228;
         # composing it is required before claiming release integration passed.
         # This order must match the numeric all-open-PR merge audit.
-        self.assertIn(
-            "for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259;",
-            self.source,
+        match = re.search(r"for number in ((?:\\d+\\s+)*\\d+); do", self.source)
+        self.assertIsNotNone(match, "Curated PR merge loop missing")
+        numbers = [int(value) for value in match.group(1).split()]
+        self.assertEqual(numbers, sorted(set(numbers)))
+        self.assertTrue(
+            {218, 219, 221, 228, 229, 234, 241, 243, 244, 248,
+             251, 254, 255, 257, 259, 260}.issubset(set(numbers)),
+            "Release integration must include setup, keyframe, export QA and snapshot fixes",
         )
 
     def test_export_qa_discovers_new_regression_modules(self):
