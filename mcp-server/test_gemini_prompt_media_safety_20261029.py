@@ -72,6 +72,8 @@ class GeminiPromptSafetyTests(unittest.TestCase):
         prompt = self._run_frames()
         self.assertIn("音声データは提供されていません", prompt)
         self.assertIn("音響イベントを観測したと推測して報告しない", prompt)
+        self.assertIn("全イベントの audio は必ず null", prompt)
+        self.assertIn("type に sound を使わない", prompt)
         self.assertNotIn("その区間の音声です", prompt)
 
     def test_audio_present_prompt_does_not_warn_audio_missing(self):
