@@ -1,0 +1,18 @@
+name: Keyframe insertion snapshot integrity
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  insertion-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify malformed and throwing host collections fail closed
+        run: dotnet run --project tests/KeyframeInsertionSafety.Tests/KeyframeInsertionSafety.Tests.csproj --configuration Release

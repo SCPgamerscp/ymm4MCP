@@ -106,7 +106,7 @@ namespace YMM4McpPlugin
             {
                 // ロード済みアセンブリからVoiceItem系のクラスを探す
                 var voiceTypes = AppDomain.CurrentDomain.GetAssemblies()
-                    .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
+                    .SelectMany(DebugInspectionSafety.LoadableTypes)
                     .Where(t => t.Name.Contains("Voice") && t.Name.Contains("Item") && !t.IsInterface && !t.IsAbstract)
                     .Select(t => new { fullName = t.FullName, ctors = t.GetConstructors().Select(c => string.Join(", ", c.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"))).ToArray() })
                     .ToArray();
@@ -120,7 +120,8 @@ namespace YMM4McpPlugin
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
-                var tvm = GetPropObj(vm!, "ActiveTimelineViewModel");
+                if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
                 if (tvm == null) return (object)new { error = "TimelineVM取得失敗" };
 
                 // timelineフィールドのメソッドを確認
@@ -150,7 +151,8 @@ namespace YMM4McpPlugin
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
-                var tvm = GetPropObj(vm!, "ActiveTimelineViewModel");
+                if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
                 if (tvm == null) return (object)new { error = "TimelineVM取得失敗" };
 
                 var menuVM = GetPropObj(tvm, "AddVoiceItemTemplateContextMenuViewModel");
@@ -160,7 +162,7 @@ namespace YMM4McpPlugin
                 var result = new List<object>();
                 void Explore(object item, int depth)
                 {
-                    if (depth > 4) return;
+                    if (depth > 4 || item == null) return;
                     var t = item.GetType();
                     var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                         .Select(p => new { p.Name, TypeName = p.PropertyType.Name, IsCommand = typeof(ICommand).IsAssignableFrom(p.PropertyType) })
@@ -184,7 +186,8 @@ namespace YMM4McpPlugin
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
-                var tvm = GetPropObj(vm!, "ActiveTimelineViewModel");
+                if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
                 if (tvm == null) return (object)new { error = "TimelineVM取得失敗" };
 
                 // AddVoiceItemCommandParameterの中身
@@ -198,12 +201,7 @@ namespace YMM4McpPlugin
                 if (menuVM != null)
                 {
                     var items = menuVM.GetType().GetProperty("Items")?.GetValue(menuVM) as System.Collections.IEnumerable;
-                    menuItems = items?.Cast<object>().Select(item => new
-                    {
-                        type = item.GetType().Name,
-                        props = item.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                            .Select(p => new { p.Name, TypeName = p.PropertyType.Name }).ToArray()
-                    } as object).ToArray();
+                    menuItems = DebugInspectionSafety.SnapshotMenuItems(items);
                 }
 
                 // CurrentCharacterの中身
@@ -240,9 +238,12 @@ namespace YMM4McpPlugin
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
-                var tvm = GetPropObj(vm!, "ActiveTimelineViewModel");
-                var toolbar = GetPropObj(tvm!, "ToolBar");
-                var itemToolBar = GetPropObj(toolbar!, "ItemToolBar");
+                if (vm == null) return (object)new { error = "MainViewModel取得失敗" };
+                var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
+                if (tvm == null) return (object)new { error = "TimelineVM取得失敗" };
+                var toolbar = GetPropObj(tvm, "ToolBar");
+                if (toolbar == null) return (object)new { error = "ToolBar取得失敗" };
+                var itemToolBar = GetPropObj(toolbar, "ItemToolBar");
                 if (itemToolBar == null) return (object)new { error = "ItemToolBar取得失敗" };
 
                 var props = itemToolBar.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)

@@ -1,7 +1,8 @@
 """Local authenticated connection checks must ignore ambient proxy variables (#22)."""
 import os
+import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import check_connection
 
@@ -16,9 +17,18 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
             with self.subTest(base=base):
                 client = MagicMock()
                 client.__enter__.return_value = client
-                client.get.return_value.json.return_value = {
+                rejected = MagicMock(status_code=401)
+                accepted = MagicMock(status_code=200)
+                accepted.json.return_value = {
                     "status": "running", "port": 8765, "success": True
                 }
+                accepted.headers = {}
+                accepted.iter_bytes.return_value = [json.dumps(accepted.json.return_value).encode("utf-8")]
+                wrong = MagicMock()
+                wrong.__enter__.return_value = rejected
+                right = MagicMock()
+                right.__enter__.return_value = accepted
+                client.stream.side_effect = [wrong, right]
                 proxy_environment = {
                     "HTTP_PROXY": "http://127.0.0.1:9999",
                     "HTTPS_PROXY": "http://127.0.0.1:9999",
@@ -33,9 +43,10 @@ class LocalConnectionProxyIsolationTests(unittest.TestCase):
                     result = check_connection.check()
 
                 client_factory.assert_called_once_with(timeout=5.0, trust_env=False)
-                client.get.assert_called_once_with(
-                    base + "/status", headers={"X-Ymm4-Token": "secret"}
-                )
+                self.assertEqual(client.stream.call_args_list, [
+                    call("GET", base + "/status", headers={"X-Ymm4-Token": "0ecret"}),
+                    call("GET", base + "/status", headers={"X-Ymm4-Token": "secret", "Accept-Encoding": "identity"}),
+                ])
                 self.assertEqual(result["port"], 8765)
 
 

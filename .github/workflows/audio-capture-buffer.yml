@@ -1,0 +1,24 @@
+name: Audio capture buffer regression
+
+on:
+  pull_request:
+    paths:
+      - 'YMM4McpPlugin/OrderedAudioChunks.cs'
+      - 'YMM4McpPlugin/McpPreview.cs'
+      - 'tests/OrderedAudioChunks.Tests/**'
+      - '.github/workflows/audio-capture-buffer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audio-buffer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run audio capture buffer regressions
+        run: dotnet run --project tests/OrderedAudioChunks.Tests/OrderedAudioChunks.Tests.csproj --configuration Release

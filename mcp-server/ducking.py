@@ -3,16 +3,24 @@
 from editing import finite_number, integer
 
 
+def _finite_input(value, name):
+    """Normalize very large Python integers to the same input error as NaN/inf."""
+    try:
+        return finite_number(value, name)
+    except OverflowError as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+
+
 def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3,
          attack_frames: int = 5, release_frames: int = 10) -> list[dict]:
     if not isinstance(bgm, dict):
         raise ValueError("bgm must be an object")
-    ratio = finite_number(ratio, "duck_ratio")
+    ratio = _finite_input(ratio, "duck_ratio")
     if not 0 < ratio < 1:
         raise ValueError("duck_ratio must be in (0, 1)")
     attack_frames = integer(attack_frames, "attack_frames", 1, 300)
     release_frames = integer(release_frames, "release_frames", 1, 300)
-    base_volume = finite_number(base_volume, "base_volume")
+    base_volume = _finite_input(base_volume, "base_volume")
     if base_volume <= 0:
         raise ValueError("base_volume must be positive")
     start = integer(bgm.get("frame"), "bgm.frame")
@@ -37,6 +45,8 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
             merged.append((left, right))
     points = {}
     low = base_volume * ratio
+    if low == 0:
+        raise ValueError("duck_ratio underflows to zero volume")
     for left, right in merged:
         attack = max(start, left - attack_frames)
         if attack < left:

@@ -53,8 +53,8 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                           {issue["code"] for issue in result["issues"]})
 
 
-    def test_short_audio_stream_fails_tail_sample_even_when_video_is_longer(self):
-        """FFmpeg without -abort_on empty_output incorrectly returns exit 0."""
+    def test_short_audio_stream_is_advisory_unless_strict_tail_required(self):
+        """Real FFmpeg metadata detects the gap; strict policy determines pass/fail."""
         with tempfile.TemporaryDirectory() as directory:
             video = Path(directory) / "short_audio.mp4"
             subprocess.run(
@@ -67,12 +67,23 @@ class DecodedMediaFFmpegIntegrationTests(unittest.TestCase):
                 timeout=30)
             result = decoded_media_qa.inspect(str(video), sample_seconds=1)
             self.assertTrue(result["success"], result)
-            self.assertFalse(result["passed"], result)
-            failures = [issue for issue in result["issues"]
-                        if issue["code"] == "EXPORT_DECODE_FAILED"]
+            # An audio track may intentionally end before the video (e.g. BGM).
+            # The default is advisory; strict export contracts must opt in.
+            self.assertTrue(result["passed"], result)
+            warnings = [issue for issue in result["issues"]
+                        if issue["code"] == "EXPORT_STREAM_ENDS_EARLY"
+                        and issue["severity"] == "warning"]
             self.assertTrue(any(issue["stream_type"] == "audio"
-                                and issue["start_seconds"] >= 3.0
-                                for issue in failures), result)
+                                and issue["missing_tail_seconds"] >= 2.9
+                                for issue in warnings), result)
+            strict = decoded_media_qa.inspect(
+                str(video), sample_seconds=1, require_tracks_to_end=True)
+            self.assertTrue(strict["success"], strict)
+            self.assertFalse(strict["passed"], strict)
+            self.assertTrue(any(issue["code"] == "EXPORT_STREAM_ENDS_EARLY"
+                                and issue["stream_type"] == "audio"
+                                and issue["severity"] == "error"
+                                for issue in strict["issues"]), strict)
 
 
     def test_full_decode_rejects_empty_secondary_audio_stream(self):

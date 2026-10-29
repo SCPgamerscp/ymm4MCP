@@ -45,16 +45,39 @@ internal static class ReflectionPath
             if (index != null)
             {
                 if (value is not IEnumerable entries || value is string) return false;
-                bool found = false;
-                int position = 0;
-                foreach (var entry in entries)
+                try
                 {
-                    if (position++ != index.Value) continue;
-                    value = entry;
-                    found = true;
-                    break;
+                    if (value is IList list)
+                    {
+                        // YMM4 timeline collections commonly implement IList. Avoid
+                        // enumerating thousands of items for a single indexed lookup.
+                        if (index.Value >= list.Count) return false;
+                        value = list[index.Value];
+                    }
+                    else
+                    {
+                        // A custom/lazy enumerable may be infinite or expensive.
+                        // Reject unbounded lookups before starting enumeration.
+                        const int maxEnumerableIndex = 100_000;
+                        if (index.Value > maxEnumerableIndex) return false;
+                        bool found = false;
+                        int position = 0;
+                        foreach (var entry in entries)
+                        {
+                            if (position++ != index.Value) continue;
+                            value = entry;
+                            found = true;
+                            break;
+                        }
+                        if (!found) return false;
+                    }
                 }
-                if (!found) return false;
+                catch
+                {
+                    // Custom enumerators/indexers can throw; report an unresolved
+                    // reflection path instead of escaping into the HTTP handler.
+                    return false;
+                }
             }
         }
         return true;

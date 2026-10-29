@@ -99,6 +99,41 @@ try
     Write(ftyp, moov, mdat);
     File.WriteAllBytes(path, File.ReadAllBytes(path).AsSpan(0, 11).ToArray());
     Check(!Mp4FileInspector.Inspect(path).Verified, "truncated ftyp accepted");
+
+    // Compatible brands are part of the verified container identity.
+    Write(Box("ftyp", Encoding.ASCII.GetBytes("isom"), new byte[4], new byte[4]), mdat, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "non-printable compatible brand accepted");
+    Write(Box("ftyp", Encoding.ASCII.GetBytes("isom"), new byte[4],
+        Encoding.ASCII.GetBytes("    ")), mdat, moov);
+    Check(!Mp4FileInspector.Inspect(path).Verified, "blank compatible brand accepted");
+    Write(Box("ftyp", Encoding.ASCII.GetBytes("isom"), new byte[4],
+        Encoding.ASCII.GetBytes("iso2")), mdat, moov);
+    Check(Mp4FileInspector.Inspect(path).Verified, "valid compatible brand rejected");
+
+    // Conflicting duplicate movie and track metadata must not be resolved by
+    // silently choosing the first or last box.
+    Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd), Box("mvhd", mvhd), video));
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate mvhd accepted");
+    Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd),
+        Box("trak", Box("tkhd", tkhd), Box("tkhd", tkhd), timedMedia)));
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate tkhd accepted");
+    var videoHandler = new byte[12];
+    Encoding.ASCII.GetBytes("vide").CopyTo(videoHandler, 8);
+    Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd),
+        Box("trak", Box("tkhd", tkhd),
+            Box("mdia", Box("hdlr", videoHandler), Box("hdlr", videoHandler)))));
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate hdlr accepted");
+    Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd),
+        Box("trak", Box("tkhd", tkhd),
+            Box("mdia", Box("hdlr", videoHandler), Box("mdhd", mdhd),
+                Box("mdhd", mdhd)))));
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate mdhd accepted");
+    Write(ftyp, mdat, Box("moov", Box("mvhd", mvhd),
+        Box("trak", Box("tkhd", tkhd),
+            Box("mdia", Box("hdlr", videoHandler), Box("minf"),
+                Box("minf")))));
+    Check(!Mp4FileInspector.Inspect(path).Verified, "duplicate minf accepted");
+
 }
 finally { File.Delete(path); }
 

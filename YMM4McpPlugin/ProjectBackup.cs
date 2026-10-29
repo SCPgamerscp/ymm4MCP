@@ -15,7 +15,20 @@ internal static class ProjectBackup
         string stagingPath = backupPath + ".partial";
         try
         {
-            File.Copy(sourcePath, stagingPath);
+            // Hold a read-only sharing lease for the entire copy. File.Copy alone
+            // can snapshot a project while another writer is modifying it,
+            // yielding a formally complete but internally inconsistent backup.
+            using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                // A zero-byte .ymmp is not a restorable project. Never publish it
+                // as a valid recovery point.
+                if (source.Length == 0)
+                    throw new InvalidDataException("Cannot back up an empty YMM4 project.");
+                using var staging = new FileStream(stagingPath, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.None);
+                source.CopyTo(staging);
+                staging.Flush(flushToDisk: true);
+            }
             File.Move(stagingPath, backupPath);
             return backupPath;
         }

@@ -49,28 +49,116 @@ namespace YMM4McpPlugin
                 return false;
 
             int valueIndex = insertAt + offset;
-            try { values.Insert(valueIndex, entry); }
+            // Some third-party IList implementations insert at a different index
+            // without throwing. Snapshot the original order before mutating so a
+            // false success cannot attach a keyframe to the wrong frame.
+            object?[] originalValues;
+            object?[] originalFrames;
+            try
+            {
+                originalValues = values.Cast<object?>().ToArray();
+                originalFrames = frames.Cast<object?>().ToArray();
+            }
             catch { return false; }
-            bool frameInserted = false;
+
+            try { values.Insert(valueIndex, entry); }
+            catch
+            {
+                if (!RestoreSingleInsert(values, originalValues))
+                    throw new InvalidOperationException(
+                        "Keyframe value insertion failed and the original collection could not be restored.");
+                return false;
+            }
+            if (values.Count != originalValues.Length + 1)
+            {
+                // A non-conforming IList may mutate several entries, or silently
+                // replace an existing entry without changing its Count.
+                if (!RestoreSingleInsert(values, originalValues))
+                    throw new InvalidOperationException(
+                        "Keyframe value insertion changed the collection without a recoverable single insert.");
+                return false;
+            }
             try
             {
                 frames.Insert(insertAt, frameEntry);
-                frameInserted = true;
-                if (frames.Count + offset == values.Count
+                if (InsertedAt(frames, originalFrames, insertAt, frameEntry)
+                    && InsertedAt(values, originalValues, valueIndex, entry)
+                    && frames.Count + offset == values.Count
                     && Convert.ToInt32(frames[insertAt], CultureInfo.InvariantCulture) == frame
                     && Number(values[valueIndex], out var actual)
-                    && actual == Convert.ToDouble(ReadValue(entry), CultureInfo.InvariantCulture))
+                    && Number(entry, out var expectedInserted)
+                    && actual == expectedInserted)
                     return true;
             }
             catch { /* Restore the two collections below. */ }
-            if (frameInserted)
-            {
-                try { frames.RemoveAt(insertAt); } catch { }
-            }
-            try { values.RemoveAt(valueIndex); } catch { }
+
+            // Do not blindly RemoveAt(requestedIndex): a non-conforming IList
+            // may have inserted elsewhere, which would delete an original value.
+            bool framesRestored = RestoreSingleInsert(frames, originalFrames);
+            bool valuesRestored = RestoreSingleInsert(values, originalValues);
+            if (!framesRestored || !valuesRestored)
+                throw new InvalidOperationException(
+                    "Keyframe insertion failed and at least one original collection could not be restored.");
             return false;
         }
 
+        private static bool InsertedAt(IList list, object?[] before, int at, object? added)
+        {
+            if (at < 0 || at > before.Length || list.Count != before.Length + 1)
+                return false;
+            try
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    object? expected = i == at ? added : before[i < at ? i : i - 1];
+                    if (!Equals(list[i], expected)) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Never report a safe failure unless the original sequence is intact.
+        // A third-party IList may ignore Insert, mutate without changing Count,
+        // insert multiple elements, or throw after a mutation.
+        private static bool MatchesSnapshot(IList list, object?[] before)
+        {
+            try
+            {
+                if (list.Count != before.Length) return false;
+                for (int i = 0; i < before.Length; i++)
+                    if (!Equals(list[i], before[i])) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static bool RestoreSingleInsert(IList list, object?[] before)
+        {
+            if (MatchesSnapshot(list, before)) return true;
+            try
+            {
+                if (list.Count != before.Length + 1) return false;
+                for (int removed = 0; removed < list.Count; removed++)
+                {
+                    bool matches = true;
+                    for (int i = 0; i < before.Length; i++)
+                    {
+                        if (!Equals(list[i < removed ? i : i + 1], before[i]))
+                        {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+                    try { list.RemoveAt(removed); }
+                    catch { /* RemoveAt may mutate and then throw. */ }
+                    return MatchesSnapshot(list, before);
+                }
+            }
+            catch { /* The collection may be in an unrecoverable state. */ }
+            return MatchesSnapshot(list, before);
+        }
 
         // ImmutableList<T> implements IList but rejects in-place Insert/SetItem.
         // Only replace collections when both owners expose public writable properties.
@@ -87,9 +175,18 @@ namespace YMM4McpPlugin
             if (frameProperty?.SetMethod?.IsPublic != true
                 || valueProperty?.SetMethod?.IsPublic != true)
                 return false;
-            if (!ReferenceEquals(frameProperty.GetValue(owner), frames)
-                || !ReferenceEquals(valueProperty.GetValue(animation), values))
+            try
+            {
+                if (!ReferenceEquals(frameProperty.GetValue(owner), frames)
+                    || !ReferenceEquals(valueProperty.GetValue(animation), values))
+                    return false;
+            }
+            catch
+            {
+                // A YMM4 property getter can throw while the editor is closing.
+                // Treat it as an unsupported layout, not an uncaught API error.
                 return false;
+            }
 
             int offset = values.Count == frames.Count + 1 ? 1
                 : values.Count == frames.Count && frames.Count > 0 ? 0 : -1;
@@ -131,7 +228,8 @@ namespace YMM4McpPlugin
             // A repeated request for the same value is already satisfied.
             // ImmutableList<T>.SetItem may return the original instance for no-op updates.
             if (!insert && Number(values[valueIndex], out var existing)
-                && existing == Convert.ToDouble(entry, CultureInfo.InvariantCulture))
+                && Number(entry, out var expectedExisting)
+                && existing == expectedExisting)
                 return true;
             object? nextFrames = frames;
             object? nextValues;
@@ -150,7 +248,8 @@ namespace YMM4McpPlugin
                 || !frameProperty.PropertyType.IsInstanceOfType(nextFrames)
                 || !valueProperty.PropertyType.IsInstanceOfType(nextValues)
                 || !Number(newValues[valueIndex], out var actual)
-                || actual != Convert.ToDouble(entry, CultureInfo.InvariantCulture))
+                || !Number(entry, out var expectedImmutable)
+                || actual != expectedImmutable)
                 return false;
 
             // A reflected immutable Insert method is not guaranteed to insert the
@@ -185,7 +284,9 @@ namespace YMM4McpPlugin
             }
 
             // Stage both new immutable lists before touching the animation.
-            // Restore both references if either property setter rejects the update.
+            // A host setter may mutate its backing field and then throw, or
+            // silently ignore the new value. Never report an ordinary failure
+            // while either half of the update remains installed.
             try
             {
                 valueProperty.SetValue(animation, nextValues);
@@ -194,9 +295,18 @@ namespace YMM4McpPlugin
                     && ReferenceEquals(frameProperty.GetValue(owner), nextFrames))
                     return true;
             }
-            catch { /* Best-effort restoration below. */ }
+            catch { /* Attempt to restore both original references below. */ }
+
             try { frameProperty.SetValue(owner, frames); } catch { }
             try { valueProperty.SetValue(animation, values); } catch { }
+            bool framesRestored = false, valuesRestored = false;
+            try { framesRestored = ReferenceEquals(frameProperty.GetValue(owner), frames); }
+            catch { /* A throwing getter prevents safe verification. */ }
+            try { valuesRestored = ReferenceEquals(valueProperty.GetValue(animation), values); }
+            catch { /* A throwing getter prevents safe verification. */ }
+            if (!framesRestored || !valuesRestored)
+                throw new InvalidOperationException(
+                    "Immutable keyframe update failed and original collections could not be restored.");
             return false;
         }
 
@@ -221,30 +331,55 @@ namespace YMM4McpPlugin
         {
             if (index < 0 || index >= values.Count || values[index] == null) return false;
             var old = values[index]!;
-            try
+            if (IsNumeric(old.GetType()))
             {
-                if (IsNumeric(old.GetType()))
+                if (!TryConvertNumeric(value, old.GetType(), out var converted)) return false;
+                try
                 {
-                    var converted = Convert.ChangeType(value, old.GetType(), CultureInfo.InvariantCulture);
                     values[index] = converted;
                     if (Number(values[index], out var actual)
-                        && actual == Convert.ToDouble(converted, CultureInfo.InvariantCulture))
+                        && Number(converted, out var expectedNumeric)
+                        && actual == expectedNumeric)
                         return true;
-                    values[index] = old;
-                    return false;
                 }
-                var property = old.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
-                if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
-                var previous = property.GetValue(old);
-                var convertedValue = Convert.ChangeType(value, property.PropertyType, CultureInfo.InvariantCulture);
-                property.SetValue(old, convertedValue);
-                if (Number(old, out var current)
-                    && current == Convert.ToDouble(convertedValue, CultureInfo.InvariantCulture))
-                    return true;
-                property.SetValue(old, previous);
+                catch { /* The IList may have changed before throwing. */ }
+
+                try
+                {
+                    if (Equals(values[index], old)) return false;
+                    values[index] = old;
+                    if (Equals(values[index], old)) return false;
+                }
+                catch { /* Restoration must be verified below. */ }
+                throw new InvalidOperationException(
+                    "Keyframe replacement failed and the original numeric value could not be restored.");
             }
+
+            var property = old.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
+            if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
+            object? previous;
+            try { previous = property.GetValue(old); }
             catch { return false; }
-            return false;
+            if (!TryConvertNumeric(value, property.PropertyType, out var convertedValue)) return false;
+            try
+            {
+                property.SetValue(old, convertedValue);
+                if (Number(old, out var actual)
+                    && Number(convertedValue, out var expectedProperty)
+                    && actual == expectedProperty)
+                    return true;
+            }
+            catch { /* A reflected setter can mutate before throwing. */ }
+
+            try
+            {
+                if (Equals(property.GetValue(old), previous)) return false;
+                property.SetValue(old, previous);
+                if (Equals(property.GetValue(old), previous)) return false;
+            }
+            catch { /* Do not continue editing an unverified value. */ }
+            throw new InvalidOperationException(
+                "Keyframe replacement failed and the original Value property could not be restored.");
         }
 
         private static bool CreateValue(object original, double value, out object? entry)
@@ -255,15 +390,36 @@ namespace YMM4McpPlugin
                 var type = original.GetType();
                 if (IsNumeric(type))
                 {
-                    entry = Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
-                    return true;
+                    return TryConvertNumeric(value, type, out entry);
                 }
                 var property = type.GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
                 if (property?.CanWrite != true || !IsNumeric(property.PropertyType)) return false;
                 var created = Activator.CreateInstance(type);
                 if (created == null) return false;
-                property.SetValue(created, Convert.ChangeType(value, property.PropertyType, CultureInfo.InvariantCulture));
+                if (!TryConvertNumeric(value, property.PropertyType, out var converted)) return false;
+                property.SetValue(created, converted);
                 entry = created;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // Convert.ChangeType rounds fractional doubles when the target is an
+        // integer and can overflow float to Infinity without throwing.
+        // Neither outcome represents the value the caller requested.
+        private static bool TryConvertNumeric(double value, Type type, out object? converted)
+        {
+            converted = null;
+            if (!double.IsFinite(value) || !IsNumeric(type)) return false;
+            if (type != typeof(float) && type != typeof(double) && type != typeof(decimal)
+                && value != Math.Truncate(value))
+                return false;
+            try
+            {
+                var result = Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
+                if (result is float f && !float.IsFinite(f)) return false;
+                if (result is double d && !double.IsFinite(d)) return false;
+                converted = result;
                 return true;
             }
             catch { return false; }
@@ -286,6 +442,9 @@ namespace YMM4McpPlugin
             catch { return false; }
         }
 
+        // Verify requested and stored numeric values through the same conversion
+        // path. Convert.ToDouble(0.1f) preserves the binary float approximation,
+        // while Number(0.1f) parses its round-trip display text as 0.1.
         private static bool Number(object? entry, out double value)
         {
             value = 0;
