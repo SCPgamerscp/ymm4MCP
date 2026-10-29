@@ -11,6 +11,9 @@ ClaudeからMCP経由でゆっくりMovieMaker4(YMM4)を操作できるように
 
 ## 🚀 はじめに（Windows）
 
+> **正式Release未公開の開発版について（2026-10-29確認）:** 現在の [GitHub Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) には、以下の手順で必要となる `YMM4McpPlugin-*.ymme` と `YMM4McpServer-*.zip` の組がまだ公開されていません（既存の `ver1` / `ver2` は該当する配布物ではありません）。そのため、以下の「Releasesからダウンロード」は**正式公開後の手順**です。開発版を試す場合は [Actions → Package YMM4 plugin](https://github.com/SCPgamerscp/ymm4MCP/actions/workflows/package-ymme.yml) の **成功した同一run** の `ymm4mcp-ymme` artifact（GitHubへのサインインが必要な場合があります）を展開し、含まれる `.ymme` とサーバーZIPを同じビルドから使用してください。Actions artifactは期限付きの**テスト用成果物**であり、正式ReleaseやYMM4 4.56.1.1での実機動作確認の代わりにはなりません。正式公開前に一般ユーザーへ「ワンクリック導入が完了した」と案内しないでください。
+
+
 1. [Releases](https://github.com/SCPgamerscp/ymm4MCP/releases) から最新版の `YMM4McpPlugin-*.ymme` をダウンロードします。YMM4を閉じて `.ymme` をダブルクリックし、YMM4の案内に従ってインストールします。利用者は `YMM4_PATH` や .NET SDK を設定する必要はありません。
 2. YMM4を起動します。新規インストールではプラグインのHTTPサーバーが自動起動します。「ツール」→「MCP連携サーバー」で状態を確認できます。既に自動起動を無効にしている場合は、この画面の「▶ 起動」を押します。
 3. 同じ Release の `YMM4McpServer-*.zip` を**すべて展開**し、`mcp-server/install.cmd` をダブルクリックします（**Python 3.10 以上**が必要です。`py -3` が古いPythonを指す場合は利用可能な `python.exe` も確認します）。MCPサーバーは `%LOCALAPPDATA%\YMM4MCP\mcp-server` に永続インストールされ、展開したZIPのフォルダーを削除してもClaude Desktopから起動できます。管理者権限は不要です。専用の仮想環境を作成し、依存関係をインストールして、Claude Desktop の `mcpServers.ymm4` 設定を自動追加します。既存の他の設定は保持し、変更時にはバックアップを作ります。通常版の設定に加え、Microsoft Store版のClaude Desktopが初期化済みの場合は `%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json` も自動設定します。完了後にClaude Desktopを再起動してください。`.ymme` にPythonサーバーは含まれません。Release がまだない開発版を使う場合は[ソースコード](https://github.com/SCPgamerscp/ymm4MCP)から同じフォルダを取得できます。
