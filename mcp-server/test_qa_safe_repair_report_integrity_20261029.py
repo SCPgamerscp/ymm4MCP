@@ -207,5 +207,56 @@ class QaSeverityEscalationTests(unittest.TestCase):
         self.assertEqual(result["reason_code"], "QA_PASSED")
 
 
+    def test_new_error_blocks_repair_even_when_score_improves(self):
+        structural = editing.validate_timeline([])
+        criteria = {"visual": {"end_frame": 30}}
+
+        def report(codes):
+            issues = [{"code": code, "severity": "error", "item_ids": [f"item-{code}"]}
+                      for code in codes]
+            return editing.combine_qa_reports(
+                structural, {"visual": {"success": True, "passed": False, "issues": issues}},
+                criteria)
+
+        before = report(["BLACK_FRAME", "CLIPPING", "MISSING_SUBTITLE"])
+        after = report(["BLACK_FRAME", "UNEXPECTED_CUT"])
+        self.assertGreater(after["score"], before["score"])
+        gate = editing.evaluate_qa_gate(after, [before])
+        self.assertEqual(gate["reason_code"], "QA_REGRESSED")
+        self.assertEqual(gate["suggested_action"], "consider_checkpoint_rollback")
+
+    def test_same_error_code_on_different_item_is_new_failure(self):
+        structural = editing.validate_timeline([])
+        criteria = {"visual": {"end_frame": 30}}
+
+        def report(item_ids):
+            issues = [{"code": "BLACK_FRAME", "severity": "error", "item_ids": [item_id]}
+                      for item_id in item_ids]
+            return editing.combine_qa_reports(
+                structural, {"visual": {"success": True, "passed": False, "issues": issues}},
+                criteria)
+
+        before = report(["item-1", "item-2"])
+        after = report(["item-1", "item-3"])
+        self.assertEqual(after["score"], before["score"])
+        self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
+                         "QA_REGRESSED")
+
+    def test_removing_errors_without_introducing_new_ones_can_continue(self):
+        structural = editing.validate_timeline([])
+        criteria = {"visual": {"end_frame": 30}}
+
+        def report(codes):
+            issues = [{"code": code, "severity": "error"} for code in codes]
+            return editing.combine_qa_reports(
+                structural, {"visual": {"success": True, "passed": False, "issues": issues}},
+                criteria)
+
+        before = report(["BLACK_FRAME", "CLIPPING"])
+        after = report(["BLACK_FRAME"])
+        self.assertEqual(editing.evaluate_qa_gate(after, [before])["reason_code"],
+                         "QA_ISSUES_REMAIN")
+
+
 if __name__ == "__main__":
     unittest.main()
