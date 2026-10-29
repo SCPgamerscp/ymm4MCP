@@ -709,6 +709,12 @@ async def run_bgm_ducking(args: dict) -> dict:
     if (len(keys) != 1 or not isinstance(keys[0], dict) or
             type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
         return {"success": False, "error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
+    # The host also reports the absolute position of the initial keyframe.
+    # A mismatch means the curve may belong to a different timeline location.
+    if ("absolute_frame" in keys[0] and
+            (type(keys[0]["absolute_frame"]) is not int or
+             keys[0]["absolute_frame"] != bgm.get("frame"))):
+        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
     baseline = keys[0].get("value")
     if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
         return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
