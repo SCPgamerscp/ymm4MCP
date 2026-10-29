@@ -14,12 +14,25 @@ SKILLS = {
 # four production workflows it does not use the generic video-creation prompt.
 RESOURCE_SKILLS = {**SKILLS, "chosei": "ゆっくりボイス調声"}
 ROOT = Path(__file__).resolve().parent / "skills"
+MAX_SKILL_BYTES = 512 * 1024
 
 
 def skill_text(name: str) -> str:
     if name not in RESOURCE_SKILLS:
         raise ValueError(f"Unknown skill: {name}")
-    return (ROOT / f"ymm4-{name}" / "SKILL.md").read_text(encoding="utf-8")
+    root = ROOT.resolve()
+    path = (ROOT / f"ymm4-{name}" / "SKILL.md").resolve()
+    # An allowlisted name is not sufficient when a local skill directory or
+    # SKILL.md has been replaced by a symlink to a file outside the bundle.
+    if not path.is_relative_to(root):
+        raise ValueError("Skill resource escapes the bundled skills directory")
+    # Read at most one byte beyond the limit so a corrupted/modified skill
+    # cannot cause unbounded allocations in MCP resource and prompt replies.
+    with path.open("rb") as stream:
+        data = stream.read(MAX_SKILL_BYTES + 1)
+    if len(data) > MAX_SKILL_BYTES:
+        raise ValueError("Skill resource exceeds the size limit")
+    return data.decode("utf-8")
 
 
 async def list_resources():

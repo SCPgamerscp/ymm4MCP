@@ -160,6 +160,41 @@ try
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
         "duplicate fmt chunk accepted");
 
+    // A 17-byte fmt chunk has an incomplete cbSize field. An 18-byte
+    // WAVEFORMATEX header may not claim nonexistent extension bytes.
+    var basePcm = Wave(clean);
+    var extendedPcm = new byte[basePcm.Length + 2];
+    Array.Copy(basePcm, 0, extendedPcm, 0, 36);
+    Array.Copy(basePcm, 36, extendedPcm, 38, basePcm.Length - 36);
+    BinaryPrimitives.WriteUInt32LittleEndian(extendedPcm.AsSpan(4, 4),
+        (uint)(extendedPcm.Length - 8));
+    BinaryPrimitives.WriteUInt32LittleEndian(extendedPcm.AsSpan(16, 4), 17);
+    File.WriteAllBytes(path, extendedPcm);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "incomplete WAVEFORMATEX cbSize accepted");
+    BinaryPrimitives.WriteUInt32LittleEndian(extendedPcm.AsSpan(16, 4), 18);
+    BinaryPrimitives.WriteUInt16LittleEndian(extendedPcm.AsSpan(36, 2), 1);
+    File.WriteAllBytes(path, extendedPcm);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "WAVEFORMATEX extension length beyond fmt accepted");
+    BinaryPrimitives.WriteUInt16LittleEndian(extendedPcm.AsSpan(36, 2), 0);
+    File.WriteAllBytes(path, extendedPcm);
+    Check(WavAudioInspector.Inspect(path).Passed,
+        "valid WAVEFORMATEX cbSize=0 must remain supported");
+
+    // A second data chunk cannot be silently excluded from the QA duration.
+    var duplicateData = new byte[basePcm.Length + 10];
+    basePcm.CopyTo(duplicateData, 0);
+    Encoding.ASCII.GetBytes("data").CopyTo(duplicateData, basePcm.Length);
+    BinaryPrimitives.WriteUInt32LittleEndian(duplicateData.AsSpan(basePcm.Length + 4, 4), 2);
+    BinaryPrimitives.WriteInt16LittleEndian(duplicateData.AsSpan(basePcm.Length + 8, 2), 1000);
+    BinaryPrimitives.WriteUInt32LittleEndian(duplicateData.AsSpan(4, 4),
+        (uint)(duplicateData.Length - 8));
+    File.WriteAllBytes(path, duplicateData);
+    Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
+        "duplicate data chunk was silently ignored");
+
+
     // Extensible fmt cbSize must describe bytes actually present in the fmt chunk.
     var invalidExtensibleLength = PcmWave(new[] { 1, 2, 3, 4 }, 24, extensible: true);
     BinaryPrimitives.WriteUInt16LittleEndian(invalidExtensibleLength.AsSpan(36, 2), 23);

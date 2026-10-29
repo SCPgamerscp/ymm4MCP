@@ -54,7 +54,12 @@ class GeminiPayloadLimitTests(unittest.TestCase):
         self.client.models.generate_content.assert_not_called()
 
     def test_small_payload_still_succeeds(self):
-        self.audio.write_bytes(b"RIFF\x04\x00\x00\x00WAVE")
+        import wave
+        with wave.open(str(self.audio), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(8000)
+            wav.writeframes(bytes(2))
         result = self.analyze(audio_path=str(self.audio))
         self.assertTrue(result["success"])
         self.assertEqual(result["analyzed_images"], 1)

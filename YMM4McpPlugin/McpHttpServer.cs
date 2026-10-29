@@ -1761,9 +1761,8 @@ namespace YMM4McpPlugin
                 if (buffer.Length + count > maxBytes) throw new ArgumentException("Request body exceeds 1 MiB");
                 buffer.Write(chunk, 0, count);
             }
-            if (buffer.Length == 0) return new();
-            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(buffer.ToArray())
-                ?? throw new ArgumentException("JSON object required");
+            RequestBodyValidation.ValidateLength(req.ContentLength64, buffer.Length);
+            return RequestBodyValidation.Parse(buffer.ToArray());
         }
 
         private static string GetStr(Dictionary<string, JsonElement> d, string k, string def) => d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? def : def;

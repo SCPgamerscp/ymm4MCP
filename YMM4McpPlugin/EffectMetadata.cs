@@ -1,16 +1,28 @@
 using System.Reflection;
+using System.Globalization;
 
 namespace YMM4McpPlugin;
 
 internal static class EffectMetadata
 {
+    private static string? FormatAttributeValue(object? value)
+    {
+        // An AI client must see the same numeric limits regardless of the
+        // editor's Windows locale (e.g. 0.5 rather than 0,5 in fr-FR).
+        if (value is double d && !double.IsFinite(d)) return null;
+        if (value is float f && !float.IsFinite(f)) return null;
+        return value is IFormattable formattable
+            ? formattable.ToString(null, CultureInfo.InvariantCulture)
+            : value?.ToString();
+    }
+
     internal static object Describe(Type effectType)
     {
         string? Value(PropertyInfo property, string attributeName, int index = 0)
         {
             var attribute = property.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == attributeName);
             return attribute != null && attribute.ConstructorArguments.Count > index
-                ? attribute.ConstructorArguments[index].Value?.ToString() : null;
+                ? FormatAttributeValue(attribute.ConstructorArguments[index].Value) : null;
         }
 
         var parameters = effectType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -28,9 +40,9 @@ internal static class EffectMetadata
                         !setter.ReturnParameter.GetRequiredCustomModifiers()
                             .Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)),
                     minimum = range != null && range.ConstructorArguments.Count >= offset + 2
-                        ? range.ConstructorArguments[offset].Value?.ToString() : null,
+                        ? FormatAttributeValue(range.ConstructorArguments[offset].Value) : null,
                     maximum = range != null && range.ConstructorArguments.Count >= offset + 2
-                        ? range.ConstructorArguments[offset + 1].Value?.ToString() : null,
+                        ? FormatAttributeValue(range.ConstructorArguments[offset + 1].Value) : null,
                     default_value = Value(p, "DefaultValueAttribute", 0),
                     display_name = Value(p, "DisplayNameAttribute"),
                     description = Value(p, "DescriptionAttribute"),
