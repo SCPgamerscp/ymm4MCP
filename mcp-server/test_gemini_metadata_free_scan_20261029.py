@@ -93,7 +93,7 @@ class MetadataFreeCaptureTests(unittest.TestCase):
         ):
             with self.subTest(content=content):
                 audio.write_bytes(content)
-                with patch.object(gemini_video, "_client", return_value=client), \\
+                with patch.object(gemini_video, "_client", return_value=client), \
                      patch.object(gemini_video, "genai_types",
                                   SimpleNamespace(Part=part)):
                     result = gemini_video.analyze_frames_dir(
