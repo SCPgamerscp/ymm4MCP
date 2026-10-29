@@ -124,5 +124,49 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(post.await_args_list), 2)
 
 
+    async def test_checkpoint_timeout_is_reported_without_writing_keyframes(self):
+        with (
+            patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                ITEMS, KEYS, {"success": True, "isSaved": True}])),
+            patch.object(server, "ymm4_post", AsyncMock(
+                side_effect=TimeoutError("checkpoint timeout"))) as post,
+        ):
+            result = await server.dispatch({
+                "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_BACKUP_OUTCOME_UNKNOWN")
+        self.assertTrue(result["outcome_unknown"])
+        self.assertEqual(len(post.await_args_list), 1)
+
+    async def test_snapshot_timeout_keeps_backup_path_and_prevents_edits(self):
+        with (
+            patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                ITEMS, KEYS, {"success": True, "isSaved": True}])),
+            patch.object(server, "ymm4_post", AsyncMock(return_value={
+                "success": True, "backup_path": "C:/backup/cp.ymmp"})) as post,
+            patch.object(server.quality_guard, "verify_snapshot",
+                         AsyncMock(side_effect=TimeoutError("snapshot timeout"))),
+        ):
+            result = await server.dispatch({
+                "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_SNAPSHOT_UNKNOWN")
+        self.assertEqual(result["backup_path"], "C:/backup/cp.ymmp")
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(post.await_args_list), 1)
+
+    async def test_nonabsolute_or_padded_backup_path_blocks_mutation(self):
+        for backup in ("relative/backup.ymmp", " C:/backup/cp.ymmp", "C:/backup/cp.ymmp "):
+            with (
+                self.subTest(backup=backup),
+                patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                    ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                patch.object(server, "ymm4_post", AsyncMock(return_value={
+                    "success": True, "backup_path": backup})) as post,
+            ):
+                result = await server.dispatch({
+                    "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+            self.assertEqual(result["error_code"], "BGM_BACKUP_REQUIRED")
+            self.assertEqual(len(post.await_args_list), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
