@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -17,7 +18,12 @@ class GeminiPreviewSnapshotIntegrityTests(unittest.TestCase):
         self.frame = self.folder / "0001.png"
         self.frame.write_bytes(b"frame-original")
         self.audio = self.folder / "audio.wav"
-        self.audio.write_bytes(b"RIFF\x04\x00\x00\x00WAVE")
+        # Use a complete PCM WAV: main now validates fmt and nonempty data chunks.
+        with wave.open(str(self.audio), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(1)
+            stream.setframerate(8000)
+            stream.writeframes(b"\x80" * 8)
         self.client = MagicMock()
         self.client.models.generate_content.return_value = SimpleNamespace(
             text='{"summary":"ok","events":[]}')
