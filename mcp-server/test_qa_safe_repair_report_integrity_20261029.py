@@ -164,5 +164,38 @@ class CompositeIntegrityTests(unittest.TestCase):
         self.assertEqual(editing.evaluate_qa_gate(result)["decision"], "pass")
 
 
+class QaSeverityEscalationTests(unittest.TestCase):
+    def test_new_error_stops_even_when_score_increases(self):
+        structural = editing.validate_timeline([])
+        criteria = {"visual": {"end_frame": 30}}
+
+        def report(severities):
+            issues = [{"code": f"ISSUE_{i}", "severity": severity}
+                      for i, severity in enumerate(severities)]
+            return editing.combine_qa_reports(structural, {"visual": {
+                "success": True, "passed": "error" not in severities, "issues": issues}}, criteria)
+
+        before = report(["warning"] * 5)  # score 75, no errors
+        after = report(["error"])          # score 80, new error
+        self.assertGreater(after["score"], before["score"])
+        result = editing.evaluate_qa_gate(after, [before])
+        self.assertEqual(result["reason_code"], "QA_REGRESSED")
+        self.assertEqual(result["decision"], "stop")
+        self.assertEqual(result["score_delta"], 5)
+
+    def test_clearing_warnings_without_new_errors_is_progress(self):
+        structural = editing.validate_timeline([])
+        criteria = {"visual": {"end_frame": 30}}
+
+        def report(count):
+            return editing.combine_qa_reports(structural, {"visual": {
+                "success": True, "passed": True,
+                "issues": [{"code": f"W_{i}", "severity": "warning"}
+                           for i in range(count)]}}, criteria)
+
+        result = editing.evaluate_qa_gate(report(1), [report(5)])
+        self.assertEqual(result["reason_code"], "QA_PASSED")
+
+
 if __name__ == "__main__":
     unittest.main()
