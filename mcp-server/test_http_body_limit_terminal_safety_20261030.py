@@ -41,12 +41,26 @@ class RequestBodyTerminalSafetyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(status, 400)
                 self.assertFalse(dispatched)
 
-    async def test_mixed_case_post_still_has_body_limit(self):
+    async def test_mixed_case_post_is_rejected_as_distinct_method(self):
+        # RFC 9110 methods are case-sensitive; mixed-case variants must not
+        # bypass the POST body guard by falling through to the inner app.
+        for method in ("PoSt", "post", "POST".lower()):
+            with self.subTest(method=method):
+                status, dispatched, _ = await self.invoke(
+                    [{"type": "http.request", "body": b"ok"}], method=method)
+                self.assertEqual(status, 400)
+                self.assertFalse(dispatched)
+
+    async def test_exact_post_remains_bounded(self):
         status, dispatched, result = await self.invoke(
-            [{"type": "http.request", "body": b"ok"}], method="PoSt")
+            [{"type": "http.request", "body": b"ok"}], method="POST")
         self.assertEqual(status, 200)
         self.assertTrue(dispatched)
         self.assertEqual(result["body"], b"ok")
+        status, dispatched, _ = await self.invoke(
+            [{"type": "http.request", "body": b"x" * 13}], method="POST")
+        self.assertEqual(status, 413)
+        self.assertFalse(dispatched)
 
     async def test_rejects_control_bytes_in_header_values(self):
         for value in (1, 2, 8, 11, 12, 31, 127):
