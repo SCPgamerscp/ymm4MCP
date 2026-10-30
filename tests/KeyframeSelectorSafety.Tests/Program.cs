@@ -173,8 +173,10 @@ Check(!Verified("remove", 10, null, new[] { 0, 10 }, new[] { 1.0, 2.5 }),
     "native no-op removal must fail");
 Check(!Verified("remove", 10, null, new[] { 0 }, new[] { 1.0, 2.5, 3.0 }),
     "native remove that leaves orphaned values must fail");
-Check(Verified("remove", 10, null, new[] { 0 }, new[] { 1.0, 2.5 }),
-    "native remove may preserve an implicit starting value");
+Check(!Verified("remove", 10, null, new[] { 0 }, new[] { 1.0, 2.5 }),
+    "an implicit start value plus an explicit frame zero is ambiguous after removal");
+Check(Verified("remove", 10, null, new[] { 20 }, new[] { 1.0, 3.0 }),
+    "native removal may preserve a valid implicit start and another key");
 Check(Verified("clear", 0, null, Array.Empty<int>(), new[] { 1.0 }),
     "cleared frames may retain the base value");
 Check(Verified("clear", 0, null, Array.Empty<int>(), Array.Empty<double>()),
