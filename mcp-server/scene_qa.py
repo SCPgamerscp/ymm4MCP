@@ -187,8 +187,7 @@ def inspect(items, config):
         if short_count_key in config and run_min_key not in config:
             raise ValueError(f"{short_count_key} requires {run_min_key}")
         if not required[category] and any(
-                key in config for key in (f"max_{category}_gap_frames",
-                                          ratio_key, total_key, continuous_key,
+                key in config for key in (ratio_key, total_key, continuous_key,
                                           overall_key, overall_ratio_key,
                                            f"max_{category}_gap_count",
                                            f"max_{category}_overall_gap_count",
