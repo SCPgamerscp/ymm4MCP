@@ -1,6 +1,7 @@
 """Estimate independent visual and audio coverage from a read-only scene index."""
 
 import re
+import unicodedata
 
 from editing import MAX_FRAME
 
@@ -11,11 +12,8 @@ MAX_SCENES = 200
 
 def _safe_identifier(value, limit):
     return (isinstance(value, str) and bool(value.strip()) and len(value) <= limit
-            and not any((code := ord(char)) < 32 or 127 <= code <= 159
-                        or code in (0x061C, 0x200E, 0x200F)
-                        or 0x202A <= code <= 0x202E
-                        or 0x2066 <= code <= 0x2069
-                        for char in value))
+            and value == value.strip() and unicodedata.is_normalized("NFC", value)
+            and not any(unicodedata.category(char).startswith("C") for char in value))
 
 
 def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
@@ -174,6 +172,24 @@ def with_coverage(index: dict) -> dict:
         raise ValueError("scene index requires 1..200 scenes")
     if "success" in index and index["success"] is not True:
         raise ValueError("scene index must report success")
+    if "error" in index or "error_code" in index:
+        raise ValueError("scene index cannot contain host error metadata")
+    # The complete response from scenes.index has stronger guarantees than
+    # legacy callers' minimal scene lists. Do not silently accept missing
+    # evidence when the index claims to be a complete successful snapshot.
+    canonical = (index.get("success") is True and
+                 "item_count" in index and "unassigned_item_ids" in index)
+    required_scene_fields = {
+        "id", "start_frame", "end_frame", "items", "item_count",
+        "continues_from_previous_item_ids", "continues_into_next_item_ids",
+        "covered_frames", "uncovered_frames", "uncovered_ranges",
+        "layer_occupancy",
+    }
+    required_item_fields = {
+        "item_id", "frame", "end_frame", "layer", "type",
+        "visible_start_frame", "visible_end_frame",
+        "relative_start_frame", "relative_end_frame", "crosses_boundary",
+    }
     seen_ids = set()
     assigned_item_ids = set()
     item_snapshots = {}
@@ -183,6 +199,8 @@ def with_coverage(index: dict) -> dict:
     for scene in index["scenes"]:
         if not isinstance(scene, dict):
             raise ValueError("scene must be an object")
+        if canonical and not required_scene_fields.issubset(scene):
+            raise ValueError("canonical scene snapshot is missing required evidence")
         start, end = _scene_range(scene)
         if start < previous_end:
             raise ValueError("scene ranges must be ordered and non-overlapping")
@@ -197,15 +215,13 @@ def with_coverage(index: dict) -> dict:
         for item in items:
             if not isinstance(item, dict):
                 raise ValueError("scene item must be an object")
+            if canonical and not required_item_fields.issubset(item):
+                raise ValueError("canonical scene item is missing required evidence")
             kind = item.get("type")
             if (kind is not None and
                     (not isinstance(kind, str) or not kind.strip() or
-                     len(kind) > 128 or any((code := ord(c)) < 32
-                                            or 127 <= code <= 159
-                                            or code in (0x061C, 0x200E, 0x200F)
-                                            or 0x202A <= code <= 0x202E
-                                            or 0x2066 <= code <= 0x2069
-                                            for c in kind))):
+                     len(kind) > 128 or
+                     any(unicodedata.category(c).startswith("C") for c in kind))):
                 raise ValueError("scene item type must be a bounded readable string")
             # Validate unknown item spans too: excluding their type from QA
             # must not allow malformed evidence to bypass integrity checks.
@@ -219,12 +235,19 @@ def with_coverage(index: dict) -> dict:
                     raise ValueError("scene item IDs must be distinct nonempty strings")
                 item_ids.add(identity)
                 assigned_item_ids.add(identity)
+                if (identity in item_snapshots and
+                        ("frame" not in item or "end_frame" not in item)):
+                    raise ValueError("repeated scene item identity requires source frames")
                 # Even partial source evidence must remain identical across
                 # scenes: otherwise a continuation can impersonate another item.
                 snapshot = tuple((key in item, item.get(key))
                                  for key in ("frame", "end_frame", "type", "layer"))
-                if identity in item_snapshots and item_snapshots[identity] != snapshot:
-                    raise ValueError("scene item identity has conflicting source evidence")
+                if identity in item_snapshots:
+                    if not all(present for _, (present, _) in zip(
+                            ("frame", "end_frame"), item_snapshots[identity][:2])):
+                        raise ValueError("repeated scene item identity requires source frames")
+                    if item_snapshots[identity] != snapshot:
+                        raise ValueError("scene item identity has conflicting source evidence")
                 item_snapshots[identity] = snapshot
             if ("layer" in item and item["layer"] is not None and
                     (type(item["layer"]) is not int or
