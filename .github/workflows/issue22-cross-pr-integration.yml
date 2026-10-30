@@ -201,6 +201,7 @@ jobs:
           fi
           git fetch --no-tags origin main:refs/remotes/origin/main
           git checkout -B audit-open-prs refs/remotes/origin/main
+          audited_main_sha="$(git rev-parse HEAD)"
           passed=0
           failed=0
           {
@@ -259,6 +260,15 @@ jobs:
           if ! cmp -s "$RUNNER_TEMP/open-pr-heads-before.txt" "$RUNNER_TEMP/open-pr-heads-after.txt"; then
             echo "::error::Open PR set or head SHA changed during composition; retry integration on the new heads."
             diff -u "$RUNNER_TEMP/open-pr-heads-before.txt" "$RUNNER_TEMP/open-pr-heads-after.txt" || true
+            echo "conflicts=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # A new main commit can invalidate the tested base even when every
+          # PR head stayed fixed. Do not advertise a green release candidate
+          # assembled from an obsolete main revision.
+          latest_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          if [[ "$latest_main_sha" != "$audited_main_sha" ]]; then
+            echo "::error::main moved during all-PR composition ($audited_main_sha -> $latest_main_sha); retry on the new base."
             echo "conflicts=1" >> "$GITHUB_OUTPUT"
             exit 1
           fi
