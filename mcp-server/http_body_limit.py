@@ -50,6 +50,11 @@ class RequestBodyLimit:
             if not isinstance(name, bytes) or not isinstance(value, bytes):
                 return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
                     scope, receive, send)
+            # Check sizes before scanning potentially attacker-sized header values.
+            # The total budget includes names and values, not just values.
+            if len(name) + len(value) > MAX_HEADER_BYTES - header_bytes:
+                return await JSONResponse({"error": "Request headers too large"}, status_code=431)(
+                    scope, receive, send)
             if (not name or any(char not in _HEADER_TOKEN_BYTES for char in name) or
                     any((char < 32 and char != 9) or char == 127 for char in value)):
                 return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
