@@ -47,8 +47,8 @@ def project_identity(project):
     drive, tail = ntpath.splitdrive(path)
     if drive:
         if len(drive) == 2 and drive[1] == ":" and drive[0].isascii() and drive[0].isalpha():
-            if not tail.startswith(("\\", "/")):
-                raise ValueError("Drive-relative project paths are not absolute")
+            if not tail.startswith(("\\", "/")) or not tail.strip("\\/"):
+                raise ValueError("Drive-relative or root-only paths are not saved projects")
         elif drive.startswith(("\\\\", "//")):
             # A UNC identity must include both server and share and a path
             # below that share. Do not accept a bare network authority.
