@@ -32,6 +32,7 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
+from item_verification import validate_expected_items, verify_items
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import ducking
@@ -129,7 +130,7 @@ TOOLS = [
     Tool(
         name="ymm4_interact",
         description=(
-            "validate=タイムライン整合性・期待する配置の検証。qa_gate=修正ループの合格・継続・停止判定。add_scriptはdry_runで実行前に確認できます。"
+            "validate=タイムライン整合性・期待する配置の検証。verify_items=安定IDで編集後の個別フィールドを読取検証。qa_gate=修正ループの合格・継続・停止判定。add_scriptはdry_runで実行前に確認できます。"
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
@@ -148,7 +149,7 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "verify_items", "qa_gate",
                              "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression", "jump_tachie", "shake_tachie"],
                     "description": "実行するアクションの種類"
                 },
@@ -186,7 +187,7 @@ TOOLS = [
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
                 "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
                 "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
-                "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
+                "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置期待値。verify_items: 必須item_idと検証対象revision/frame/layer/length/type/textを1つ以上指定（読み取り専用）"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
                 "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
@@ -915,6 +916,10 @@ async def dispatch(args: dict) -> Any:
             return await create_from_template(args)
         case "visual_qa":
             return await run_visual_qa(args)
+        case "verify_items":
+            expected = validate_expected_items(args.get("expected"))
+            snapshot = await ymm4_get("/items")
+            return verify_items(snapshot, expected)
         case "get_info":
             match sub_action:
                 case "status": return await ymm4_get("/status")
