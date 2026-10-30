@@ -35,7 +35,7 @@ from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate
 from item_verification import validate_expected_items, verify_items
 from ripple_planning import plan_ripple_delete
 from ripple_verification import verify_ripple_result
-from ripple_evidence import RippleEvidenceStore
+from ripple_evidence import RippleEvidenceStore, project_identity
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import ducking
@@ -935,15 +935,34 @@ async def dispatch(args: dict) -> Any:
                 raise ValueError("capture_evidence must be boolean")
             layers = args.get("layers")
             revisions = args.get("expected_revisions")
+            # A captured plan must be tied to a named project. Read the
+            # identity on both sides of the inventory fetch to detect a
+            # project switch while planning (best effort, not an atomic read).
+            project_before = await ymm4_get("/project") if capture else None
+            if capture:
+                try:
+                    before_identity = project_identity(project_before)
+                except ValueError:
+                    return {"success": False, "dry_run": True, "executable": False,
+                            "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
             snapshot = await ymm4_get("/items")
             plan = plan_ripple_delete(snapshot, start_frame=start, end_frame=end,
                                       layers=layers, expected_revisions=revisions)
             if not capture or not plan["success"]:
                 return plan
+            project_after = await ymm4_get("/project")
+            try:
+                after_identity = project_identity(project_after)
+            except ValueError:
+                return {**plan, "success": False, "executable": False,
+                        "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+            if before_identity != after_identity:
+                return {**plan, "success": False, "executable": False,
+                        "error_code": "RIPPLE_PROJECT_CHANGED"}
             try:
                 evidence = _ripple_evidence.capture(
-                    snapshot, start_frame=start, end_frame=end, layers=layers,
-                    expected_revisions=revisions)
+                    snapshot, project_info=project_after, start_frame=start,
+                    end_frame=end, layers=layers, expected_revisions=revisions)
             except (ValueError, TypeError, RecursionError) as exc:
                 return {**plan, "success": False, "executable": False,
                         "error_code": "RIPPLE_EVIDENCE_UNAVAILABLE",
@@ -961,8 +980,23 @@ async def dispatch(args: dict) -> Any:
                 if record is None:
                     return {"success": False, "passed": False,
                             "error_code": "RIPPLE_EVIDENCE_UNAVAILABLE"}
+                project_before = await ymm4_get("/project")
+                try:
+                    before_identity = project_identity(project_before)
+                except ValueError:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
                 after = await ymm4_get("/items")
-                return _ripple_evidence.verify(record, after)
+                project_after = await ymm4_get("/project")
+                try:
+                    after_identity = project_identity(project_after)
+                except ValueError:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+                if before_identity != after_identity:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_PROJECT_CHANGED"}
+                return _ripple_evidence.verify(record, after, project_info=project_after)
             # Legacy caller-provided inventory remains available but cannot
             # establish the provenance of the before state.
             start = integer(args.get("start_frame"), "start_frame")
