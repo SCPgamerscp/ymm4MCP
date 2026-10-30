@@ -10,6 +10,10 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024
 # A malicious client can send an unlimited number of tiny/empty ASGI frames
 # without ever exceeding the byte limit. Bound CPU work as well as memory.
 MAX_REQUEST_EVENTS = 65_536
+MAX_HEADER_FIELDS = 256
+MAX_HEADER_BYTES = 64 * 1024
+# RFC 9110 field names are ASCII tokens, not arbitrary header text.
+_HEADER_TOKEN_BYTES = frozenset(b"!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 
 class RequestBodyLimit:
@@ -20,15 +24,47 @@ class RequestBodyLimit:
         self.max_bytes = max_bytes
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("method", "").upper() != "POST":
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        method = scope.get("method", "")
+        if not isinstance(method, str):
+            return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
+                scope, receive, send)
+        if method.upper() != "POST":
             return await self.app(scope, receive, send)
 
         headers = scope.get("headers", [])
-        lengths = [value for name, value in headers if name.lower() == b"content-length"]
-        # A proxy and the ASGI server may disagree about framing when both
-        # Content-Length and Transfer-Encoding are supplied.
-        has_transfer_encoding = any(name.lower() == b"transfer-encoding"
-                                    for name, _ in headers)
+        if not isinstance(headers, (list, tuple)) or len(headers) > MAX_HEADER_FIELDS:
+            return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
+                scope, receive, send)
+        normalized_headers = []
+        header_bytes = 0
+        for field in headers:
+            if not isinstance(field, (list, tuple)) or len(field) != 2:
+                return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
+                    scope, receive, send)
+            name, value = field
+            if not isinstance(name, bytes) or not isinstance(value, bytes):
+                return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
+                    scope, receive, send)
+            if (not name or any(char not in _HEADER_TOKEN_BYTES for char in name) or
+                    any(char in value for char in (0, 10, 13))):
+                return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
+                    scope, receive, send)
+            header_bytes += len(name) + len(value)
+            if header_bytes > MAX_HEADER_BYTES:
+                return await JSONResponse({"error": "Request headers too large"}, status_code=431)(
+                    scope, receive, send)
+            normalized_headers.append((name.lower(), value))
+
+        lengths = [value for name, value in normalized_headers if name == b"content-length"]
+        transfers = [value for name, value in normalized_headers if name == b"transfer-encoding"]
+        # Only a single chunked encoding is supported. Reject ambiguous or
+        # stacked transfer codings rather than trusting conflicting parsers.
+        if len(transfers) > 1 or (transfers and transfers[0].strip(b" \t").lower() != b"chunked"):
+            return await JSONResponse({"error": "Invalid Transfer-Encoding"}, status_code=400)(
+                scope, receive, send)
+        has_transfer_encoding = bool(transfers)
         if ((lengths and has_transfer_encoding) or len(lengths) > 1 or
                 (lengths and (not isinstance(lengths[0], bytes) or
                               len(lengths[0]) > 20 or not lengths[0].isascii() or
