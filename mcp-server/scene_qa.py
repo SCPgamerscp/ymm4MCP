@@ -14,6 +14,16 @@ def _gap_statistics(scene_rows, category):
     active = None
     longest = None
     count = 0
+    top = []
+
+    def remember(gap):
+        # Bound repair hints even when a timeline contains thousands of gaps.
+        top.append(gap)
+        top.sort(key=lambda row: (-(row["end_frame"] - row["start_frame"]),
+                                  row["start_frame"]))
+        if len(top) > 10:
+            top.pop()
+
     for scene in scene_rows:
         for gap in scene[f"{category}_uncovered_ranges"]:
             start, end = gap["start_frame"], gap["end_frame"]
@@ -28,6 +38,8 @@ def _gap_statistics(scene_rows, category):
                          active["end_frame"] - active["start_frame"] >
                          longest["end_frame"] - longest["start_frame"])):
                     longest = active
+                if active is not None:
+                    remember(active)
                 active = {"start_frame": start, "end_frame": end,
                           "scene_ids": [scene["id"]]}
     if (active is not None and
@@ -35,7 +47,9 @@ def _gap_statistics(scene_rows, category):
              active["end_frame"] - active["start_frame"] >
              longest["end_frame"] - longest["start_frame"])):
         longest = active
-    return longest, count
+    if active is not None:
+        remember(active)
+    return longest, count, top
 
 
 def _longest_continuous_gap(scene_rows, category):
@@ -161,7 +175,7 @@ def inspect(items, config):
     for category in ("visual", "audio"):
         covered = sum(scene[f"{category}_covered_frames"] for scene in index["scenes"])
         uncovered = scoped_frames - covered
-        longest, gap_count = _gap_statistics(index["scenes"], category)
+        longest, gap_count, top_gaps = _gap_statistics(index["scenes"], category)
         uncovered_scene_count = sum(bool(scene[f"{category}_uncovered_ranges"])
                                     for scene in index["scenes"])
         empty_scene_count = sum(scene[f"{category}_covered_frames"] == 0
@@ -172,6 +186,8 @@ def inspect(items, config):
             "uncovered_frames": uncovered, "coverage_ratio": ratio,
             "longest_uncovered_range": longest,
             "continuous_gap_count": gap_count,
+            "largest_uncovered_ranges": top_gaps,
+            "omitted_uncovered_range_count": gap_count - len(top_gaps),
             "uncovered_scene_count": uncovered_scene_count,
             "empty_scene_count": empty_scene_count,
         }
