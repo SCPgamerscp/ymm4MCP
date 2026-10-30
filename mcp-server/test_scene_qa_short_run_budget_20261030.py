@@ -20,18 +20,18 @@ class SceneShortRunBudgetTests(unittest.TestCase):
             "max_visual_gap_frames": 1000, **options,
         })
 
-    def test_explicit_gap_limit_rejected_when_visual_disabled(self):
-        with self.assertRaisesRegex(ValueError, "disabled visual coverage"):
-            scene_qa.inspect([], {
-                "scene_ranges": [scene("s", 0, 10)],
-                "require_visual": False,
-                "max_visual_gap_frames": 10,
-            })
+    def test_legacy_gap_limit_remains_ignored_for_disabled_visual(self):
+        result = scene_qa.inspect([], {
+            "scene_ranges": [scene("s", 0, 10)],
+            "require_visual": False,
+            "max_visual_gap_frames": 10,
+        })
+        self.assertTrue(result["success"])
 
-    def test_explicit_gap_limit_rejected_when_audio_disabled(self):
-        with self.assertRaisesRegex(ValueError, "disabled audio coverage"):
-            self.inspect([], [scene("s", 0, 10)],
-                         max_audio_gap_frames=1)
+    def test_legacy_gap_limit_remains_ignored_for_disabled_audio(self):
+        result = self.inspect([], [scene("s", 0, 10)],
+                              max_audio_gap_frames=1)
+        self.assertTrue(result["success"])
 
     def test_default_gap_limit_does_not_disable_a_category(self):
         result = scene_qa.inspect(
