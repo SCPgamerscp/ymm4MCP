@@ -90,11 +90,16 @@ class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
 
     def test_malformed_type_qualifiers_cannot_hide_gaps(self):
         for kind in ("Other..VideoItem", ".VideoItem", "Other+.VideoItem",
-                     " VideoItem", "VideoItem ", "Other.\\nVideoItem",
                      "Other.VideoItem+"):
             with self.subTest(kind=kind):
                 result = with_coverage({"scenes": [scene([video(kind)])]})
                 self.assertEqual(result["scenes"][0]["visual_covered_frames"], 0)
+        # Padded and control-character types are invalid evidence, not
+        # merely unknown types: accepting them can hide real media coverage.
+        for kind in (" VideoItem", "VideoItem ", "Other.\\nVideoItem"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                    ValueError, "scene item type"):
+                with_coverage({"scenes": [scene([video(kind)])]})
 
     def test_legitimate_namespaced_and_nested_types_still_cover(self):
         for kind in ("VideoItem", "VIDEOITEM",
