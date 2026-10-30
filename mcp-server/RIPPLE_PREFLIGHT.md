@@ -113,6 +113,26 @@ The server fetches fresh `/items` and verifies against its own pre-edit
 snapshot. Supplying `before_snapshot`, cut bounds, layers, or revisions with
 `plan_id` is rejected rather than silently overriding the captured plan.
 
+### Saved-project binding and project-switch guard
+
+With `capture_evidence=true`, the server now reads `GET /api/project`
+**before and after** fetching `GET /api/items`. A saved project with an
+absolute `projectPath` is required; unsaved/unnamed projects return
+`RIPPLE_PROJECT_UNAVAILABLE` instead of issuing a misleading verification
+handle. A changed path during capture returns `RIPPLE_PROJECT_CHANGED`.
+
+Verification by `plan_id` similarly reads the project identity on both
+sides of the fresh inventory fetch, then compares it with the original
+project path. This prevents a correct-looking timeline in a **different
+named project** from passing the captured plan's verification. Windows paths
+are compared case-insensitively with normalized separators.
+
+This is **not** a project-instance lock. Reopening the same path, switching
+away and back between individual reads, or changing the underlying file
+without changing its path cannot be ruled out by these HTTP calls. Host-side
+atomic transactions, a project-instance identity, save/reopen tests and
+rollback remain necessary before calling ripple deletion complete.
+
 Evidence is kept **in memory only** (up to 8 recent plans, 2 MB per snapshot,
 10-minute TTL). An unknown, evicted, expired, or restart-lost `plan_id`
 returns `RIPPLE_EVIDENCE_UNAVAILABLE`; if it expires during a host request,
