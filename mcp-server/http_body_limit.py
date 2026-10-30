@@ -10,6 +10,8 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024
 # A malicious client can send an unlimited number of tiny/empty ASGI frames
 # without ever exceeding the byte limit. Bound CPU work as well as memory.
 MAX_REQUEST_EVENTS = 65_536
+# Reject pathological zero-progress streams earlier than the overall event cap.
+MAX_EMPTY_REQUEST_EVENTS = 1_024
 MAX_HEADER_FIELDS = 256
 MAX_HEADER_BYTES = 64 * 1024
 # RFC 9110 field names are ASCII tokens, not arbitrary header text.
@@ -27,7 +29,8 @@ class RequestBodyLimit:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         method = scope.get("method", "")
-        if not isinstance(method, str):
+        if (not isinstance(method, str) or not method or not method.isascii() or
+                any(char not in _HEADER_TOKEN_BYTES for char in method.encode("ascii"))):
             return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
                 scope, receive, send)
         if method.upper() != "POST":
@@ -48,7 +51,7 @@ class RequestBodyLimit:
                 return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
                     scope, receive, send)
             if (not name or any(char not in _HEADER_TOKEN_BYTES for char in name) or
-                    any(char in value for char in (0, 10, 13))):
+                    any((char < 32 and char != 9) or char == 127 for char in value)):
                 return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
                     scope, receive, send)
             header_bytes += len(name) + len(value)
@@ -65,6 +68,10 @@ class RequestBodyLimit:
             return await JSONResponse({"error": "Invalid Transfer-Encoding"}, status_code=400)(
                 scope, receive, send)
         has_transfer_encoding = bool(transfers)
+        # HTTP/2 and HTTP/3 do not use HTTP/1.1 chunked transfer coding.
+        if has_transfer_encoding and scope.get("http_version", "1.1") != "1.1":
+            return await JSONResponse({"error": "Invalid Transfer-Encoding"}, status_code=400)(
+                scope, receive, send)
         if ((lengths and has_transfer_encoding) or len(lengths) > 1 or
                 (lengths and (not isinstance(lengths[0], bytes) or
                               len(lengths[0]) > 20 or not lengths[0].isascii() or
@@ -79,6 +86,7 @@ class RequestBodyLimit:
 
         body = bytearray()
         events = 0
+        empty_events = 0
         while True:
             message = await receive()
             events += 1
@@ -98,6 +106,11 @@ class RequestBodyLimit:
             if events > MAX_REQUEST_EVENTS:
                 return await JSONResponse({"error": "Too many request chunks"}, status_code=413)(
                     scope, receive, send)
+            if not chunk and more_body:
+                empty_events += 1
+                if empty_events > MAX_EMPTY_REQUEST_EVENTS:
+                    return await JSONResponse({"error": "Too many empty request chunks"}, status_code=413)(
+                        scope, receive, send)
             if len(chunk) > self.max_bytes - len(body):
                 return await JSONResponse({"error": "MCP request body too large"}, status_code=413)(
                     scope, receive, send)
@@ -119,6 +132,12 @@ class RequestBodyLimit:
             if not delivered:
                 delivered = True
                 return {"type": "http.request", "body": bytes(body), "more_body": False}
-            return await receive()
+            message = await receive()
+            # Once more_body=False has been observed, a second request body
+            # would bypass the size check. Only disconnect notifications are
+            # valid after the replayed terminal request frame.
+            if not isinstance(message, dict) or message.get("type") != "http.disconnect":
+                return {"type": "http.disconnect"}
+            return message
 
         return await self.app(scope, replay_receive, send)
