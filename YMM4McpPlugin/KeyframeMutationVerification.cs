@@ -73,7 +73,8 @@ namespace YMM4McpPlugin
         internal static bool Confirm(string action, int at, double? requested,
             IReadOnlyList<int> frames, IReadOnlyList<double> values, double? defaultValue)
         {
-            if (frames == null || values == null || at < 0) return false;
+            if (frames == null || values == null || at < 0 ||
+                !HasReadableLayout(frames, values)) return false;
             var unique = new HashSet<int>();
             foreach (var frame in frames)
                 if (frame < 0 || !unique.Add(frame)) return false;
@@ -150,13 +151,18 @@ namespace YMM4McpPlugin
                 if (!double.IsFinite(values[0])) return false;
                 snapshot[0] = values[0];
             }
+            int previousFrame = -1;
             for (int i = 0; i < frames.Count; i++)
             {
                 int frame = frames[i];
                 double value = values[i + (implicitStart ? 1 : 0)];
-                if (frame < 0 || !double.IsFinite(value) ||
+                // YMM4 frame/value indices are positional. An unordered host
+                // collection can make an otherwise valid-looking edit affect
+                // the wrong time, so it must not be read or edited as valid.
+                if (frame <= previousFrame || !double.IsFinite(value) ||
                     !snapshot.TryAdd(frame, value))
                     return false;
+                previousFrame = frame;
             }
             return true;
         }
