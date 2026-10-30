@@ -266,6 +266,14 @@ def inspect(items, config):
         shortest_run, run_count, short_run_count = _covered_run_statistics(
             index["scenes"], category, covered_run_minimums[category])
         minimum_run = covered_run_minimums[category]
+        # Emit bounded evidence when a covered-run gate is requested, so
+        # automated repair can locate the shortest visible/audible segment.
+        if minimum_run is not None or covered_run_count_limits[category] is not None:
+            overall[category].update({
+                "covered_run_count": run_count,
+                "short_covered_run_count": short_run_count,
+                "shortest_covered_range": shortest_run,
+            })
         if (minimum_run is not None and
                 short_run_count > short_run_count_limits[category]):
             issues.append({
