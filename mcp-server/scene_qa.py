@@ -5,7 +5,7 @@ import scenes
 import scene_media
 
 
-def _longest_continuous_gap(scene_rows, category):
+def _gap_statistics(scene_rows, category):
     """Find the longest missing-media interval across adjacent scene boundaries.
 
     Gaps between caller-defined scenes are intentionally out of scope; only
@@ -13,6 +13,7 @@ def _longest_continuous_gap(scene_rows, category):
     """
     active = None
     longest = None
+    count = 0
     for scene in scene_rows:
         for gap in scene[f"{category}_uncovered_ranges"]:
             start, end = gap["start_frame"], gap["end_frame"]
@@ -21,6 +22,7 @@ def _longest_continuous_gap(scene_rows, category):
                 if active["scene_ids"][-1] != scene["id"]:
                     active["scene_ids"].append(scene["id"])
             else:
+                count += 1
                 if (active is not None and
                         (longest is None or
                          active["end_frame"] - active["start_frame"] >
@@ -33,7 +35,12 @@ def _longest_continuous_gap(scene_rows, category):
              active["end_frame"] - active["start_frame"] >
              longest["end_frame"] - longest["start_frame"])):
         longest = active
-    return longest
+    return longest, count
+
+
+def _longest_continuous_gap(scene_rows, category):
+    """Compatibility helper for callers interested only in the longest gap."""
+    return _gap_statistics(scene_rows, category)[0]
 
 
 def inspect(items, config):
@@ -43,11 +50,15 @@ def inspect(items, config):
                "min_visual_coverage_ratio", "min_audio_coverage_ratio",
                "max_visual_continuous_gap_frames", "max_audio_continuous_gap_frames",
                "max_visual_overall_uncovered_frames", "max_audio_overall_uncovered_frames",
-               "min_visual_overall_coverage_ratio", "min_audio_overall_coverage_ratio"}
+               "min_visual_overall_coverage_ratio", "min_audio_overall_coverage_ratio",
+               "max_visual_gap_count", "max_audio_gap_count",
+               "max_visual_overall_gap_count", "max_audio_overall_gap_count",
+               "max_visual_uncovered_scene_count", "max_audio_uncovered_scene_count"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
     continuous_limits, overall_limits, overall_min_ratios = {}, {}, {}
+    gap_count_limits, overall_gap_count_limits, uncovered_scene_limits = {}, {}, {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -83,9 +94,18 @@ def inspect(items, config):
             if not 0 <= value <= 1:
                 raise ValueError(f"{overall_ratio_key} must be between 0 and 1")
             overall_min_ratios[category] = value
+        for option, destination in (
+                ("gap_count", gap_count_limits),
+                ("overall_gap_count", overall_gap_count_limits),
+                ("uncovered_scene_count", uncovered_scene_limits)):
+            key = f"max_{category}_{option}"
+            destination[category] = integer(config[key], key) if key in config else None
         if not required[category] and any(
                 key in config for key in (ratio_key, total_key, continuous_key,
-                                          overall_key, overall_ratio_key)):
+                                          overall_key, overall_ratio_key,
+                                           f"max_{category}_gap_count",
+                                           f"max_{category}_overall_gap_count",
+                                           f"max_{category}_uncovered_scene_count")):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
@@ -110,6 +130,14 @@ def inspect(items, config):
                                "scene_id": scene["id"], "uncovered_ranges": reported,
                                "frame_range": [reported[0]["start_frame"], reported[-1]["end_frame"]],
                                "message": f"Scene {scene['id']} has uncovered {category} intervals"})
+            gap_count_limit = gap_count_limits[category]
+            if gap_count_limit is not None and len(all_gaps) > gap_count_limit:
+                issues.append({
+                    "code": f"SCENE_{category.upper()}_GAP_COUNT",
+                    "severity": "error", "scene_id": scene["id"],
+                    "gap_count": len(all_gaps), "maximum_gap_count": gap_count_limit,
+                    "message": f"Scene {scene['id']} has too many uncovered {category} intervals",
+                })
             threshold = min_ratios[category]
             if threshold is not None:
                 length = scene["end_frame"] - scene["start_frame"]
@@ -129,15 +157,35 @@ def inspect(items, config):
     for category in ("visual", "audio"):
         covered = sum(scene[f"{category}_covered_frames"] for scene in index["scenes"])
         uncovered = scoped_frames - covered
-        longest = _longest_continuous_gap(index["scenes"], category)
+        longest, gap_count = _gap_statistics(index["scenes"], category)
+        uncovered_scene_count = sum(bool(scene[f"{category}_uncovered_ranges"])
+                                    for scene in index["scenes"])
         ratio = covered / scoped_frames
         overall[category] = {
             "scoped_frames": scoped_frames, "covered_frames": covered,
             "uncovered_frames": uncovered, "coverage_ratio": ratio,
             "longest_uncovered_range": longest,
+            "continuous_gap_count": gap_count,
+            "uncovered_scene_count": uncovered_scene_count,
         }
         if not required[category]:
             continue
+        overall_gap_limit = overall_gap_count_limits[category]
+        if overall_gap_limit is not None and gap_count > overall_gap_limit:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_OVERALL_GAP_COUNT",
+                "severity": "error", "gap_count": gap_count,
+                "maximum_gap_count": overall_gap_limit,
+                "message": f"Too many continuous {category} gaps in scoped scenes",
+            })
+        scene_limit = uncovered_scene_limits[category]
+        if scene_limit is not None and uncovered_scene_count > scene_limit:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_UNCOVERED_SCENE_COUNT",
+                "severity": "error", "uncovered_scene_count": uncovered_scene_count,
+                "maximum_uncovered_scene_count": scene_limit,
+                "message": f"Too many scenes have uncovered {category} frames",
+            })
         continuous_limit = continuous_limits[category]
         if (continuous_limit is not None and longest is not None and
                 longest["end_frame"] - longest["start_frame"] > continuous_limit):
