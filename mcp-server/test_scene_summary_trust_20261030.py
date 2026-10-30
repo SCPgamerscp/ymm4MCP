@@ -63,7 +63,7 @@ class SceneEvidenceSummaryTests(unittest.TestCase):
     def test_rejects_forged_layer_occupancy_summary(self):
         for field, bad in (
             ("covered_frames", 0), ("uncovered_frames", 20),
-            ("item_ids", ["audio"]), ("uncovered_ranges", []),
+            ("item_ids", ["audio"]), ("uncovered_ranges", [{"start_frame": 0, "end_frame": 1}]),
             ("layer", 9)):
             with self.subTest(field=field):
                 index = snapshot()
@@ -106,7 +106,7 @@ class SceneEvidenceSummaryTests(unittest.TestCase):
             with_coverage(index)
 
     def test_rejects_invalid_unknown_media_type_evidence(self):
-        for kind in (123, True, "", " ", "x" * 129, "VideoItem\\n"):
+        for kind in (123, True, "", " ", "x" * 129, "VideoItem" + chr(10)):
             with self.subTest(kind=kind):
                 index = {"scenes": [{"start_frame": 0, "end_frame": 20,
                                     "items": [{"type": kind}]}]}
@@ -124,7 +124,7 @@ class SceneEvidenceSummaryTests(unittest.TestCase):
             with self.subTest(evidence=evidence):
                 index = {"scenes": [{"start_frame": 0, "end_frame": 20,
                                     "items": [{"type": "Unknown", **evidence}]}]}
-                with self.assertRaisesRegex(ValueError, "visible range"):
+                with self.assertRaisesRegex(ValueError, "visible item range"):
                     with_coverage(index)
 
     def test_rejects_out_of_range_layer(self):
@@ -141,7 +141,7 @@ class SceneEvidenceSummaryTests(unittest.TestCase):
             {"start_frame": 0, "end_frame": 20, "items": [
                 {"type": "Unknown", "item_id": "x",
                  "frame": 30, "end_frame": 40,
-                 "visible_start_frame": 30, "visible_end_frame": 20}]}]}
+                 "visible_start_frame": 0, "visible_end_frame": 20}]}]}
         with self.assertRaisesRegex(ValueError, "does not intersect"):
             with_coverage(index)
 
