@@ -191,7 +191,7 @@ jobs:
           # check a PR pushed midway through the audit could silently leave a
           # green composition that does not represent the current open heads.
           gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
-            --jq '.[] | "\\(.number) \\(.head.sha)"' | sort -n -k1,1 \
+            --jq '.[] | "\(.number) \(.head.sha)"' | sort -n -k1,1 \
             > "$RUNNER_TEMP/open-pr-heads-before.txt"
           mapfile -t numbers < <(awk '{print $1}' "$RUNNER_TEMP/open-pr-heads-before.txt")
           if (( ${#numbers[@]} == 0 )); then
@@ -254,7 +254,7 @@ jobs:
           # opened/closed PR invalidates the audit even if every git merge
           # succeeded; do not archive or run integration against stale heads.
           gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
-            --jq '.[] | "\\(.number) \\(.head.sha)"' | sort -n -k1,1 \
+            --jq '.[] | "\(.number) \(.head.sha)"' | sort -n -k1,1 \
             > "$RUNNER_TEMP/open-pr-heads-after.txt"
           if ! cmp -s "$RUNNER_TEMP/open-pr-heads-before.txt" "$RUNNER_TEMP/open-pr-heads-after.txt"; then
             echo "::error::Open PR set or head SHA changed during composition; retry integration on the new heads."
