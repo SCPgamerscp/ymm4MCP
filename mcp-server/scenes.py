@@ -1,5 +1,7 @@
 """Read-only view of timeline items grouped by caller-defined scene ranges."""
 
+import unicodedata
+
 from editing import MAX_FRAME, integer
 from scene_media import MAX_SCENE_ITEMS, MAX_TOTAL_SCENE_ITEMS
 
@@ -18,12 +20,8 @@ def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[d
 def _valid_identifier(value: object) -> bool:
     """Reject blank or control-character IDs without changing readable IDs."""
     return (isinstance(value, str) and bool(value.strip())
-            and not any(
-                (code := ord(char)) < 32 or 127 <= code <= 159
-                or code in (0x061C, 0x200E, 0x200F)
-                or 0x202A <= code <= 0x202E
-                or 0x2066 <= code <= 0x2069
-                for char in value))
+            and value == value.strip() and unicodedata.is_normalized("NFC", value)
+            and not any(unicodedata.category(char).startswith("C") for char in value))
 
 
 def index(items: list[dict], ranges: list[dict]) -> dict:
@@ -63,11 +61,8 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
             raise ValueError("item_id exceeds 256 characters")
         if "type" in raw and (not isinstance(raw["type"], str)
                               or not raw["type"].strip() or len(raw["type"]) > 128
-                              or any((code := ord(char)) < 32 or 127 <= code <= 159
-                                     or code in (0x061C, 0x200E, 0x200F)
-                                     or 0x202A <= code <= 0x202E
-                                     or 0x2066 <= code <= 0x2069
-                                     for char in raw["type"])):
+                              or any(unicodedata.category(char).startswith("C")
+                                     for char in raw["type"]))):
             raise ValueError("item.type must be a bounded readable string")
         if identity in seen_item_ids:
             raise ValueError("duplicate item_id in timeline snapshot")
