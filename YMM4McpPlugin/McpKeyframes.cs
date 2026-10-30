@@ -153,9 +153,6 @@ namespace YMM4McpPlugin
                 if (KeyframeHostBinding.HasConflictingBinding(item, anim))
                     return Failure("KEYFRAME_BINDING_CONFLICT",
                         "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
-                if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
-                    return Failure("KEYFRAME_BINDING_UNAVAILABLE",
-                        "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
                 // Capture observable state before invoking reflection-based
                 // native methods. They can partially mutate then return false.
                 List<int> framesBefore;
@@ -172,6 +169,15 @@ namespace YMM4McpPlugin
                     return Failure("KEYFRAME_READBACK_INVALID",
                         "変更前のAnimationに読取不能なFrames/Valuesがあります。編集せず中止しました");
                 }
+                // Reject an already malformed or unordered host layout before
+                // binding a detached animation or calling a native mutation.
+                if (!KeyframeMutationVerification.HasReadableLayout(
+                        framesBefore, valuesBefore))
+                    return Failure("KEYFRAME_READBACK_INVALID",
+                        "変更前のFrames/Valuesの順序または対応関係が不正です。編集せず中止しました");
+                if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
+                    return Failure("KEYFRAME_BINDING_UNAVAILABLE",
+                        "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
                 bool changed;
                 List<int> framesAfter;
                 List<double> valuesAfter;
@@ -228,6 +234,19 @@ namespace YMM4McpPlugin
                     return Failure("KEYFRAME_READBACK_MISMATCH",
                         "YMM4が操作成功を返しましたが、キーフレームの読戻しが一致しません。再試行前にinspectで状態を確認してください");
                 }
+                List<object> resultKeyframes;
+                try
+                {
+                    // A second host read can fail even after mutation confirmation.
+                    // Do not leak an unstructured error or claim edit success.
+                    resultKeyframes = ReadKeyframes(anim, located.frame);
+                }
+                catch (Exception)
+                {
+                    MarkItemChanged(item);
+                    return Failure("KEYFRAME_PARTIAL_MUTATION",
+                        "編集後の一覧読戻しに失敗しました。変更済みの可能性があるため状態を再確認してください");
+                }
                 MarkItemChanged(item);
                 var vm = GetMainViewModel();
                 if (vm != null)
@@ -245,7 +264,7 @@ namespace YMM4McpPlugin
                     prop,
                     action,
                     at = relativeFrame,
-                    keyframes = ReadKeyframes(anim, located.frame)
+                    keyframes = resultKeyframes
                 };
             });
         }
