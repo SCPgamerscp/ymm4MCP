@@ -10,12 +10,27 @@ MAX_TOTAL_SCENE_ITEMS = 100_000
 MAX_SCENES = 200
 
 
+def _is_noncharacter(char: str) -> bool:
+    """Unicode noncharacters are not safe host identifiers or type evidence."""
+    code = ord(char)
+    return 0xFDD0 <= code <= 0xFDEF or (code & 0xFFFE) == 0xFFFE
+
+
 def _safe_identifier(value, limit):
     return (isinstance(value, str) and bool(value.strip()) and len(value) <= limit
             and value == value.strip() and unicodedata.is_normalized("NFC", value)
-            and not any((category := unicodedata.category(char)) in {"Cc", "Cs"}
+            and not any((category := unicodedata.category(char)) in {"Cc", "Cs", "Zl", "Zp"}
+                        or _is_noncharacter(char)
                         or (category == "Cf" and char not in ("\u200c", "\u200d"))
                         for char in value))
+
+
+def _safe_item_type(value):
+    """Host CLR type evidence must be readable and canonically represented."""
+    return (isinstance(value, str) and bool(value.strip()) and len(value) <= 128
+            and value == value.strip() and unicodedata.is_normalized("NFC", value)
+            and not any(unicodedata.category(char) in {"Cc", "Cs", "Cf", "Zl", "Zp"}
+                        or _is_noncharacter(char) for char in value))
 
 
 def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
@@ -179,8 +194,9 @@ def with_coverage(index: dict) -> dict:
     # The complete response from scenes.index has stronger guarantees than
     # legacy callers' minimal scene lists. Do not silently accept missing
     # evidence when the index claims to be a complete successful snapshot.
-    canonical = (index.get("success") is True and
-                 "item_count" in index and "unassigned_item_ids" in index)
+    canonical = index.get("success") is True
+    if canonical and not {"item_count", "unassigned_item_ids"}.issubset(index):
+        raise ValueError("successful scene index is missing top-level evidence")
     required_scene_fields = {
         "id", "start_frame", "end_frame", "items", "item_count",
         "continues_from_previous_item_ids", "continues_into_next_item_ids",
@@ -220,12 +236,7 @@ def with_coverage(index: dict) -> dict:
             if canonical and not required_item_fields.issubset(item):
                 raise ValueError("canonical scene item is missing required evidence")
             kind = item.get("type")
-            if (kind is not None and
-                    (not isinstance(kind, str) or not kind.strip() or
-                     len(kind) > 128 or
-                     any((category := unicodedata.category(c)) in {"Cc", "Cs"}
-                         or (category == "Cf" and c not in ("\u200c", "\u200d"))
-                         for c in kind))):
+            if kind is not None and not _safe_item_type(kind):
                 raise ValueError("scene item type must be a bounded readable string")
             # Validate unknown item spans too: excluding their type from QA
             # must not allow malformed evidence to bypass integrity checks.
