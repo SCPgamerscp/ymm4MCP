@@ -13,7 +13,7 @@ class McpStdioAcceptanceTests(unittest.TestCase):
         result = check_stdio(
             Path(sys.executable), Path(__file__).with_name("server.py"),
             env=dict(os.environ), timeout_seconds=25.0)
-        self.assertGreaterEqual(result["tool_count"], 4)
+        self.assertGreaterEqual(result["tool_count"], 3)
         self.assertNotIn("token", repr(result).lower())
 
     def test_missing_server_rejected(self):

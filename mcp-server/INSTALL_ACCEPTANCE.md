@@ -15,6 +15,6 @@
 
 ## MCP stdio の実接続検査
 
-`check_installation.cmd` は認証付きHTTP statusに加え、インストール先のPythonを**実際に子プロセス起動**して、各Claude Desktopプロファイルの環境変数でMCP `initialize` と `tools/list` を実行します。`ymm4_interact`・`ymm4_preview`・`ymm4_advanced`・`ymm4_analyze_video` の4ツールが見えなければ失敗します。**編集ツールの呼び出しは行いません**。成功時の `mcp_stdio: ready` と `mcp_profiles_checked` はClaudeのプロセス起動・MCPハンドシェイクの確認であり、Claude DesktopのGUIから実際に利用できることの保証ではありません。失敗時にAPIキー・トークン・プロファイル環境変数を出力しません。
+`check_installation.cmd` は認証付きHTTP statusに加え、インストール先のPythonを**実際に子プロセス起動**して、各Claude Desktopプロファイルの環境変数でMCP `initialize` と `tools/list` を実行します。`ymm4_interact`・`ymm4_preview`・`ymm4_analyze_video` の3ツールが見えなければ失敗します。危険な `ymm4_advanced` は設定で明示的に有効化した場合だけ公開されるため必須にしません。**編集ツールの呼び出しは行いません**。成功時の `mcp_stdio: ready` と `mcp_profiles_checked` はClaudeのプロセス起動・MCPハンドシェイクの確認であり、Claude DesktopのGUIから実際に利用できることの保証ではありません。失敗時にAPIキー・トークン・プロファイル環境変数を出力しません。
 
 CIでは `python -m unittest -v test_check_mcp_stdio` により同じSDKを用いた実プロセスのMCP初期化を確認します。これはWindows/YMM4実機での配布・プラグイン読み込み確認とは区別してください。

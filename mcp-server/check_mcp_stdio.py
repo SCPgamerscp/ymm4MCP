@@ -13,7 +13,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 REQUIRED_TOOLS = frozenset({
-    "ymm4_interact", "ymm4_preview", "ymm4_advanced", "ymm4_analyze_video"
+    "ymm4_interact", "ymm4_preview", "ymm4_analyze_video"
 })
 
 
@@ -45,6 +45,7 @@ def check_stdio(python: Path, server: Path, *, env: dict[str, str],
                             raise McpStdioProbeError("Unexpected MCP server identity")
                         listed = await session.list_tools()
                         names = {tool.name for tool in listed.tools}
+                        # Advanced tool is intentionally hidden unless enabled.
                         if not REQUIRED_TOOLS.issubset(names):
                             raise McpStdioProbeError("Required MCP tools unavailable")
                         return {"tool_count": len(names)}

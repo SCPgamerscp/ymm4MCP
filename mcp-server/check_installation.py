@@ -143,7 +143,7 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
         child_env.update(profile_env)
         report = mcp_probe(python, server, env=child_env)
         if (not isinstance(report, dict) or type(report.get("tool_count")) is not int
-                or report["tool_count"] < 4):
+                or report["tool_count"] < 3):
             raise InstallationError("Installed MCP server tool discovery failed")
         mcp_tool_counts.append(report["tool_count"])
     for path in configs:
