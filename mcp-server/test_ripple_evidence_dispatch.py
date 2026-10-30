@@ -86,6 +86,19 @@ class RippleEvidenceDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(get.await_count, 6)
 
+    async def test_posix_case_only_project_switch_is_detected_by_dispatch(self):
+        original = {"success": True, "projectPath": "/home/editor/Movie.ymmp"}
+        switched = {"success": True, "projectPath": "/home/editor/movie.ymmp"}
+        with patch.object(server, "ymm4_get", new_callable=AsyncMock,
+                          side_effect=[original, BEFORE, original,
+                                       switched, AFTER, switched]):
+            plan = await server.dispatch(self.plan_args())
+            self.assertTrue(plan["success"])
+            result = await server.dispatch({
+                "action": "verify_ripple_delete", "plan_id": plan["plan_id"]})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_code"], "RIPPLE_PROJECT_CHANGED")
+
     async def test_project_switch_during_verify_fails_closed(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock,
                           side_effect=[PROJECT, BEFORE, PROJECT,
