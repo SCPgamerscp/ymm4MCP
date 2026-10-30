@@ -207,9 +207,8 @@ def with_coverage(index: dict) -> dict:
             # must not allow malformed evidence to bypass integrity checks.
             if "visible_start_frame" in item or "visible_end_frame" in item:
                 left, right = item.get("visible_start_frame"), item.get("visible_end_frame")
-                if (type(left) is not int or type(right) is not int or
-                        right <= left or left < start or right > end):
-                    raise ValueError("visible item range must be within its scene")
+                if type(left) is not int or type(right) is not int or right <= left:
+                    raise ValueError("visible item range must be valid")
             if "item_id" in item:
                 identity = item["item_id"]
                 if not _safe_identifier(identity, 256) or identity in item_ids:
