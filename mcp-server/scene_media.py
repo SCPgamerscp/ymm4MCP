@@ -200,7 +200,11 @@ def with_coverage(index: dict) -> dict:
             kind = item.get("type")
             if (kind is not None and
                     (not isinstance(kind, str) or not kind.strip() or
-                     len(kind) > 128 or any(ord(c) < 32 or 127 <= ord(c) <= 159
+                     len(kind) > 128 or any((code := ord(c)) < 32
+                                            or 127 <= code <= 159
+                                            or code in (0x061C, 0x200E, 0x200F)
+                                            or 0x202A <= code <= 0x202E
+                                            or 0x2066 <= code <= 0x2069
                                             for c in kind))):
                 raise ValueError("scene item type must be a bounded readable string")
             # Validate unknown item spans too: excluding their type from QA
