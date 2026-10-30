@@ -74,3 +74,56 @@ is valid. These still require host transaction/rollback and live YMM4 acceptance
 
 Local regression tests:
 `python -m unittest -v test_ripple_verification test_ripple_integrity_extended`.
+
+## Server-owned pre-edit evidence (recommended; still read-only)
+
+The original `verify_ripple_delete(before_snapshot=...)` accepts a caller-provided
+pre-edit inventory. That input can be accidentally stale or replaced by a
+client; a passing result therefore does **not** establish where the original
+inventory came from.
+
+To bind a verification to an inventory actually read from the YMM4 host by
+the MCP server, request a short-lived plan handle:
+
+```json
+{
+  "action": "plan_ripple_delete",
+  "start_frame": 10,
+  "end_frame": 20,
+  "layers": [1],
+  "expected_revisions": {"native:cut": "REV1", "native:after": "REV2"},
+  "capture_evidence": true
+}
+```
+
+When preflight succeeds and the host supplies a **complete** inventory with
+matching `count` and `items`, the response includes `plan_id`,
+`before_sha256`, `evidence_source=server_captured_host_inventory`, and
+`evidence_expires_in_seconds=600`. The server stores an immutable copy of the
+host response and original cut parameters, not a reference to a client object.
+
+After a separately implemented edit, verify with **only**:
+
+```json
+{"action": "verify_ripple_delete", "plan_id": "<plan_id from preflight>"}
+```
+
+The server fetches fresh `/items` and verifies against its own pre-edit
+snapshot. Supplying `before_snapshot`, cut bounds, layers, or revisions with
+`plan_id` is rejected rather than silently overriding the captured plan.
+
+Evidence is kept **in memory only** (up to 8 recent plans, 2 MB per snapshot,
+10-minute TTL). An unknown, evicted, expired, or restart-lost `plan_id`
+returns `RIPPLE_EVIDENCE_UNAVAILABLE`; if it expires during a host request,
+`RIPPLE_EVIDENCE_EXPIRED` is returned. Capture fails closed when the host
+inventory is incomplete or too large. Do not retry the edit just because
+verification evidence expired.
+
+**This is evidence provenance, not an atomic edit implementation.** It cannot
+prove project identity after switching projects, prevent another process from
+changing the timeline between reads, restore deleted items, or verify
+properties omitted by the host. Actual ripple execution, full rollback,
+save/reopen and visual/audio acceptance are still missing. Keep #61 open.
+
+Tests: `python -m unittest -v test_ripple_evidence
+test_ripple_evidence_dispatch` from `mcp-server`.
