@@ -205,6 +205,28 @@ Check(!KeyframeMutationVerification.HasReadableLayout(
         new[] { 10, 10 }, new[] { 1.0, 2.0 }),
     "duplicate host Frames must not pass inventory readback");
 Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 20, 10 }, new[] { 2.0, 1.0 }),
+    "out-of-order host Frames must not be advertised as a valid animation");
+Check(!KeyframeMutationVerification.HasReadableLayout(
+        new[] { 20, 10 }, new[] { 1.0, 2.0, 3.0 }),
+    "implicit-start host layout must still require sorted Frames");
+Check(!Verified("set", 10, 1.0, new[] { 20, 10 },
+        new[] { 2.0, 1.0 }),
+    "a native setter must not report success with reordered keyframes");
+Check(!Verified("remove", 30, null, new[] { 20, 10 },
+        new[] { 2.0, 1.0 }),
+    "a native remover must not report success with reordered keyframes");
+Check(!Verified("clear", 0, null, new[] { 10, 5 },
+        new[] { 2.0, 1.0 }),
+    "a native clear must not report success with malformed remaining frames");
+Check(!Preserved("set", 10, new[] { 20, 10 }, new[] { 2.0, 1.0 },
+        new[] { 10, 20 }, new[] { 1.0, 2.0 }),
+    "a malformed pre-edit layout must never be accepted as preserved");
+Check(!Preserved("set", 10, new[] { 10, 20 }, new[] { 1.0, 2.0 },
+        new[] { 20, 10 }, new[] { 2.0, 1.0 }),
+    "a reordered post-edit layout must not be accepted as preserved");
+
+Check(!KeyframeMutationVerification.HasReadableLayout(
         new[] { 0, 10 }, new[] { 1.0, 2.0, 3.0 }),
     "implicit start and explicit frame zero cannot coexist unambiguously");
 Check(!KeyframeMutationVerification.HasReadableLayout(
