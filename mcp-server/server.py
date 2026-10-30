@@ -33,6 +33,7 @@ import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
 from item_verification import validate_expected_items, verify_items
+from ripple_planning import plan_ripple_delete
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import ducking
@@ -140,7 +141,7 @@ TOOLS = [
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
-            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
+            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), 'plan_ripple_delete'(安全な読み取り専用カット事前計画), "
             "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御), "
             "'set_expression'(表情名からFacePathへ安全に変換)、'jump_tachie'/'shake_tachie'(立ち絵のリアクション)を指定する。"
         ),
@@ -149,7 +150,7 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "verify_items", "qa_gate",
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "verify_items", "plan_ripple_delete", "qa_gate",
                              "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression", "jump_tachie", "shake_tachie"],
                     "description": "実行するアクションの種類"
                 },
@@ -188,6 +189,7 @@ TOOLS = [
                 "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
                 "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置期待値。verify_items: 必須item_idと検証対象revision/frame/layer/length/type/textを1つ以上指定（読み取り専用）"},
+                "expected_revisions": {"type": "object", "additionalProperties": {"type": "string"}, "description": "plan_ripple_delete: 影響する各item_idの現在revisionを必ず指定。変更は実行しない"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
                 "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
@@ -916,6 +918,18 @@ async def dispatch(args: dict) -> Any:
             return await create_from_template(args)
         case "visual_qa":
             return await run_visual_qa(args)
+        case "plan_ripple_delete":
+            # Fail-closed, read-only plan. Host transactions and full rollback
+            # are not implemented: never replay these steps as separate writes.
+            start = integer(args.get("start_frame"), "start_frame")
+            end = integer(args.get("end_frame"), "end_frame", 1)
+            if end <= start:
+                raise ValueError("end_frame must be greater than start_frame")
+            layers = args.get("layers")
+            revisions = args.get("expected_revisions")
+            snapshot = await ymm4_get("/items")
+            return plan_ripple_delete(snapshot, start_frame=start, end_frame=end,
+                                      layers=layers, expected_revisions=revisions)
         case "verify_items":
             expected = validate_expected_items(args.get("expected"))
             snapshot = await ymm4_get("/items")
