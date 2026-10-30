@@ -7,6 +7,9 @@ while preserving the receive channel for disconnect notifications.
 from starlette.responses import JSONResponse
 
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
+# A malicious client can send an unlimited number of tiny/empty ASGI frames
+# without ever exceeding the byte limit. Bound CPU work as well as memory.
+MAX_REQUEST_EVENTS = 65_536
 
 
 class RequestBodyLimit:
@@ -20,10 +23,17 @@ class RequestBodyLimit:
         if scope["type"] != "http" or scope.get("method", "").upper() != "POST":
             return await self.app(scope, receive, send)
 
-        lengths = [value for name, value in scope.get("headers", [])
-                   if name.lower() == b"content-length"]
-        if len(lengths) > 1 or (lengths and
-                (len(lengths[0]) > 20 or not lengths[0].isascii() or not lengths[0].isdigit())):
+        headers = scope.get("headers", [])
+        lengths = [value for name, value in headers if name.lower() == b"content-length"]
+        # A proxy and the ASGI server may disagree about framing when both
+        # Content-Length and Transfer-Encoding are supplied.
+        has_transfer_encoding = any(name.lower() == b"transfer-encoding"
+                                    for name, _ in headers)
+        if ((lengths and has_transfer_encoding) or len(lengths) > 1 or
+                (lengths and (not isinstance(lengths[0], bytes) or
+                              len(lengths[0]) > 20 or not lengths[0].isascii() or
+                              not lengths[0].isdigit() or
+                              (len(lengths[0]) > 1 and lengths[0].startswith(b"0"))))):
             return await JSONResponse({"error": "Invalid Content-Length"}, status_code=400)(
                 scope, receive, send)
         declared = int(lengths[0]) if lengths else None
@@ -32,19 +42,34 @@ class RequestBodyLimit:
                 scope, receive, send)
 
         body = bytearray()
+        events = 0
         while True:
             message = await receive()
-            if message["type"] == "http.disconnect":
+            events += 1
+            if not isinstance(message, dict):
+                return await JSONResponse({"error": "Invalid request stream"}, status_code=400)(
+                    scope, receive, send)
+            if message.get("type") == "http.disconnect":
                 return
-            if message["type"] != "http.request":
+            if message.get("type") != "http.request":
                 return await JSONResponse({"error": "Invalid request stream"}, status_code=400)(
                     scope, receive, send)
             chunk = message.get("body", b"")
+            more_body = message.get("more_body", False)
+            if not isinstance(chunk, bytes) or not isinstance(more_body, bool):
+                return await JSONResponse({"error": "Invalid request stream"}, status_code=400)(
+                    scope, receive, send)
+            if events > MAX_REQUEST_EVENTS:
+                return await JSONResponse({"error": "Too many request chunks"}, status_code=413)(
+                    scope, receive, send)
             if len(chunk) > self.max_bytes - len(body):
                 return await JSONResponse({"error": "MCP request body too large"}, status_code=413)(
                     scope, receive, send)
+            if declared is not None and len(chunk) > declared - len(body):
+                return await JSONResponse({"error": "Content-Length mismatch"}, status_code=400)(
+                    scope, receive, send)
             body.extend(chunk)
-            if not message.get("more_body", False):
+            if not more_body:
                 break
 
         if declared is not None and declared != len(body):
