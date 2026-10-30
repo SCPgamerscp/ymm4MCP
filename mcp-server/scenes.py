@@ -1,6 +1,7 @@
 """Read-only view of timeline items grouped by caller-defined scene ranges."""
 
 from editing import MAX_FRAME, integer
+from scene_media import MAX_SCENE_ITEMS, MAX_TOTAL_SCENE_ITEMS
 
 
 def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[dict]:
@@ -26,8 +27,8 @@ def _valid_identifier(value: object) -> bool:
 
 
 def index(items: list[dict], ranges: list[dict]) -> dict:
-    if not isinstance(items, list):
-        raise ValueError("items must be an array")
+    if not isinstance(items, list) or len(items) > MAX_TOTAL_SCENE_ITEMS:
+        raise ValueError("items must be a bounded array")
     if not isinstance(ranges, list) or not 1 <= len(ranges) <= 200:
         raise ValueError("scene_ranges must contain 1..200 ranges")
     scenes, previous_end, ids = [], 0, set()
@@ -48,6 +49,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
 
     unassigned = []
     seen_item_ids = set()
+    total_scene_memberships = 0
     for raw in items:
         if not isinstance(raw, dict):
             raise ValueError("item must be an object")
@@ -60,8 +62,13 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if len(identity) > 256:
             raise ValueError("item_id exceeds 256 characters")
         if "type" in raw and (not isinstance(raw["type"], str)
-                              or not raw["type"].strip() or len(raw["type"]) > 128):
-            raise ValueError("item.type must be a nonempty string of at most 128 characters")
+                              or not raw["type"].strip() or len(raw["type"]) > 128
+                              or any((code := ord(char)) < 32 or 127 <= code <= 159
+                                     or code in (0x061C, 0x200E, 0x200F)
+                                     or 0x202A <= code <= 0x202E
+                                     or 0x2066 <= code <= 0x2069
+                                     for char in raw["type"])):
+            raise ValueError("item.type must be a bounded readable string")
         if identity in seen_item_ids:
             raise ValueError("duplicate item_id in timeline snapshot")
         seen_item_ids.add(identity)
@@ -71,6 +78,10 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         memberships = 0
         for scene in scenes:
             if frame < scene["end_frame"] and end > scene["start_frame"]:
+                if (scene["item_count"] >= MAX_SCENE_ITEMS or
+                        total_scene_memberships >= MAX_TOTAL_SCENE_ITEMS):
+                    raise ValueError("scene index item membership budget exceeded")
+                total_scene_memberships += 1
                 visible_start = max(frame, scene["start_frame"])
                 visible_end = min(end, scene["end_frame"])
                 scene["items"].append({"item_id": identity, "frame": frame, "end_frame": end,
