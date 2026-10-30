@@ -75,6 +75,38 @@ def _uncovered_from_items(items: list[dict], start: int, end: int) -> list[dict]
     return gaps
 
 
+def _same_ranges(actual: object, expected: list[dict]) -> bool:
+    """Compare frame ranges without treating JSON booleans as integers."""
+    return (isinstance(actual, list) and len(actual) == len(expected)
+            and all(isinstance(row, dict)
+                    and set(row) == {"start_frame", "end_frame"}
+                    and type(row["start_frame"]) is int
+                    and type(row["end_frame"]) is int
+                    and row == reference
+                    for row, reference in zip(actual, expected)))
+
+
+def _same_layer_occupancy(actual: object, expected: list[dict]) -> bool:
+    """Check nested numeric evidence with exact types, not bool == 1."""
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        return False
+    for row, reference in zip(actual, expected):
+        if not isinstance(row, dict) or set(row) != set(reference):
+            return False
+        if ((row["layer"] is not None and type(row["layer"]) is not int)
+                or row["layer"] != reference["layer"]
+                or not isinstance(row["item_ids"], list)
+                or row["item_ids"] != reference["item_ids"]
+                or type(row["covered_frames"]) is not int
+                or type(row["uncovered_frames"]) is not int
+                or row["covered_frames"] != reference["covered_frames"]
+                or row["uncovered_frames"] != reference["uncovered_frames"]
+                or not _same_ranges(row["uncovered_ranges"],
+                                    reference["uncovered_ranges"])):
+            return False
+    return True
+
+
 def _validate_scene_summaries(scene: dict, start: int, end: int) -> None:
     """Reject stale or forged scene-wide and per-layer occupancy summaries."""
     keys = ("covered_frames", "uncovered_frames", "uncovered_ranges", "layer_occupancy")
@@ -86,8 +118,11 @@ def _validate_scene_summaries(scene: dict, start: int, end: int) -> None:
     expected = {"covered_frames": covered, "uncovered_frames": uncovered,
                 "uncovered_ranges": gaps}
     for key, value in expected.items():
-        if key in scene and (scene[key] != value or
-                             (key != "uncovered_ranges" and type(scene[key]) is not int)):
+        if key not in scene:
+            continue
+        valid = (_same_ranges(scene[key], value) if key == "uncovered_ranges"
+                 else type(scene[key]) is int and scene[key] == value)
+        if not valid:
             raise ValueError(f"scene {key} contradicts item occupancy")
     if "layer_occupancy" in scene:
         groups = {}
@@ -105,7 +140,7 @@ def _validate_scene_summaries(scene: dict, start: int, end: int) -> None:
                 "uncovered_frames": missing,
                 "uncovered_ranges": layer_gaps,
             })
-        if scene["layer_occupancy"] != expected_layers:
+        if not _same_layer_occupancy(scene["layer_occupancy"], expected_layers):
             raise ValueError("scene layer_occupancy contradicts item occupancy")
 
 
@@ -142,6 +177,7 @@ def with_coverage(index: dict) -> dict:
     seen_ids = set()
     assigned_item_ids = set()
     item_snapshots = {}
+    scene_item_ids = []
     previous_end = 0
     total_scene_items = 0
     for scene in index["scenes"]:
@@ -171,8 +207,9 @@ def with_coverage(index: dict) -> dict:
             # must not allow malformed evidence to bypass integrity checks.
             if "visible_start_frame" in item or "visible_end_frame" in item:
                 left, right = item.get("visible_start_frame"), item.get("visible_end_frame")
-                if type(left) is not int or type(right) is not int or right <= left:
-                    raise ValueError("visible item range must be valid")
+                if (type(left) is not int or type(right) is not int or
+                        right <= left or left < start or right > end):
+                    raise ValueError("visible item range must be within its scene")
             if "item_id" in item:
                 identity = item["item_id"]
                 if not _safe_identifier(identity, 256) or identity in item_ids:
@@ -230,6 +267,21 @@ def with_coverage(index: dict) -> dict:
                 raise ValueError("scene IDs must be distinct nonempty strings")
             seen_ids.add(identifier)
         _validate_scene_summaries(scene, start, end)
+        scene_item_ids.append(item_ids)
+    # A single item may appear in multiple scenes, but it must appear in
+    # *every* scene intersecting its immutable source span. Otherwise a
+    # missing continuation can conceal an uncovered segment from the QA gate.
+    for identity, snapshot in item_snapshots.items():
+        source = {key: value for key, (present, value) in
+                  zip(("frame", "end_frame", "type", "layer"), snapshot)
+                  if present}
+        if "frame" not in source or "end_frame" not in source:
+            continue
+        for scene, identities in zip(index["scenes"], scene_item_ids):
+            if (source["frame"] < scene["end_frame"]
+                    and source["end_frame"] > scene["start_frame"]
+                    and identity not in identities):
+                raise ValueError("scene item identity missing from intersecting scene")
     _validate_continuations(index["scenes"])
     if "item_count" in index or "unassigned_item_ids" in index:
         unassigned = index.get("unassigned_item_ids")
@@ -264,6 +316,21 @@ def with_coverage(index: dict) -> dict:
             updates[f"{category}_uncovered_ranges"] = gaps
             updates[f"{category}_covered_frames"] = covered
             updates[f"{category}_coverage_ratio"] = covered / duration
+        # Re-evaluating a previously annotated index must not silently
+        # overwrite stale or fabricated QA results. This is also idempotent
+        # for a genuine second invocation.
+        for key, expected in updates.items():
+            if key not in scene:
+                continue
+            actual = scene[key]
+            if key.endswith("_uncovered_ranges"):
+                valid = _same_ranges(actual, expected)
+            elif key.endswith("_covered_frames"):
+                valid = type(actual) is int and actual == expected
+            else:
+                valid = type(actual) is float and actual == expected
+            if not valid:
+                raise ValueError(f"scene {key} contradicts item coverage")
         pending.append((scene, updates))
     # Do not leave a partly updated index when a later scene contains invalid data.
     for scene, updates in pending:
