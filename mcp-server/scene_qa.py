@@ -166,6 +166,19 @@ def _empty_scene_streaks(scene_rows, category):
     return by_count, by_frames
 
 
+def _contiguous_blocks(scene_rows):
+    """Partition selected scenes at excluded timeline gaps."""
+    blocks, current = [], []
+    for scene in scene_rows:
+        if current and current[-1]["end_frame"] != scene["start_frame"]:
+            blocks.append(current)
+            current = []
+        current.append(scene)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
 def _longest_continuous_gap(scene_rows, category):
     """Compatibility helper for callers interested only in the longest gap."""
     return _gap_statistics(scene_rows, category)[0]
@@ -192,7 +205,13 @@ def inspect(items, config):
                "max_visual_leading_uncovered_frames", "max_audio_leading_uncovered_frames",
                "max_visual_trailing_uncovered_frames", "max_audio_trailing_uncovered_frames",
                "max_visual_consecutive_empty_scene_count", "max_audio_consecutive_empty_scene_count",
-               "max_visual_consecutive_empty_scene_frames", "max_audio_consecutive_empty_scene_frames"}
+               "max_visual_consecutive_empty_scene_frames", "max_audio_consecutive_empty_scene_frames",
+               "max_visual_block_leading_uncovered_frames", "max_audio_block_leading_uncovered_frames",
+               "max_visual_block_trailing_uncovered_frames", "max_audio_block_trailing_uncovered_frames",
+               "max_visual_block_uncovered_frames", "max_audio_block_uncovered_frames",
+               "min_visual_block_coverage_ratio", "min_audio_block_coverage_ratio",
+               "max_visual_block_gap_count", "max_audio_block_gap_count",
+               "max_visual_block_empty_scene_count", "max_audio_block_empty_scene_count"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
@@ -204,6 +223,8 @@ def inspect(items, config):
     covered_run_minimums, covered_run_count_limits = {}, {}
     short_run_count_limits = {}
     minimum_run_counts, minimum_longest_runs, short_run_frame_limits = {}, {}, {}
+    block_leading_limits, block_trailing_limits, block_uncovered_limits = {}, {}, {}
+    block_gap_limits, block_empty_limits, block_min_ratios = {}, {}, {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -250,6 +271,24 @@ def inspect(items, config):
                 ("consecutive_empty_scene_frames", empty_streak_frame_limits)):
             key = f"max_{category}_{option}"
             destination[category] = integer(config[key], key) if key in config else None
+        for option, destination in (
+                ("block_leading_uncovered_frames", block_leading_limits),
+                ("block_trailing_uncovered_frames", block_trailing_limits),
+                ("block_uncovered_frames", block_uncovered_limits),
+                ("block_gap_count", block_gap_limits),
+                ("block_empty_scene_count", block_empty_limits)):
+            key = f"max_{category}_{option}"
+            destination[category] = integer(config[key], key) if key in config else None
+        block_ratio_key = f"min_{category}_block_coverage_ratio"
+        block_min_ratios[category] = None
+        if block_ratio_key in config:
+            raw = config[block_ratio_key]
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise ValueError(f"{block_ratio_key} must be a numeric ratio")
+            ratio = finite_number(raw, block_ratio_key)
+            if not 0 <= ratio <= 1:
+                raise ValueError(f"{block_ratio_key} must be between 0 and 1")
+            block_min_ratios[category] = ratio
         run_min_key = f"min_{category}_covered_run_frames"
         run_count_key = f"max_{category}_covered_run_count"
         covered_run_minimums[category] = (
@@ -289,6 +328,12 @@ def inspect(items, config):
                                             f"max_{category}_trailing_uncovered_frames",
                                             f"max_{category}_consecutive_empty_scene_count",
                                             f"max_{category}_consecutive_empty_scene_frames",
+                                           f"max_{category}_block_leading_uncovered_frames",
+                                           f"max_{category}_block_trailing_uncovered_frames",
+                                           f"max_{category}_block_uncovered_frames",
+                                           f"max_{category}_block_gap_count",
+                                           f"max_{category}_block_empty_scene_count",
+                                           block_ratio_key,
                                            run_min_key, run_count_key, short_count_key,
                                            min_count_key, longest_key, short_frames_key)):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
@@ -360,6 +405,63 @@ def inspect(items, config):
         }
         if not required[category]:
             continue
+        # Global ratios can conceal a damaged short block next to healthy media.
+        block_options = (
+            block_leading_limits[category], block_trailing_limits[category],
+            block_uncovered_limits[category], block_gap_limits[category],
+            block_empty_limits[category], block_min_ratios[category],
+        )
+        if any(value is not None for value in block_options):
+            block_reports = []
+            for block in _contiguous_blocks(index["scenes"]):
+                duration = sum(row["end_frame"] - row["start_frame"] for row in block)
+                block_covered = sum(row[f"{category}_covered_frames"] for row in block)
+                block_report = {
+                    "scene_ids": [row["id"] for row in block],
+                    "frame_range": [block[0]["start_frame"], block[-1]["end_frame"]],
+                    "scoped_frames": duration,
+                    "covered_frames": block_covered,
+                    "uncovered_frames": duration - block_covered,
+                    "coverage_ratio": block_covered / duration,
+                    "leading_uncovered_frames": _edge_uncovered_frames(block, category),
+                    "trailing_uncovered_frames": _edge_uncovered_frames(block, category,
+                                                                        trailing=True),
+                    "continuous_gap_count": _gap_statistics(block, category)[1],
+                    "empty_scene_count": sum(
+                        row[f"{category}_covered_frames"] == 0 for row in block),
+                }
+                block_reports.append(block_report)
+                for metric, limit, code in (
+                    ("leading_uncovered_frames", block_leading_limits[category],
+                     "BLOCK_LEADING_UNCOVERED"),
+                    ("trailing_uncovered_frames", block_trailing_limits[category],
+                     "BLOCK_TRAILING_UNCOVERED"),
+                    ("uncovered_frames", block_uncovered_limits[category],
+                     "BLOCK_UNCOVERED"),
+                    ("continuous_gap_count", block_gap_limits[category],
+                     "BLOCK_GAP_COUNT"),
+                    ("empty_scene_count", block_empty_limits[category],
+                     "BLOCK_EMPTY_SCENE_COUNT"),
+                ):
+                    if limit is not None and block_report[metric] > limit:
+                        issues.append({
+                            "code": f"SCENE_{category.upper()}_{code}",
+                            "severity": "error", "scene_ids": block_report["scene_ids"],
+                            "frame_range": block_report["frame_range"],
+                            metric: block_report[metric], "maximum": limit,
+                            "message": f"Selected block exceeds {category} {metric} limit",
+                        })
+                threshold = block_min_ratios[category]
+                if threshold is not None and block_report["coverage_ratio"] < threshold:
+                    issues.append({
+                        "code": f"SCENE_{category.upper()}_BLOCK_COVERAGE_LOW",
+                        "severity": "error", "scene_ids": block_report["scene_ids"],
+                        "frame_range": block_report["frame_range"],
+                        "coverage_ratio": block_report["coverage_ratio"],
+                        "minimum_coverage_ratio": threshold,
+                        "message": f"Selected block has insufficient {category} coverage",
+                    })
+            overall[category]["contiguous_blocks"] = block_reports
         for edge_name, edge_limits, trailing in (
                 ("leading", leading_limits, False),
                 ("trailing", trailing_limits, True)):
