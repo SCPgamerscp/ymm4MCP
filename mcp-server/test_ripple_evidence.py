@@ -100,6 +100,37 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(project_identity(PROJECT), project_identity({
             "success": True, "projectPath": r"c:\\PROJECTS\\movie.ymmp"}))
 
+    def test_posix_paths_are_case_sensitive_and_not_windows_roots(self):
+        upper = {"success": True, "projectPath": "/home/editor/Movie.ymmp"}
+        lower = {"success": True, "projectPath": "/home/editor/movie.ymmp"}
+        self.assertEqual(project_identity(upper), "posix:/home/editor/Movie.ymmp")
+        self.assertNotEqual(project_identity(upper), project_identity(lower))
+
+    def test_posix_project_switch_cannot_pass_same_timeline(self):
+        upper = {"success": True, "projectPath": "/home/editor/Movie.ymmp"}
+        lower = {"success": True, "projectPath": "/home/editor/movie.ymmp"}
+        evidence = self.store.capture(
+            BEFORE, project_info=upper, start_frame=10, end_frame=20, layers=[1],
+            expected_revisions={"cut": "r1", "later": "r2"})
+        result = self.store.verify(
+            self.store.lookup(evidence["plan_id"]), AFTER, project_info=lower)
+        self.assertEqual(result["error_code"], "RIPPLE_PROJECT_CHANGED")
+        self.assertFalse(result["passed"])
+
+    def test_reject_windows_root_relative_drive_relative_and_device_paths(self):
+        paths = (r"\projects\movie.ymmp", "C:movie.ymmp",
+                 r"\\server\share", r"\\server\share\\",
+                 r"\\?\C:\projects\movie.ymmp",
+                 r"\\.\C:\projects\movie.ymmp")
+        for path in paths:
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                project_identity({"success": True, "projectPath": path})
+
+    def test_complete_unc_project_paths_normalize_consistently(self):
+        left = {"success": True, "projectPath": r"\\server\share\movie.ymmp"}
+        right = {"success": True, "projectPath": "//SERVER/SHARE/movie.ymmp"}
+        self.assertEqual(project_identity(left), project_identity(right))
+
     def test_no_unsafe_replay(self):
         evidence = self.capture()
         result = self.store.verify(self.store.lookup(evidence["plan_id"]), AFTER, project_info=PROJECT)
