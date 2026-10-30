@@ -47,7 +47,10 @@ class SceneCoverageRevalidationTests(unittest.TestCase):
         self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
 
     def test_rejects_forged_visual_covered_frames_on_recheck(self):
-        index = with_coverage(snapshot())
+        index = with_coverage({"scenes": [{"start_frame": 0, "end_frame": 1,
+                                           "items": [{"type": "VideoItem",
+                                                      "visible_start_frame": 0,
+                                                      "visible_end_frame": 1}]}]})
         index["scenes"][0]["visual_covered_frames"] = True
         with self.assertRaisesRegex(ValueError, "visual_covered_frames"):
             with_coverage(index)
@@ -74,14 +77,17 @@ class SceneCoverageRevalidationTests(unittest.TestCase):
 
     def test_rejects_forged_derived_gap_endpoints(self):
         index = with_coverage(snapshot())
-        index["scenes"][1]["visual_uncovered_ranges"][0]["start_frame"] = True
-        with self.assertRaisesRegex(ValueError, "visual_uncovered_ranges"):
+        index["scenes"][0]["audio_uncovered_ranges"][0]["start_frame"] = False
+        with self.assertRaisesRegex(ValueError, "audio_uncovered_ranges"):
             with_coverage(index)
 
     def test_rejects_boolean_in_scene_summary_gap(self):
-        index = snapshot()
-        # The second scene has a visual gap from frame 30 to 40.
-        index["scenes"][1]["uncovered_ranges"][0]["start_frame"] = True
+        index = {"scenes": [{"start_frame": 0, "end_frame": 2,
+                             "items": [{"type": "VideoItem",
+                                        "visible_start_frame": 1,
+                                        "visible_end_frame": 2}],
+                             "uncovered_ranges": [{"start_frame": False,
+                                                   "end_frame": True}]}]}
         with self.assertRaisesRegex(ValueError, "uncovered_ranges"):
             with_coverage(index)
 
@@ -93,7 +99,7 @@ class SceneCoverageRevalidationTests(unittest.TestCase):
 
     def test_rejects_boolean_in_layer_gap(self):
         index = snapshot()
-        index["scenes"][1]["layer_occupancy"][0]["uncovered_ranges"][0]["start_frame"] = True
+        index["scenes"][0]["layer_occupancy"][1]["uncovered_ranges"][0]["start_frame"] = False
         with self.assertRaisesRegex(ValueError, "layer_occupancy"):
             with_coverage(index)
 
