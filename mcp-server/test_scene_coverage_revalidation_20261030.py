@@ -22,21 +22,23 @@ def single(item):
 
 
 class SceneCoverageRevalidationTests(unittest.TestCase):
-    def test_rejects_visible_range_before_scene_even_for_unknown_type(self):
-        for kind in ("UnknownItem", "VideoItem"):
-            with self.subTest(kind=kind), self.assertRaisesRegex(
-                    ValueError, "visible item range"):
-                with_coverage(single({"type": kind,
-                                      "visible_start_frame": -1,
-                                      "visible_end_frame": 10}))
+    def test_clips_legacy_source_span_before_scene(self):
+        for kind, covered in (("UnknownItem", 0), ("VideoItem", 10)):
+            with self.subTest(kind=kind):
+                result = with_coverage(single({"type": kind,
+                                               "visible_start_frame": -1,
+                                               "visible_end_frame": 10}))
+                self.assertEqual(result["scenes"][0]["visual_covered_frames"],
+                                 covered)
 
-    def test_rejects_visible_range_after_scene_even_for_unknown_type(self):
-        for kind in ("UnknownItem", "AudioItem"):
-            with self.subTest(kind=kind), self.assertRaisesRegex(
-                    ValueError, "visible item range"):
-                with_coverage(single({"type": kind,
-                                      "visible_start_frame": 10,
-                                      "visible_end_frame": 21}))
+    def test_clips_legacy_source_span_after_scene(self):
+        for kind, covered in (("UnknownItem", 0), ("AudioItem", 10)):
+            with self.subTest(kind=kind):
+                result = with_coverage(single({"type": kind,
+                                               "visible_start_frame": 10,
+                                               "visible_end_frame": 21}))
+                self.assertEqual(result["scenes"][0]["audio_covered_frames"],
+                                 covered)
 
     def test_accepts_source_spans_clipped_to_scene(self):
         item = {"item_id": "v", "type": "VideoItem", "frame": 0,
