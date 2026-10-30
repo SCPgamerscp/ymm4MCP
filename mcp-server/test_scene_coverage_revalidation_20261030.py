@@ -1,6 +1,5 @@
 """Regression tests for scene QA revalidation and cross-scene evidence."""
 import copy
-import math
 import unittest
 
 import scenes
@@ -92,7 +91,10 @@ class SceneCoverageRevalidationTests(unittest.TestCase):
             with_coverage(index)
 
     def test_rejects_boolean_in_layer_covered_frames(self):
-        index = snapshot()
+        index = scenes.index(
+            [{"item_id": "one", "frame": 0, "length": 1,
+              "layer": 1, "type": "VideoItem"}],
+            [{"id": "one", "start_frame": 0, "end_frame": 1}])
         index["scenes"][0]["layer_occupancy"][0]["covered_frames"] = True
         with self.assertRaisesRegex(ValueError, "layer_occupancy"):
             with_coverage(index)
