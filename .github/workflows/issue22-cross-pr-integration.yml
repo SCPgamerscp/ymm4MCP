@@ -398,6 +398,34 @@ jobs:
           }
           finally { $server.Dispose() }
           Write-Output "Disposable all-open-PR candidate ready: $ymmePath and $serverPath"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exercise packaged MCP stdio handshake on Windows (#22)
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          # Test the extracted shipping ZIP, not the checkout or a mock MCP.
+          # No YMM4 edit API is invoked and no release is published.
+          $archives = @(Get-ChildItem -LiteralPath composed/artifacts -Filter 'YMM4McpServer-*.zip' -File)
+          if ($archives.Count -ne 1) { throw "Expected one MCP ZIP, found $($archives.Count)" }
+          $root = Join-Path $env:RUNNER_TEMP 'ymm4mcp-packaged-stdio'
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $root -Force
+          $serverRoot = Join-Path $root 'mcp-server'
+          foreach ($required in @('server.py', 'requirements.txt', 'check_mcp_stdio.py', 'test_check_mcp_stdio.py')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $serverRoot $required) -PathType Leaf)) {
+              throw "Packaged MCP ZIP is missing $required"
+            }
+          }
+          python -m pip install -r (Join-Path $serverRoot 'requirements.txt')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged MCP dependencies failed to install' }
+          Push-Location $serverRoot
+          try {
+            python -m unittest -q test_check_mcp_stdio
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged MCP stdio handshake failed on Windows' }
+          }
+          finally { Pop-Location }
+          Write-Output 'Real packaged MCP initialize/tools-list passed; YMM4 host is NOT tested.'
       - uses: actions/upload-artifact@v4
         with:
           # Explicitly not a tag/Release; expires after seven days.
