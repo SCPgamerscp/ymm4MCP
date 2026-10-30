@@ -36,6 +36,9 @@ class RequestBodyLimit:
         # HTTP method tokens are case-sensitive (RFC 9110). Do not silently
         # reinterpret a different token such as "post" as POST.
         if method != "POST":
+            if method.upper() == "POST":
+                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
+                    scope, receive, send)
             return await self.app(scope, receive, send)
 
         headers = scope.get("headers", [])
