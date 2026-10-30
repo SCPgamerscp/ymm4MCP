@@ -62,7 +62,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if "type" in raw and (not isinstance(raw["type"], str)
                               or not raw["type"].strip() or len(raw["type"]) > 128
                               or any(unicodedata.category(char).startswith("C")
-                                     for char in raw["type"]))):
+                                     for char in raw["type"])):
             raise ValueError("item.type must be a bounded readable string")
         if identity in seen_item_ids:
             raise ValueError("duplicate item_id in timeline snapshot")
