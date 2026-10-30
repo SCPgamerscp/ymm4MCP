@@ -1,16 +1,26 @@
-"""Read-only, whole-timeline verification of a ripple delete (#61).
+"""Read-only, fail-closed whole-timeline verification of ripple deletion (#61).
 
 This does NOT execute edits or prove atomicity. The caller supplies a trusted
 pre-edit /items snapshot and this module compares it with a fresh post-edit one.
 """
+import json
 from ripple_planning import MAX_ITEMS, _frame, _item_id, plan_ripple_delete
 
 MAX_ISSUES = 100
-PRESERVED_FIELDS = ("type", "text", "source_path", "character")
+# A move is allowed to change its position, derived end, and optimistic revision.
+# All other observed properties (including nested effects/animations/volume)
+# must remain identical. Missing/added fields are NOT silently ignored.
+MUTABLE_FIELDS = frozenset(("frame", "end_frame", "revision"))
+
+
+def _canonical(value):
+    """Type-sensitive, deterministic JSON representation; reject unsafe evidence."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def _inventory(snapshot):
-    """Validate completeness, identity and geometry before comparing anything."""
+    """Validate completeness, identity, geometry and JSON safety."""
     if not isinstance(snapshot, dict) or snapshot.get("success") is False or (
             "error" in snapshot or "error_code" in snapshot):
         return None
@@ -27,11 +37,16 @@ def _inventory(snapshot):
         if identity in by_id:
             return None
         try:
+            _canonical(item)
             frame = _frame(item.get("frame"), "frame")
             length = _frame(item.get("length"), "length", 1)
             _frame(frame + length, "end", 1)
             _frame(item.get("layer"), "layer")
-        except ValueError:
+            if "end_frame" in item and (
+                    type(item["end_frame"]) is not int or
+                    item["end_frame"] != frame + length):
+                return None
+        except (ValueError, TypeError, OverflowError, UnicodeError):
             return None
         by_id[identity] = item
     return by_id
@@ -39,11 +54,10 @@ def _inventory(snapshot):
 
 def verify_ripple_result(before, after, *, start_frame, end_frame,
                          layers=None, expected_revisions=None):
-    """Check exact post-edit item IDs and positions against a fresh preflight.
+    """Verify exact item IDs, geometry and ALL other observed properties.
 
-    The before snapshot must be captured before any edit, not reconstructed
-    from the result. Successful verification is observational only: it cannot
-    prove an atomic host transaction or saved/reopened project integrity.
+    Caller-supplied before evidence is not authenticated. This cannot prove
+    host atomicity, persisted project integrity, or visual/audio correctness.
     """
     old = _inventory(before)
     if old is None:
@@ -84,11 +98,19 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
         for field, expected in (("frame", expected_frame),
                                 ("layer", item["layer"]),
                                 ("length", item["length"])):
-            if actual[field] != expected:
+            if type(actual[field]) is not type(expected) or actual[field] != expected:
                 issue("RIPPLE_FIELD_MISMATCH", identity, field=field,
                       expected=expected, actual=actual[field])
-        for field in PRESERVED_FIELDS:
-            if field in item and (field not in actual or actual[field] != item[field]):
+        # A derived end frame must follow the move, never remain at its old
+        # position. _inventory already validates consistency within each item.
+        if ("end_frame" in item) != ("end_frame" in actual):
+            issue("RIPPLE_CONTENT_CHANGED", identity, field="end_frame")
+        # Compare all observed host data, not just text and source_path.
+        # This catches unintended changes to effects, keyframes, opacity,
+        # volume, source offsets, and any future fields added by YMM4.
+        for field in sorted((set(item) | set(actual)) - MUTABLE_FIELDS):
+            if field not in item or field not in actual or (
+                    _canonical(item[field]) != _canonical(actual[field])):
                 issue("RIPPLE_CONTENT_CHANGED", identity, field=field)
 
     for identity in new:
@@ -101,5 +123,5 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
             "planned_delete_count": plan["delete_count"],
             "planned_move_count": plan["move_count"], "issues": issues,
             "executed": False, "atomicity_verified": False,
-            "scope": "Snapshot geometry/identity/content comparison only; "
+            "scope": "Read-only complete snapshot geometry/identity/all-observed-field comparison; "
                      "does not prove atomicity, source trimming, save/reopen or visual QA"}
