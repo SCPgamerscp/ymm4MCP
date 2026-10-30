@@ -13,7 +13,9 @@ MAX_SCENES = 200
 def _safe_identifier(value, limit):
     return (isinstance(value, str) and bool(value.strip()) and len(value) <= limit
             and value == value.strip() and unicodedata.is_normalized("NFC", value)
-            and not any(unicodedata.category(char).startswith("C") for char in value))
+            and not any((category := unicodedata.category(char)) in {"Cc", "Cs"}
+                        or (category == "Cf" and char not in ("\\u200c", "\\u200d"))
+                        for char in value))
 
 
 def is_known_item_type(value: object, names: tuple[str, ...]) -> bool:
@@ -221,7 +223,9 @@ def with_coverage(index: dict) -> dict:
             if (kind is not None and
                     (not isinstance(kind, str) or not kind.strip() or
                      len(kind) > 128 or
-                     any(unicodedata.category(c).startswith("C") for c in kind))):
+                     any((category := unicodedata.category(c)) in {"Cc", "Cs"}
+                         or (category == "Cf" and c not in ("\\u200c", "\\u200d"))
+                         for c in kind))):
                 raise ValueError("scene item type must be a bounded readable string")
             # Validate unknown item spans too: excluding their type from QA
             # must not allow malformed evidence to bypass integrity checks.
@@ -235,19 +239,15 @@ def with_coverage(index: dict) -> dict:
                     raise ValueError("scene item IDs must be distinct nonempty strings")
                 item_ids.add(identity)
                 assigned_item_ids.add(identity)
-                if (identity in item_snapshots and
-                        ("frame" not in item or "end_frame" not in item)):
-                    raise ValueError("repeated scene item identity requires source frames")
                 # Even partial source evidence must remain identical across
                 # scenes: otherwise a continuation can impersonate another item.
                 snapshot = tuple((key in item, item.get(key))
                                  for key in ("frame", "end_frame", "type", "layer"))
                 if identity in item_snapshots:
-                    if not all(present for _, (present, _) in zip(
-                            ("frame", "end_frame"), item_snapshots[identity][:2])):
-                        raise ValueError("repeated scene item identity requires source frames")
                     if item_snapshots[identity] != snapshot:
                         raise ValueError("scene item identity has conflicting source evidence")
+                    if not all(present for present, _ in item_snapshots[identity][:2]):
+                        raise ValueError("repeated scene item identity requires source frames")
                 item_snapshots[identity] = snapshot
             if ("layer" in item and item["layer"] is not None and
                     (type(item["layer"]) is not int or
