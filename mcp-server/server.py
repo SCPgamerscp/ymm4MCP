@@ -35,6 +35,7 @@ from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate
 from item_verification import validate_expected_items, verify_items
 from ripple_planning import plan_ripple_delete
 from ripple_verification import verify_ripple_result
+from ripple_evidence import RippleEvidenceStore
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import ducking
@@ -69,6 +70,7 @@ from mcp_skills import register_skills
 
 app = Server("ymm4-mcp")
 register_skills(app)
+_ripple_evidence = RippleEvidenceStore()
 
 # ============================================================
 # HTTPクライアント
@@ -190,7 +192,9 @@ TOOLS = [
                 "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
                 "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置期待値。verify_items: 必須item_idと検証対象revision/frame/layer/length/type/textを1つ以上指定（読み取り専用）"},
-                "before_snapshot": {"type": "object", "description": "verify_ripple_delete: 編集前にget_info/itemsで取得した完全なスナップショット（countとitems必須）"},
+                "before_snapshot": {"type": "object", "description": "verify_ripple_delete: 旧方式。呼び出し側提供の編集前スナップショット（真正性は保証されない）"},
+                "capture_evidence": {"type": "boolean", "description": "plan_ripple_delete: trueなら検証済みホストスナップショットをサーバー内に10分保存しplan_idを返す（読み取り専用）"},
+                "plan_id": {"type": "string", "maxLength": 128, "description": "verify_ripple_delete: capture_evidenceで取得したplan_id。編集前証拠はサーバー内の原本を使用"},
                 "expected_revisions": {"type": "object", "additionalProperties": {"type": "string"}, "description": "plan_ripple_delete: 影響する各item_idの現在revisionを必ず指定。変更は実行しない"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
@@ -921,27 +925,53 @@ async def dispatch(args: dict) -> Any:
         case "visual_qa":
             return await run_visual_qa(args)
         case "plan_ripple_delete":
-            # Fail-closed, read-only plan. Host transactions and full rollback
-            # are not implemented: never replay these steps as separate writes.
+            # Never execute a cut: this action only computes a read-only plan.
             start = integer(args.get("start_frame"), "start_frame")
             end = integer(args.get("end_frame"), "end_frame", 1)
             if end <= start:
                 raise ValueError("end_frame must be greater than start_frame")
+            capture = args.get("capture_evidence", False)
+            if type(capture) is not bool:
+                raise ValueError("capture_evidence must be boolean")
             layers = args.get("layers")
             revisions = args.get("expected_revisions")
             snapshot = await ymm4_get("/items")
-            return plan_ripple_delete(snapshot, start_frame=start, end_frame=end,
+            plan = plan_ripple_delete(snapshot, start_frame=start, end_frame=end,
                                       layers=layers, expected_revisions=revisions)
+            if not capture or not plan["success"]:
+                return plan
+            try:
+                evidence = _ripple_evidence.capture(
+                    snapshot, start_frame=start, end_frame=end, layers=layers,
+                    expected_revisions=revisions)
+            except (ValueError, TypeError, RecursionError) as exc:
+                return {**plan, "success": False, "executable": False,
+                        "error_code": "RIPPLE_EVIDENCE_UNAVAILABLE",
+                        "message": str(exc)}
+            return {**plan, **evidence}
         case "verify_ripple_delete":
-            # Compare caller-supplied pre-edit inventory with the live host.
-            # Never execute the proposed plan or claim atomic rollback.
+            if "plan_id" in args:
+                # The original pre-edit snapshot and cut parameters are owned
+                # by the server, not supplied by the client at verification.
+                if any(key in args for key in (
+                        "before_snapshot", "start_frame", "end_frame",
+                        "layers", "expected_revisions")):
+                    raise ValueError("plan_id cannot override captured evidence")
+                record = _ripple_evidence.lookup(args["plan_id"])
+                if record is None:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_EVIDENCE_UNAVAILABLE"}
+                after = await ymm4_get("/items")
+                return _ripple_evidence.verify(record, after)
+            # Legacy caller-provided inventory remains available but cannot
+            # establish the provenance of the before state.
             start = integer(args.get("start_frame"), "start_frame")
             end = integer(args.get("end_frame"), "end_frame", 1)
             if end <= start:
                 raise ValueError("end_frame must be greater than start_frame")
             before = args.get("before_snapshot")
             if not isinstance(before, dict):
-                raise ValueError("verify_ripple_delete requires before_snapshot")
+                raise ValueError("verify_ripple_delete requires before_snapshot or plan_id")
             after = await ymm4_get("/items")
             return verify_ripple_result(before, after, start_frame=start, end_frame=end,
                                         layers=args.get("layers"),
