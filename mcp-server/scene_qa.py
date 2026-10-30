@@ -108,6 +108,64 @@ def _covered_run_statistics(scene_rows, category, minimum):
     return shortest, longest, run_count, short_count, short_frames
 
 
+
+def _edge_uncovered_frames(scene_rows, category, *, trailing=False):
+    """Count missing coverage at a selected-scope edge, not across excluded time."""
+    previous_boundary = None
+    total = 0
+    rows = reversed(scene_rows) if trailing else iter(scene_rows)
+    for scene in rows:
+        start, end = scene["start_frame"], scene["end_frame"]
+        if previous_boundary is not None:
+            if (end if trailing else start) != previous_boundary:
+                break
+        gaps = scene[f"{category}_uncovered_ranges"]
+        edge = (gaps[-1] if trailing else gaps[0]) if gaps else None
+        if edge is None or (edge["end_frame"] != end if trailing
+                            else edge["start_frame"] != start):
+            break
+        total += edge["end_frame"] - edge["start_frame"]
+        if edge["start_frame"] != start or edge["end_frame"] != end:
+            break
+        previous_boundary = start if trailing else end
+    return total
+
+
+def _empty_scene_streaks(scene_rows, category):
+    """Find longest touching fully empty scenes by count and by duration."""
+    current = None
+    by_count = None
+    by_frames = None
+
+    def finish():
+        nonlocal current, by_count, by_frames
+        if current is None:
+            return
+        if by_count is None or current["scene_count"] > by_count["scene_count"]:
+            by_count = current
+        if by_frames is None or current["frames"] > by_frames["frames"]:
+            by_frames = current
+        current = None
+
+    for scene in scene_rows:
+        start, end = scene["start_frame"], scene["end_frame"]
+        if scene[f"{category}_covered_frames"] != 0:
+            finish()
+            continue
+        if current is None or current["end_frame"] != start:
+            finish()
+            current = {"start_frame": start, "end_frame": end,
+                       "scene_ids": [scene["id"]], "scene_count": 1,
+                       "frames": end - start}
+        else:
+            current["end_frame"] = end
+            current["scene_ids"].append(scene["id"])
+            current["scene_count"] += 1
+            current["frames"] += end - start
+    finish()
+    return by_count, by_frames
+
+
 def _longest_continuous_gap(scene_rows, category):
     """Compatibility helper for callers interested only in the longest gap."""
     return _gap_statistics(scene_rows, category)[0]
@@ -130,13 +188,19 @@ def inspect(items, config):
                "max_visual_short_covered_run_count", "max_audio_short_covered_run_count",
                "min_visual_covered_run_count", "min_audio_covered_run_count",
                "min_visual_longest_covered_run_frames", "min_audio_longest_covered_run_frames",
-               "max_visual_short_covered_run_total_frames", "max_audio_short_covered_run_total_frames"}
+               "max_visual_short_covered_run_total_frames", "max_audio_short_covered_run_total_frames",
+               "max_visual_leading_uncovered_frames", "max_audio_leading_uncovered_frames",
+               "max_visual_trailing_uncovered_frames", "max_audio_trailing_uncovered_frames",
+               "max_visual_consecutive_empty_scene_count", "max_audio_consecutive_empty_scene_count",
+               "max_visual_consecutive_empty_scene_frames", "max_audio_consecutive_empty_scene_frames"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
     continuous_limits, overall_limits, overall_min_ratios = {}, {}, {}
     gap_count_limits, overall_gap_count_limits, uncovered_scene_limits = {}, {}, {}
     empty_scene_limits = {}
+    leading_limits, trailing_limits = {}, {}
+    empty_streak_count_limits, empty_streak_frame_limits = {}, {}
     covered_run_minimums, covered_run_count_limits = {}, {}
     short_run_count_limits = {}
     minimum_run_counts, minimum_longest_runs, short_run_frame_limits = {}, {}, {}
@@ -179,7 +243,11 @@ def inspect(items, config):
                 ("gap_count", gap_count_limits),
                 ("overall_gap_count", overall_gap_count_limits),
                 ("uncovered_scene_count", uncovered_scene_limits),
-                ("empty_scene_count", empty_scene_limits)):
+                ("empty_scene_count", empty_scene_limits),
+                ("leading_uncovered_frames", leading_limits),
+                ("trailing_uncovered_frames", trailing_limits),
+                ("consecutive_empty_scene_count", empty_streak_count_limits),
+                ("consecutive_empty_scene_frames", empty_streak_frame_limits)):
             key = f"max_{category}_{option}"
             destination[category] = integer(config[key], key) if key in config else None
         run_min_key = f"min_{category}_covered_run_frames"
@@ -217,6 +285,10 @@ def inspect(items, config):
                                            f"max_{category}_overall_gap_count",
                                            f"max_{category}_uncovered_scene_count",
                                            f"max_{category}_empty_scene_count",
+                                            f"max_{category}_leading_uncovered_frames",
+                                            f"max_{category}_trailing_uncovered_frames",
+                                            f"max_{category}_consecutive_empty_scene_count",
+                                            f"max_{category}_consecutive_empty_scene_frames",
                                            run_min_key, run_count_key, short_count_key,
                                            min_count_key, longest_key, short_frames_key)):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
@@ -288,6 +360,46 @@ def inspect(items, config):
         }
         if not required[category]:
             continue
+        for edge_name, edge_limits, trailing in (
+                ("leading", leading_limits, False),
+                ("trailing", trailing_limits, True)):
+            limit = edge_limits[category]
+            if limit is None:
+                continue
+            missing = _edge_uncovered_frames(index["scenes"], category,
+                                             trailing=trailing)
+            overall[category][f"{edge_name}_uncovered_frames"] = missing
+            if missing > limit:
+                issues.append({
+                    "code": f"SCENE_{category.upper()}_{edge_name.upper()}_UNCOVERED",
+                    "severity": "error", "uncovered_frames": missing,
+                    "maximum_uncovered_frames": limit,
+                    "message": f"Selected scenes have excessive {edge_name} {category} gaps",
+                })
+        count_limit = empty_streak_count_limits[category]
+        frame_limit = empty_streak_frame_limits[category]
+        if count_limit is not None or frame_limit is not None:
+            by_count, by_frames = _empty_scene_streaks(index["scenes"], category)
+            overall[category]["longest_empty_scene_streak_by_count"] = by_count
+            overall[category]["longest_empty_scene_streak_by_frames"] = by_frames
+            if count_limit is not None and by_count is not None and by_count["scene_count"] > count_limit:
+                issues.append({
+                    "code": f"SCENE_{category.upper()}_CONSECUTIVE_EMPTY_SCENES",
+                    "severity": "error", "scene_ids": by_count["scene_ids"],
+                    "frame_range": [by_count["start_frame"], by_count["end_frame"]],
+                    "empty_scene_count": by_count["scene_count"],
+                    "maximum_empty_scene_count": count_limit,
+                    "message": f"Too many consecutive scenes lack {category} coverage",
+                })
+            if frame_limit is not None and by_frames is not None and by_frames["frames"] > frame_limit:
+                issues.append({
+                    "code": f"SCENE_{category.upper()}_CONSECUTIVE_EMPTY_FRAMES",
+                    "severity": "error", "scene_ids": by_frames["scene_ids"],
+                    "frame_range": [by_frames["start_frame"], by_frames["end_frame"]],
+                    "empty_frames": by_frames["frames"],
+                    "maximum_empty_frames": frame_limit,
+                    "message": f"Consecutive empty {category} scenes exceed frame budget",
+                })
         shortest_run, longest_run, run_count, short_run_count, short_frames = (
             _covered_run_statistics(index["scenes"], category,
                                     covered_run_minimums[category]))
