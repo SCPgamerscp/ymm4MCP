@@ -119,6 +119,85 @@ TimelineInputValidation.ApplyResolve(overlap, 0, (item, _, frame, _, _) => Set(i
 Equal(1, edits);
 Equal(10, last.Frame);
 
+// Batch shifts must never report success after a later setter fails.
+var batchA = new FrameItem(10);
+var batchB = new FrameItem(20);
+var goodBatch = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)>
+    { (batchA, 10, 5), (batchB, 20, 15) },
+    item => item.Frame, (item, frame) => item.Set(frame));
+Equal(true, goodBatch.Success);
+Equal(2, goodBatch.Touched.Count);
+Equal(5, batchA.Frame);
+Equal(15, batchB.Frame);
+
+// A stale second item must reject the entire batch before any setter.
+var stale = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)>
+    { (batchA, 5, 3), (batchB, 20, 10) },
+    item => item.Frame, (item, frame) => item.Set(frame));
+Equal(false, stale.Success);
+Equal("FRAME_BATCH_STALE", stale.ErrorCode);
+Equal(0, stale.Touched.Count);
+Equal(5, batchA.Frame);
+
+// Duplicate host references cannot be mutated twice under different plans.
+var duplicate = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)>
+    { (batchA, 5, 2), (batchA, 5, 1) },
+    item => item.Frame, (item, frame) => item.Set(frame));
+Equal("FRAME_BATCH_PREFLIGHT_INVALID", duplicate.ErrorCode);
+Equal(5, batchA.Frame);
+
+// A setter that writes and then throws must itself be compensated, as well
+// as all earlier successful setters.
+batchB.ThrowAfter.Add(30);
+var compensated = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)>
+    { (batchA, 5, 4), (batchB, 15, 30) },
+    item => item.Frame, (item, frame) => item.Set(frame));
+Equal(false, compensated.Success);
+Equal("FRAME_BATCH_COMPENSATED", compensated.ErrorCode);
+Equal(true, compensated.RollbackVerified);
+Equal(true, compensated.OutcomeUnknown);
+Equal(2, compensated.Touched.Count);
+Equal(5, batchA.Frame);
+Equal(15, batchB.Frame);
+
+// If even one compensating setter fails, report an unknown partial outcome.
+batchB.ThrowAfter.Clear();
+batchB.ThrowAfter.Add(15);
+batchA.ThrowAfter.Add(4);
+var partial = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)>
+    { (batchA, 5, 4), (batchB, 15, 30) },
+    item => item.Frame, (item, frame) => item.Set(frame));
+Equal(false, partial.Success);
+Equal("FRAME_BATCH_PARTIAL", partial.ErrorCode);
+Equal(false, partial.RollbackVerified);
+Equal(true, partial.OutcomeUnknown);
+batchB.ThrowAfter.Clear();
+batchA.ThrowAfter.Clear();
+
+// Silent no-op setters are failures, not successful frame shifts.
+batchB.Ignore.Add(30);
+var ignored = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)>
+    { (batchA, 5, 4), (batchB, 15, 30) },
+    item => item.Frame, (item, frame) => item.Set(frame));
+Equal(false, ignored.Success);
+Equal(true, ignored.RollbackVerified);
+Equal(5, batchA.Frame);
+Equal(15, batchB.Frame);
+batchB.Ignore.Clear();
+
+// Zero-delta batches must not invoke a setter or mark any item touched.
+var noop = TimelineFrameTransaction.Apply(
+    new List<(FrameItem item, int original, int target)> { (batchA, 5, 5) },
+    item => item.Frame, (_, _) => throw new Exception("unexpected write"));
+Equal(true, noop.Success);
+Equal(0, noop.Touched.Count);
+
 string temporary = Path.Combine(Path.GetTempPath(), "ymm4mcp-backup-test-" + Guid.NewGuid().ToString("N"));
 try
 {
@@ -153,6 +232,18 @@ try
 finally { if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true); }
 
 Console.WriteLine("Timeline input validation tests passed");
+
+sealed class FrameItem(int frame)
+{
+    public int Frame { get; private set; } = frame;
+    public HashSet<int> ThrowAfter { get; } = new();
+    public HashSet<int> Ignore { get; } = new();
+    public void Set(int value)
+    {
+        if (!Ignore.Contains(value)) Frame = value;
+        if (ThrowAfter.Contains(value)) throw new InvalidOperationException("Injected setter failure");
+    }
+}
 
 sealed class Item(int frame)
 {

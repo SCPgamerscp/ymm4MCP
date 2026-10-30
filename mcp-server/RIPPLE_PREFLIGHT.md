@@ -152,3 +152,20 @@ save/reopen and visual/audio acceptance are still missing. Keep #61 open.
 
 Tests: `python -m unittest -v test_ripple_evidence
 test_ripple_evidence_dispatch` from `mcp-server`.
+
+## Frame-only compensation for host shift and overlap resolution
+
+The existing YMM4 host `shift_items` and `resolve_overlaps` endpoints now
+preflight **all** target frames before writing, verify every Frame setter,
+and attempt reverse-order restoration (including a setter that mutates then
+throws). A failed batch returns `success=false`, `FRAME_BATCH_COMPENSATED`
+or `FRAME_BATCH_PARTIAL`, `rollback_verified` (Frame readback only), and
+`outcome_unknown` when any write was attempted. Optimistic item revisions
+are invalidated for touched items even after compensation. A zero-delta
+batch performs no setter calls.
+
+**These are not atomic host transactions.** Frame readback does not prove that
+YMM4 history, animations, effects, persistence or other host side effects were
+restored. Do not use `shift_items` plus `delete_items` as a substitute for
+atomic ripple deletion. Full host rollback, source-aware split/trim, save/reopen,
+and real YMM4 acceptance remain outstanding for Issue #61.
