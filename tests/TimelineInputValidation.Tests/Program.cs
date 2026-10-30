@@ -166,8 +166,8 @@ Equal(15, batchB.Frame);
 
 // If even one compensating setter fails, report an unknown partial outcome.
 batchB.ThrowAfter.Clear();
-batchB.ThrowAfter.Add(15);
-batchA.ThrowAfter.Add(4);
+batchB.ThrowAfter.Add(30);
+batchA.ThrowAfter.Add(5);
 var partial = TimelineFrameTransaction.Apply(
     new List<(FrameItem item, int original, int target)>
     { (batchA, 5, 4), (batchB, 15, 30) },
