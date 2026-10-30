@@ -52,6 +52,56 @@ def _gap_statistics(scene_rows, category):
     return longest, count, top
 
 
+
+def _covered_run_statistics(scene_rows, category, minimum):
+    """Summarize continuous media occupancy, joining touching selected scenes.
+
+    A run is a covered interval, not a count of timeline items: overlapping
+    items cannot manufacture additional runs. Unselected frames never bridge
+    runs, and a fully uncovered scene contributes no covered run.
+    """
+    active = None
+    shortest = None
+    run_count = 0
+    short_count = 0
+
+    def finish():
+        nonlocal active, shortest, run_count, short_count
+        if active is None:
+            return
+        run_count += 1
+        duration = active["end_frame"] - active["start_frame"]
+        if minimum is not None and duration < minimum:
+            short_count += 1
+        if (shortest is None or duration <
+                shortest["end_frame"] - shortest["start_frame"]):
+            shortest = active
+        active = None
+
+    for scene in scene_rows:
+        cursor = scene["start_frame"]
+        gaps = scene[f"{category}_uncovered_ranges"]
+        # The source has already been validated by scene_media.with_coverage.
+        covered = []
+        for gap in gaps:
+            if cursor < gap["start_frame"]:
+                covered.append((cursor, gap["start_frame"]))
+            cursor = gap["end_frame"]
+        if cursor < scene["end_frame"]:
+            covered.append((cursor, scene["end_frame"]))
+        for left, right in covered:
+            if active is not None and active["end_frame"] == left:
+                active["end_frame"] = right
+                if active["scene_ids"][-1] != scene["id"]:
+                    active["scene_ids"].append(scene["id"])
+            else:
+                finish()
+                active = {"start_frame": left, "end_frame": right,
+                          "scene_ids": [scene["id"]]}
+    finish()
+    return shortest, run_count, short_count
+
+
 def _longest_continuous_gap(scene_rows, category):
     """Compatibility helper for callers interested only in the longest gap."""
     return _gap_statistics(scene_rows, category)[0]
@@ -68,13 +118,16 @@ def inspect(items, config):
                "max_visual_gap_count", "max_audio_gap_count",
                "max_visual_overall_gap_count", "max_audio_overall_gap_count",
                "max_visual_uncovered_scene_count", "max_audio_uncovered_scene_count",
-               "max_visual_empty_scene_count", "max_audio_empty_scene_count"}
+               "max_visual_empty_scene_count", "max_audio_empty_scene_count",
+               "min_visual_covered_run_frames", "min_audio_covered_run_frames",
+               "max_visual_covered_run_count", "max_audio_covered_run_count"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
     continuous_limits, overall_limits, overall_min_ratios = {}, {}, {}
     gap_count_limits, overall_gap_count_limits, uncovered_scene_limits = {}, {}, {}
     empty_scene_limits = {}
+    covered_run_minimums, covered_run_count_limits = {}, {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -117,13 +170,22 @@ def inspect(items, config):
                 ("empty_scene_count", empty_scene_limits)):
             key = f"max_{category}_{option}"
             destination[category] = integer(config[key], key) if key in config else None
+        run_min_key = f"min_{category}_covered_run_frames"
+        run_count_key = f"max_{category}_covered_run_count"
+        covered_run_minimums[category] = (
+            integer(config[run_min_key], run_min_key, 1)
+            if run_min_key in config else None)
+        covered_run_count_limits[category] = (
+            integer(config[run_count_key], run_count_key)
+            if run_count_key in config else None)
         if not required[category] and any(
                 key in config for key in (ratio_key, total_key, continuous_key,
                                           overall_key, overall_ratio_key,
                                            f"max_{category}_gap_count",
                                            f"max_{category}_overall_gap_count",
                                            f"max_{category}_uncovered_scene_count",
-                                           f"max_{category}_empty_scene_count")):
+                                           f"max_{category}_empty_scene_count",
+                                           run_min_key, run_count_key)):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
@@ -193,6 +255,29 @@ def inspect(items, config):
         }
         if not required[category]:
             continue
+        shortest_run, run_count, short_run_count = _covered_run_statistics(
+            index["scenes"], category, covered_run_minimums[category])
+        minimum_run = covered_run_minimums[category]
+        if minimum_run is not None and short_run_count:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_SHORT_COVERAGE_RUN",
+                "severity": "error",
+                "frame_range": [shortest_run["start_frame"], shortest_run["end_frame"]],
+                "scene_ids": shortest_run["scene_ids"],
+                "covered_frames": shortest_run["end_frame"] - shortest_run["start_frame"],
+                "minimum_covered_run_frames": minimum_run,
+                "short_coverage_run_count": short_run_count,
+                "message": f"Short {category} coverage runs may indicate unintended flashes",
+            })
+        run_limit = covered_run_count_limits[category]
+        if run_limit is not None and run_count > run_limit:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_COVERED_RUN_COUNT",
+                "severity": "error",
+                "covered_run_count": run_count,
+                "maximum_covered_run_count": run_limit,
+                "message": f"Too many separate {category} coverage runs in scoped scenes",
+            })
         overall_gap_limit = overall_gap_count_limits[category]
         if overall_gap_limit is not None and gap_count > overall_gap_limit:
             issues.append({
