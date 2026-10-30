@@ -59,7 +59,7 @@ class RippleEvidenceDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_incomplete_host_snapshot_cannot_be_captured(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock,
-                          side_effect=[PROJECT, {"items": BEFORE["items"]}]):
+                          side_effect=[PROJECT, {"items": BEFORE["items"]}, PROJECT]):
             result = await server.dispatch(self.plan_args())
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "RIPPLE_EVIDENCE_UNAVAILABLE")
