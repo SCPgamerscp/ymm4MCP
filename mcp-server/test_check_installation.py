@@ -25,6 +25,7 @@ class InstallationAcceptanceTests(unittest.TestCase):
                       / "Roaming" / "Claude" / "claude_desktop_config.json")
         self.status = Mock(return_value={"status": "running", "port": 8765,
                                          "version": "1.5.0"})
+        self.mcp = Mock(return_value={"tool_count": 4})
         self.write_config(self.classic)
 
     def write_config(self, path, *, command=None, args=None, env=None):
@@ -36,13 +37,17 @@ class InstallationAcceptanceTests(unittest.TestCase):
         path.write_text(json.dumps({"mcpServers": {"ymm4": entry}}), encoding="utf-8")
 
     def inspect(self):
-        return inspect_installation(self.local, self.appdata, status_check=self.status)
+        return inspect_installation(self.local, self.appdata,
+                                    status_check=self.status, mcp_probe=self.mcp)
 
     def test_real_install_and_authenticated_status(self):
         self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
         report = self.inspect()
         self.assertTrue(report["success"])
         self.assertEqual(report["claude_profiles_checked"], 2)
+        self.assertEqual(report["mcp_profiles_checked"], 2)
+        self.assertEqual(report["mcp_stdio"], "ready")
+        self.assertEqual(self.mcp.call_count, 2)
         self.status.assert_called_once()
         self.assertNotIn("token", json.dumps(report).lower())
 
@@ -150,6 +155,47 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.write_config(self.classic, env={
             "YMM4_API_BASE": "http://127.0.0.1:8765/api"})
         self.assertEqual(self.inspect()["port"], 8765)
+
+
+    def test_broken_stdio_server_blocks_acceptance(self):
+        self.mcp.side_effect = RuntimeError("MCP server failed to start")
+        with self.assertRaises(RuntimeError):
+            self.inspect()
+        self.status.assert_called_once()
+
+    def test_stdio_missing_required_tools_blocks_acceptance(self):
+        self.mcp.return_value = {"tool_count": 0}
+        with self.assertRaisesRegex(InstallationError, "tool discovery failed"):
+            self.inspect()
+
+    def test_claude_profile_environment_is_used_for_stdio(self):
+        self.write_config(self.classic, env={
+            "YMM4_API_BASE": "http://127.0.0.1:8765/api",
+            "GEMINI_API_KEY": "dummy-test-only"})
+        self.inspect()
+        child_env = self.mcp.call_args.kwargs["env"]
+        self.assertEqual(child_env["YMM4_API_BASE"], "http://127.0.0.1:8765/api")
+        self.assertEqual(child_env["GEMINI_API_KEY"], "dummy-test-only")
+
+    def test_terminal_port_is_not_inherited_by_stdio(self):
+        with patch.dict("os.environ", {"YMM4_API_BASE": "http://127.0.0.1:9999/api"}):
+            self.inspect()
+            self.assertNotIn("YMM4_API_BASE", self.mcp.call_args.kwargs["env"])
+
+    def test_profile_change_during_stdio_blocks_acceptance(self):
+        def probe(_python, _server, *, env):
+            self.write_config(self.classic, command="C:/old/python.exe")
+            return {"tool_count": 4}
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "changed during"):
+            self.inspect()
+
+    def test_non_string_claude_env_rejected_before_network(self):
+        self.write_config(self.classic, env={"GEMINI_API_KEY": 123})
+        with self.assertRaisesRegex(InstallationError, "env is malformed"):
+            self.inspect()
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
 
 
 if __name__ == "__main__":

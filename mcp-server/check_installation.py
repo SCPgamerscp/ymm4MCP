@@ -12,6 +12,7 @@ import sys
 from urllib.parse import urlsplit
 
 from check_connection import check as check_connection
+from check_mcp_stdio import check_stdio
 
 
 class InstallationError(ValueError):
@@ -61,7 +62,8 @@ def _config_paths(local_appdata: Path, appdata: Path):
     return paths
 
 
-def inspect_installation(local_appdata: Path, appdata: Path, *, status_check=check_connection):
+def inspect_installation(local_appdata: Path, appdata: Path, *,
+                         status_check=check_connection, mcp_probe=check_stdio):
     """Verify real installed paths and authenticated status without mutation."""
     root = local_appdata / "YMM4MCP" / "mcp-server"
     python = root / ".venv" / "Scripts" / "python.exe"
@@ -75,6 +77,7 @@ def inspect_installation(local_appdata: Path, appdata: Path, *, status_check=che
         raise InstallationError("No initialized Claude Desktop configuration was found")
     configured_bases = set()
     snapshots = {}
+    profile_envs = []
     # Validate every initialized profile, including Microsoft Store installs.
     for path in configs:
         config, raw = _read_claude_config(path)
@@ -88,8 +91,11 @@ def inspect_installation(local_appdata: Path, appdata: Path, *, status_check=che
         if not isinstance(args, list) or len(args) != 1 or not _same_path(args[0], server):
             raise InstallationError("Claude Desktop ymm4 script is not the persistent server")
         env = entry.get("env", {})
-        if not isinstance(env, dict):
+        if (not isinstance(env, dict) or
+                any(not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in env.items())):
             raise InstallationError("Claude Desktop ymm4 env is malformed")
+        profile_envs.append(env.copy())
         if "YMM4_API_BASE" in env:
             value = env["YMM4_API_BASE"]
             if not isinstance(value, str):
@@ -126,8 +132,22 @@ def inspect_installation(local_appdata: Path, appdata: Path, *, status_check=che
     if (not isinstance(status, dict) or status.get("status") != "running" or
             type(status.get("port")) is not int or not 1 <= status["port"] <= 65535):
         raise InstallationError("Authenticated YMM4 status check failed")
+    # A healthy HTTP endpoint alone does not prove Claude can start the
+    # installed MCP server. Perform a real stdio initialize + tools/list for
+    # every initialized Claude profile, using that profile's environment.
+    # Never invoke an editing tool or expose the profile's secrets in output.
+    mcp_tool_counts = []
+    for profile_env in profile_envs:
+        child_env = dict(os.environ)
+        child_env.pop("YMM4_API_BASE", None)
+        child_env.update(profile_env)
+        report = mcp_probe(python, server, env=child_env)
+        if (not isinstance(report, dict) or type(report.get("tool_count")) is not int
+                or report["tool_count"] < 4):
+            raise InstallationError("Installed MCP server tool discovery failed")
+        mcp_tool_counts.append(report["tool_count"])
     for path in configs:
-        # The status probe can take seconds. A concurrent installer or Claude
+        # The status and MCP probes can take seconds. A concurrent installer or Claude
         # settings edit must not turn an old validation into a success for a
         # different configuration. Re-read once, compare exact bytes, and use
         # the already validated snapshot for the final port comparison.
@@ -145,6 +165,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *, status_check=che
     return {"success": True, "persistent_install": True,
             "claude_profiles_checked": len(configs),
             "authenticated_status": "running", "port": status["port"],
+            "mcp_stdio": "ready", "mcp_profiles_checked": len(mcp_tool_counts),
+            "mcp_tools_minimum": min(mcp_tool_counts),
             "version": status.get("version")}
 
 
