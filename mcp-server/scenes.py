@@ -1,9 +1,8 @@
 """Read-only view of timeline items grouped by caller-defined scene ranges."""
 
-import unicodedata
-
 from editing import MAX_FRAME, integer
-from scene_media import MAX_SCENE_ITEMS, MAX_TOTAL_SCENE_ITEMS
+from scene_media import (MAX_SCENE_ITEMS, MAX_TOTAL_SCENE_ITEMS,
+                         _safe_identifier, _safe_item_type)
 
 
 def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[dict]:
@@ -18,12 +17,8 @@ def _uncovered(intervals: list[tuple[int, int]], start: int, end: int) -> list[d
 
 
 def _valid_identifier(value: object) -> bool:
-    """Reject blank or control-character IDs without changing readable IDs."""
-    return (isinstance(value, str) and bool(value.strip())
-            and value == value.strip() and unicodedata.is_normalized("NFC", value)
-            and not any((category := unicodedata.category(char)) in {"Cc", "Cs"}
-                        or (category == "Cf" and char not in ("\u200c", "\u200d"))
-                        for char in value))
+    """Use the same canonical identity rules as the coverage verifier."""
+    return _safe_identifier(value, 256)
 
 
 def index(items: list[dict], ranges: list[dict]) -> dict:
@@ -61,11 +56,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
             raise ValueError("item_id is required")
         if len(identity) > 256:
             raise ValueError("item_id exceeds 256 characters")
-        if "type" in raw and (not isinstance(raw["type"], str)
-                              or not raw["type"].strip() or len(raw["type"]) > 128
-                              or any((category := unicodedata.category(char)) in {"Cc", "Cs"}
-                                     or (category == "Cf" and char not in ("\u200c", "\u200d"))
-                                     for char in raw["type"])):
+        if "type" in raw and not _safe_item_type(raw["type"]):
             raise ValueError("item.type must be a bounded readable string")
         if identity in seen_item_ids:
             raise ValueError("duplicate item_id in timeline snapshot")
