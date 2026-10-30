@@ -22,6 +22,14 @@ def single(item):
 
 
 class SceneCoverageRevalidationTests(unittest.TestCase):
+    def test_rejects_bidi_spoofed_host_item_type(self):
+        for kind in ("VideoItem\u202e", "AudioItem\u2066", "VideoItem\u200f"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                    ValueError, "item type"):
+                with_coverage(single({"type": kind,
+                                      "visible_start_frame": 0,
+                                      "visible_end_frame": 20}))
+
     def test_clips_legacy_source_span_before_scene(self):
         for kind, covered in (("UnknownItem", 0), ("VideoItem", 10)):
             with self.subTest(kind=kind):
