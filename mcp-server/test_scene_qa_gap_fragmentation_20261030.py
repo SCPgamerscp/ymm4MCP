@@ -120,6 +120,41 @@ class SceneGapFragmentationTests(unittest.TestCase):
         self.assertEqual(result["overall_coverage"]["visual"]["continuous_gap_count"], 1)
         self.assertEqual(result["overall_coverage"]["visual"]["uncovered_scene_count"], 2)
 
+    def test_empty_scene_gate_distinguishes_partial_from_fully_blank(self):
+        result = self.inspect(
+            [item("a", 0, 1), item("c", 20, 10)],
+            [scene("a", 0, 10), scene("b", 10, 20), scene("c", 20, 30)],
+            max_visual_empty_scene_count=0)
+        self.assertEqual([row["code"] for row in result["issues"]],
+                         ["SCENE_VISUAL_EMPTY_SCENE_COUNT"])
+        self.assertEqual(result["issues"][0]["empty_scene_count"], 1)
+        self.assertEqual(result["overall_coverage"]["visual"]["uncovered_scene_count"], 2)
+
+    def test_empty_scene_budget_exact_limit_passes(self):
+        result = self.inspect(
+            [item("a", 0, 1)], [scene("a", 0, 10), scene("b", 10, 20)],
+            max_visual_empty_scene_count=1)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["overall_coverage"]["visual"]["empty_scene_count"], 1)
+
+    def test_audio_empty_scene_budget_is_independent(self):
+        result = scene_qa.inspect(
+            [item("a", 0, 20), item("voice", 0, 10, "VoiceItem")],
+            {"scene_ranges": [scene("a", 0, 10), scene("b", 10, 20)],
+             "require_visual": False, "max_audio_gap_frames": 1000,
+             "max_audio_empty_scene_count": 0})
+        self.assertEqual([row["code"] for row in result["issues"]],
+                         ["SCENE_AUDIO_EMPTY_SCENE_COUNT"])
+
+    def test_empty_scene_option_rejects_invalid_and_disabled_values(self):
+        for value in (True, -1, 1.2, "0", None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.inspect([], [scene("a", 0, 10)],
+                             max_visual_empty_scene_count=value)
+        with self.assertRaisesRegex(ValueError, "disabled audio coverage"):
+            self.inspect([], [scene("a", 0, 10)], max_audio_empty_scene_count=0)
+
+
 
 if __name__ == "__main__":
     unittest.main()
