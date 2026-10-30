@@ -22,7 +22,7 @@ def _valid_identifier(value: object) -> bool:
     return (isinstance(value, str) and bool(value.strip())
             and value == value.strip() and unicodedata.is_normalized("NFC", value)
             and not any((category := unicodedata.category(char)) in {"Cc", "Cs"}
-                        or (category == "Cf" and char not in ("\\u200c", "\\u200d"))
+                        or (category == "Cf" and char not in ("\u200c", "\u200d"))
                         for char in value))
 
 
@@ -64,7 +64,7 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if "type" in raw and (not isinstance(raw["type"], str)
                               or not raw["type"].strip() or len(raw["type"]) > 128
                               or any((category := unicodedata.category(char)) in {"Cc", "Cs"}
-                                     or (category == "Cf" and char not in ("\\u200c", "\\u200d"))
+                                     or (category == "Cf" and char not in ("\u200c", "\u200d"))
                                      for char in raw["type"])):
             raise ValueError("item.type must be a bounded readable string")
         if identity in seen_item_ids:
