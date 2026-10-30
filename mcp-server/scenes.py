@@ -1,5 +1,7 @@
 """Read-only view of timeline items grouped by caller-defined scene ranges."""
 
+from bisect import bisect_right
+
 from editing import MAX_FRAME, integer
 from scene_media import (MAX_SCENE_ITEMS, MAX_TOTAL_SCENE_ITEMS,
                          _safe_identifier, _safe_item_type)
@@ -42,6 +44,10 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         scenes.append({"id": scene_id, "start_frame": start, "end_frame": end,
                        "items": [], "item_count": 0})
 
+    # End-exclusive, ordered scene bounds allow a binary search for the first
+    # potentially intersecting scene. A sparse timeline must not scan all 200
+    # scenes for every unrelated item.
+    scene_ends = [scene["end_frame"] for scene in scenes]
     unassigned = []
     seen_item_ids = set()
     total_scene_memberships = 0
@@ -65,7 +71,10 @@ def index(items: list[dict], ranges: list[dict]) -> dict:
         if layer is not None:
             layer = integer(layer, "item.layer")
         memberships = 0
-        for scene in scenes:
+        for scene_pos in range(bisect_right(scene_ends, frame), len(scenes)):
+            scene = scenes[scene_pos]
+            if scene["start_frame"] >= end:
+                break
             if frame < scene["end_frame"] and end > scene["start_frame"]:
                 if (scene["item_count"] >= MAX_SCENE_ITEMS or
                         total_scene_memberships >= MAX_TOTAL_SCENE_ITEMS):

@@ -1,5 +1,6 @@
 """Estimate independent visual and audio coverage from a read-only scene index."""
 
+from bisect import bisect_right
 import re
 import unicodedata
 
@@ -308,16 +309,19 @@ def with_coverage(index: dict) -> dict:
     # A single item may appear in multiple scenes, but it must appear in
     # *every* scene intersecting its immutable source span. Otherwise a
     # missing continuation can conceal an uncovered segment from the QA gate.
+    # Skip all nonintersecting earlier/later scenes using ordered end bounds.
+    scene_ends = [scene["end_frame"] for scene in index["scenes"]]
     for identity, snapshot in item_snapshots.items():
         source = {key: value for key, (present, value) in
                   zip(("frame", "end_frame", "type", "layer"), snapshot)
                   if present}
         if "frame" not in source or "end_frame" not in source:
             continue
-        for scene, identities in zip(index["scenes"], scene_item_ids):
-            if (source["frame"] < scene["end_frame"]
-                    and source["end_frame"] > scene["start_frame"]
-                    and identity not in identities):
+        for pos in range(bisect_right(scene_ends, source["frame"]), len(scene_ends)):
+            scene = index["scenes"][pos]
+            if scene["start_frame"] >= source["end_frame"]:
+                break
+            if identity not in scene_item_ids[pos]:
                 raise ValueError("scene item identity missing from intersecting scene")
     _validate_continuations(index["scenes"])
     if "item_count" in index or "unassigned_item_ids" in index:
