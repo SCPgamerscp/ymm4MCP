@@ -211,7 +211,11 @@ class ComposedPullRequestHeadTests(unittest.TestCase):
             'gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"',
             self.source,
         )
-        self.assertIn('mapfile -t numbers < <(sort -n -u', self.source)
+        self.assertIn("open-pr-heads-before.txt", self.source)
+        self.assertIn("open-pr-heads-after.txt", self.source)
+        self.assertIn("mapfile -t numbers < <(awk '{print $1}'", self.source)
+        self.assertIn('cmp -s "$RUNNER_TEMP/open-pr-heads-before.txt"', self.source)
+        self.assertIn("Open PR set or head SHA changed during composition", self.source)
         self.assertIn('git checkout -B audit-open-prs refs/remotes/origin/main', self.source)
         self.assertIn('git merge --no-ff --no-edit "refs/remotes/audit-pr/${number}"', self.source)
         self.assertIn('git merge --abort', self.source)
