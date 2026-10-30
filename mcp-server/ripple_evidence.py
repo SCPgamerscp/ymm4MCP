@@ -38,8 +38,29 @@ def project_identity(project):
             or len(path) > 4096 or any(ord(c) < 32 or ord(c) == 127
                                         or 0xD800 <= ord(c) <= 0xDFFF for c in path)):
         raise ValueError("A valid saved project path is required")
-    if ntpath.isabs(path):
+    # ntpath.isabs("/tmp/movie.ymmp") is True even on Linux. Classify
+    # drive-qualified/UNC Windows paths first, then POSIX absolute paths.
+    # Otherwise two distinct case-sensitive POSIX projects could be treated
+    # as the same project and falsely pass a captured ripple verification.
+    if path.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+        raise ValueError("Device namespace is not a supported saved project path")
+    drive, tail = ntpath.splitdrive(path)
+    if drive:
+        if len(drive) == 2 and drive[1] == ":" and drive[0].isascii() and drive[0].isalpha():
+            if not tail.startswith(("\\", "/")):
+                raise ValueError("Drive-relative project paths are not absolute")
+        elif drive.startswith(("\\\\", "//")):
+            # A UNC identity must include both server and share and a path
+            # below that share. Do not accept a bare network authority.
+            parts = drive.replace("/", "\\").lstrip("\\").split("\\")
+            if (len(parts) != 2 or not all(parts)
+                    or not tail.startswith(("\\", "/")) or tail in ("\\", "/")):
+                raise ValueError("Incomplete UNC project path")
+        else:
+            raise ValueError("Unsupported Windows project path")
         return "windows:" + ntpath.normcase(ntpath.normpath(path))
+    if path.startswith("\\"):
+        raise ValueError("Root-relative Windows project paths are not absolute")
     if posixpath.isabs(path):
         return "posix:" + posixpath.normpath(path)
     raise ValueError("An absolute saved project path is required")
