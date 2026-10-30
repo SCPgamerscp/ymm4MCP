@@ -155,6 +155,27 @@ class SceneGapFragmentationTests(unittest.TestCase):
             self.inspect([], [scene("a", 0, 10)], max_audio_empty_scene_count=0)
 
 
+    def test_repair_hints_are_prioritized_and_bounded(self):
+        result = self.inspect(
+            [item(f"v{n}", n, 1) for n in range(1, 25, 2)],
+            [scene("a", 0, 25)])
+        evidence = result["overall_coverage"]["visual"]
+        self.assertEqual(evidence["continuous_gap_count"], 13)
+        self.assertEqual(len(evidence["largest_uncovered_ranges"]), 10)
+        self.assertEqual(evidence["omitted_uncovered_range_count"], 3)
+        self.assertEqual([row["start_frame"] for row in evidence["largest_uncovered_ranges"]],
+                         list(range(0, 20, 2)))
+
+    def test_repair_hints_preserve_cross_scene_identity(self):
+        result = self.inspect(
+            [item("a", 0, 4), item("b", 16, 4)],
+            [scene("a", 0, 10), scene("b", 10, 20)])
+        evidence = result["overall_coverage"]["visual"]
+        self.assertEqual(evidence["largest_uncovered_ranges"], [
+            {"start_frame": 4, "end_frame": 16, "scene_ids": ["a", "b"]}])
+        self.assertEqual(evidence["omitted_uncovered_range_count"], 0)
+
+
 
 if __name__ == "__main__":
     unittest.main()
