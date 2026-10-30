@@ -102,7 +102,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_no_unsafe_replay(self):
         evidence = self.capture()
-        result = self.store.verify(self.store.lookup(evidence["plan_id"]), AFTER)
+        result = self.store.verify(self.store.lookup(evidence["plan_id"]), AFTER, project_info=PROJECT)
         self.assertNotIn("operations", result)
         self.assertFalse(result["executed"])
 
