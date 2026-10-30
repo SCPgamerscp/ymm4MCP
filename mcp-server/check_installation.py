@@ -62,6 +62,30 @@ def _config_paths(local_appdata: Path, appdata: Path):
     return paths
 
 
+def _authenticated_status_for_profile(status_check, profile_env):
+    """Probe using exactly this Claude profile's YMM4 connection overrides.
+
+    In particular, do not inherit a terminal-only token, descriptor or port:
+    an unrelated healthy connection must not make a broken profile pass.
+    Restore the caller's environment even if authentication fails.
+    """
+    keys = ("YMM4_API_BASE", "YMM4_API_TOKEN", "YMM4_CONNECTION_FILE")
+    original = {key: os.environ.get(key) for key in keys}
+    try:
+        for key in keys:
+            if key in profile_env:
+                os.environ[key] = profile_env[key]
+            else:
+                os.environ.pop(key, None)
+        return status_check()  # Includes positive AND negative token probes.
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def inspect_installation(local_appdata: Path, appdata: Path, *,
                          status_check=check_connection, mcp_probe=check_stdio):
     """Verify real installed paths and authenticated status without mutation."""
@@ -113,25 +137,20 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
             configured_bases.add(value)
     if len(configured_bases) > 1:
         raise InstallationError("Claude Desktop profiles disagree on the configured port")
-    # Claude may override the port while this probe runs from a plain terminal.
-    original_base = os.environ.get("YMM4_API_BASE")
-    try:
-        if configured_bases:
-            os.environ["YMM4_API_BASE"] = next(iter(configured_bases))
-        else:
-            # A terminal-only override is not part of Claude Desktop setup.
-            # Verify the installed descriptor/default rather than an unrelated
-            # process environment that can produce a false-positive status.
-            os.environ.pop("YMM4_API_BASE", None)
-        status = status_check()  # Includes positive AND negative token probes.
-    finally:
-        if original_base is None:
-            os.environ.pop("YMM4_API_BASE", None)
-        else:
-            os.environ["YMM4_API_BASE"] = original_base
-    if (not isinstance(status, dict) or status.get("status") != "running" or
-            type(status.get("port")) is not int or not 1 <= status["port"] <= 65535):
-        raise InstallationError("Authenticated YMM4 status check failed")
+    # An MCP stdio handshake only proves the child starts. It does not prove
+    # that each Claude profile can authenticate to the YMM4 HTTP endpoint.
+    # Check every profile with its own token, descriptor and base URL, rather
+    # than accepting one healthy profile as evidence for all of them.
+    status = None
+    for profile_env in profile_envs:
+        current = _authenticated_status_for_profile(status_check, profile_env)
+        if (not isinstance(current, dict) or current.get("status") != "running" or
+                type(current.get("port")) is not int or
+                not 1 <= current["port"] <= 65535):
+            raise InstallationError("Authenticated YMM4 status check failed")
+        if status is not None and current["port"] != status["port"]:
+            raise InstallationError("Claude Desktop profiles disagree on the running port")
+        status = current
     # A healthy HTTP endpoint alone does not prove Claude can start the
     # installed MCP server. Perform a real stdio initialize + tools/list for
     # every initialized Claude profile, using that profile's environment.
@@ -139,7 +158,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
     mcp_tool_counts = []
     for profile_env in profile_envs:
         child_env = dict(os.environ)
-        child_env.pop("YMM4_API_BASE", None)
+        for key in ("YMM4_API_BASE", "YMM4_API_TOKEN", "YMM4_CONNECTION_FILE"):
+            child_env.pop(key, None)
         child_env.update(profile_env)
         report = mcp_probe(python, server, env=child_env)
         if (not isinstance(report, dict) or type(report.get("tool_count")) is not int
