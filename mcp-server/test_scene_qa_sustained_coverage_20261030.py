@@ -113,7 +113,8 @@ class SustainedCoverageTests(unittest.TestCase):
                            ("min_audio_longest_covered_run_frames", 1),
                            ("max_audio_short_covered_run_total_frames", 0)):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "disabled audio"):
-                self.inspect([], **{key: value})
+                extra = {"min_audio_covered_run_frames": 3} if "short_covered" in key else {}
+                self.inspect([], **extra, **{key: value})
 
     def test_audio_longest_gate_independent_from_visual(self):
         result = scene_qa.inspect(
