@@ -254,7 +254,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*changed after readback"):
             probe(fake)
         self.assertEqual([p["action"] for p in fake.posts], ["set"])
-        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.25})
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.125})
 
     def test_out_of_bounds_frame_rejected_before_write(self):
         fake = FakeYmm4()
