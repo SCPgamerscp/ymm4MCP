@@ -58,7 +58,13 @@ def check_stdio(python: Path, server: Path, *, env: dict[str, str],
             if isinstance(error, BaseExceptionGroup):
                 return {name for inner in error.exceptions for name in classes(inner)}
             return {type(error).__name__}
-        reasons = ",".join(sorted(classes(exc)))
+        def known(error):
+            if isinstance(error, McpStdioProbeError):
+                return [str(error)]
+            if isinstance(error, BaseExceptionGroup):
+                return [msg for inner in error.exceptions for msg in known(inner)]
+            return []
+        reasons = ",".join(known(exc) or sorted(classes(exc)))
         raise McpStdioProbeError(
             "Installed MCP server did not complete stdio initialization "
             f"and tool discovery ({reasons})") from None
