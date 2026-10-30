@@ -51,8 +51,14 @@ def check_stdio(python: Path, server: Path, *, env: dict[str, str],
 
     try:
         return anyio.run(run)
-    except Exception:
-        # Exception text from SDK/process may contain a profile secret.
+    except Exception as exc:
+        # Only exception *class names* are safe to report. SDK/process error
+        # messages can include local paths or profile credentials.
+        def classes(error):
+            if isinstance(error, BaseExceptionGroup):
+                return {name for inner in error.exceptions for name in classes(inner)}
+            return {type(error).__name__}
+        reasons = ",".join(sorted(classes(exc)))
         raise McpStdioProbeError(
             "Installed MCP server did not complete stdio initialization "
-            "and tool discovery") from None
+            f"and tool discovery ({reasons})") from None
