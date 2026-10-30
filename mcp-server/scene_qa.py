@@ -62,20 +62,26 @@ def _covered_run_statistics(scene_rows, category, minimum):
     """
     active = None
     shortest = None
+    longest = None
     run_count = 0
     short_count = 0
+    short_frames = 0
 
     def finish():
-        nonlocal active, shortest, run_count, short_count
+        nonlocal active, shortest, longest, run_count, short_count, short_frames
         if active is None:
             return
         run_count += 1
         duration = active["end_frame"] - active["start_frame"]
         if minimum is not None and duration < minimum:
             short_count += 1
+            short_frames += duration
         if (shortest is None or duration <
                 shortest["end_frame"] - shortest["start_frame"]):
             shortest = active
+        if (longest is None or duration >
+                longest["end_frame"] - longest["start_frame"]):
+            longest = active
         active = None
 
     for scene in scene_rows:
@@ -99,7 +105,7 @@ def _covered_run_statistics(scene_rows, category, minimum):
                 active = {"start_frame": left, "end_frame": right,
                           "scene_ids": [scene["id"]]}
     finish()
-    return shortest, run_count, short_count
+    return shortest, longest, run_count, short_count, short_frames
 
 
 def _longest_continuous_gap(scene_rows, category):
@@ -121,7 +127,10 @@ def inspect(items, config):
                "max_visual_empty_scene_count", "max_audio_empty_scene_count",
                "min_visual_covered_run_frames", "min_audio_covered_run_frames",
                "max_visual_covered_run_count", "max_audio_covered_run_count",
-               "max_visual_short_covered_run_count", "max_audio_short_covered_run_count"}
+               "max_visual_short_covered_run_count", "max_audio_short_covered_run_count",
+               "min_visual_covered_run_count", "min_audio_covered_run_count",
+               "min_visual_longest_covered_run_frames", "min_audio_longest_covered_run_frames",
+               "max_visual_short_covered_run_total_frames", "max_audio_short_covered_run_total_frames"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
@@ -130,6 +139,7 @@ def inspect(items, config):
     empty_scene_limits = {}
     covered_run_minimums, covered_run_count_limits = {}, {}
     short_run_count_limits = {}
+    minimum_run_counts, minimum_longest_runs, short_run_frame_limits = {}, {}, {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -186,6 +196,20 @@ def inspect(items, config):
             if short_count_key in config else 0)
         if short_count_key in config and run_min_key not in config:
             raise ValueError(f"{short_count_key} requires {run_min_key}")
+        min_count_key = f"min_{category}_covered_run_count"
+        longest_key = f"min_{category}_longest_covered_run_frames"
+        short_frames_key = f"max_{category}_short_covered_run_total_frames"
+        minimum_run_counts[category] = (
+            integer(config[min_count_key], min_count_key, 1)
+            if min_count_key in config else None)
+        minimum_longest_runs[category] = (
+            integer(config[longest_key], longest_key, 1)
+            if longest_key in config else None)
+        short_run_frame_limits[category] = (
+            integer(config[short_frames_key], short_frames_key)
+            if short_frames_key in config else None)
+        if short_frames_key in config and run_min_key not in config:
+            raise ValueError(f"{short_frames_key} requires {run_min_key}")
         if not required[category] and any(
                 key in config for key in (ratio_key, total_key, continuous_key,
                                           overall_key, overall_ratio_key,
@@ -193,7 +217,8 @@ def inspect(items, config):
                                            f"max_{category}_overall_gap_count",
                                            f"max_{category}_uncovered_scene_count",
                                            f"max_{category}_empty_scene_count",
-                                           run_min_key, run_count_key, short_count_key)):
+                                           run_min_key, run_count_key, short_count_key,
+                                           min_count_key, longest_key, short_frames_key)):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
@@ -263,16 +288,21 @@ def inspect(items, config):
         }
         if not required[category]:
             continue
-        shortest_run, run_count, short_run_count = _covered_run_statistics(
-            index["scenes"], category, covered_run_minimums[category])
+        shortest_run, longest_run, run_count, short_run_count, short_frames = (
+            _covered_run_statistics(index["scenes"], category,
+                                    covered_run_minimums[category]))
         minimum_run = covered_run_minimums[category]
         # Emit bounded evidence when a covered-run gate is requested, so
         # automated repair can locate the shortest visible/audible segment.
-        if minimum_run is not None or covered_run_count_limits[category] is not None:
+        if (minimum_run is not None or covered_run_count_limits[category] is not None
+                or minimum_run_counts[category] is not None
+                or minimum_longest_runs[category] is not None):
             overall[category].update({
                 "covered_run_count": run_count,
                 "short_covered_run_count": short_run_count,
+                "short_covered_frames": short_frames,
                 "shortest_covered_range": shortest_run,
+                "longest_covered_range": longest_run,
             })
         if (minimum_run is not None and
                 short_run_count > short_run_count_limits[category]):
@@ -286,6 +316,33 @@ def inspect(items, config):
                 "short_coverage_run_count": short_run_count,
                 "maximum_short_coverage_run_count": short_run_count_limits[category],
                 "message": f"Short {category} coverage runs may indicate unintended flashes",
+            })
+        short_frames_limit = short_run_frame_limits[category]
+        if short_frames_limit is not None and short_frames > short_frames_limit:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_SHORT_COVERAGE_FRAMES",
+                "severity": "error", "short_covered_frames": short_frames,
+                "maximum_short_covered_frames": short_frames_limit,
+                "message": f"Total short {category} coverage frames exceed budget",
+            })
+        min_run_count = minimum_run_counts[category]
+        if min_run_count is not None and run_count < min_run_count:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_COVERED_RUN_COUNT_LOW",
+                "severity": "error", "covered_run_count": run_count,
+                "minimum_covered_run_count": min_run_count,
+                "message": f"Too few separate {category} coverage runs in scoped scenes",
+            })
+        min_longest = minimum_longest_runs[category]
+        longest_frames = (longest_run["end_frame"] - longest_run["start_frame"]
+                          if longest_run is not None else 0)
+        if min_longest is not None and longest_frames < min_longest:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_LONGEST_COVERAGE_RUN_LOW",
+                "severity": "error", "longest_covered_frames": longest_frames,
+                "minimum_longest_covered_run_frames": min_longest,
+                "longest_covered_range": longest_run,
+                "message": f"No sustained {category} coverage run meets the minimum",
             })
         run_limit = covered_run_count_limits[category]
         if run_limit is not None and run_count > run_limit:
