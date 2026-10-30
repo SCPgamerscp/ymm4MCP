@@ -70,6 +70,13 @@ class RequestBodyLimit:
                     scope, receive, send)
             normalized_headers.append((name.lower(), value))
 
+        # Multiple Host fields or comma-joined authorities can be interpreted
+        # differently by upstream proxies and the application router.
+        hosts = [value for name, value in normalized_headers if name == b"host"]
+        if len(hosts) > 1 or (hosts and (not hosts[0].strip(b" \\t") or b"," in hosts[0])):
+            return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
+                scope, receive, send)
+
         lengths = [value for name, value in normalized_headers if name == b"content-length"]
         transfers = [value for name, value in normalized_headers if name == b"transfer-encoding"]
         # Only a single chunked encoding is supported. Reject ambiguous or
