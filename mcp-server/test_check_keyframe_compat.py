@@ -236,7 +236,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
         fake.external_change_before_second_write = True
         with self.assertRaisesRegex(ProbeError, "changed before write"):
             probe(fake)
-        self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "set", "remove"])
         self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
         self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
 
@@ -253,7 +253,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
         fake.external_change_before_cleanup = "Zoom"
         with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*changed after readback"):
             probe(fake)
-        self.assertEqual([p["action"] for p in fake.posts], ["set"])
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "set"])
         self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.125})
 
     def test_out_of_bounds_frame_rejected_before_write(self):
@@ -374,7 +374,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertNotEqual(fake.frames["Zoom"][0]["value"], 1.0)
-        self.assertEqual(len(fake.posts), 2)
+        self.assertEqual(len(fake.posts), 3)
 
     def test_cleanup_rejects_collateral_damage_to_other_animation(self):
         fake = FakeYmm4()
@@ -383,7 +383,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertNotEqual(fake.frames["X"][0]["value"], 0.0)
-        self.assertEqual(len(fake.posts), 2)
+        self.assertEqual(len(fake.posts), 3)
 
     def test_cleanup_rejects_damage_to_unrelated_animation(self):
         fake = FakeYmm4()
@@ -393,7 +393,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
         self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
         self.assertEqual(fake.frames["X"], [{"at": 0, "value": 0.0}])
         self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
-        self.assertEqual(len(fake.posts), 2)
+        self.assertEqual(len(fake.posts), 3)
 
 
 if __name__ == "__main__":
