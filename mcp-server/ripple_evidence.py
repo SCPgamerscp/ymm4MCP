@@ -39,7 +39,7 @@ def project_identity(project):
                                         or 0xD800 <= ord(c) <= 0xDFFF for c in path)):
         raise ValueError("A valid saved project path is required")
     if ntpath.isabs(path):
-        return "windows:" + ntpath.normcase(ntpath.normpath(path.replace("/", "\\\\")))
+        return "windows:" + ntpath.normcase(ntpath.normpath(path))
     if posixpath.isabs(path):
         return "posix:" + posixpath.normpath(path)
     raise ValueError("An absolute saved project path is required")
