@@ -120,7 +120,8 @@ def inspect(items, config):
                "max_visual_uncovered_scene_count", "max_audio_uncovered_scene_count",
                "max_visual_empty_scene_count", "max_audio_empty_scene_count",
                "min_visual_covered_run_frames", "min_audio_covered_run_frames",
-               "max_visual_covered_run_count", "max_audio_covered_run_count"}
+               "max_visual_covered_run_count", "max_audio_covered_run_count",
+               "max_visual_short_covered_run_count", "max_audio_short_covered_run_count"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
@@ -128,6 +129,7 @@ def inspect(items, config):
     gap_count_limits, overall_gap_count_limits, uncovered_scene_limits = {}, {}, {}
     empty_scene_limits = {}
     covered_run_minimums, covered_run_count_limits = {}, {}
+    short_run_count_limits = {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -178,14 +180,21 @@ def inspect(items, config):
         covered_run_count_limits[category] = (
             integer(config[run_count_key], run_count_key)
             if run_count_key in config else None)
+        short_count_key = f"max_{category}_short_covered_run_count"
+        short_run_count_limits[category] = (
+            integer(config[short_count_key], short_count_key)
+            if short_count_key in config else 0)
+        if short_count_key in config and run_min_key not in config:
+            raise ValueError(f"{short_count_key} requires {run_min_key}")
         if not required[category] and any(
-                key in config for key in (ratio_key, total_key, continuous_key,
+                key in config for key in (f"max_{category}_gap_frames",
+                                          ratio_key, total_key, continuous_key,
                                           overall_key, overall_ratio_key,
                                            f"max_{category}_gap_count",
                                            f"max_{category}_overall_gap_count",
                                            f"max_{category}_uncovered_scene_count",
                                            f"max_{category}_empty_scene_count",
-                                           run_min_key, run_count_key)):
+                                           run_min_key, run_count_key, short_count_key)):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
@@ -258,7 +267,8 @@ def inspect(items, config):
         shortest_run, run_count, short_run_count = _covered_run_statistics(
             index["scenes"], category, covered_run_minimums[category])
         minimum_run = covered_run_minimums[category]
-        if minimum_run is not None and short_run_count:
+        if (minimum_run is not None and
+                short_run_count > short_run_count_limits[category]):
             issues.append({
                 "code": f"SCENE_{category.upper()}_SHORT_COVERAGE_RUN",
                 "severity": "error",
@@ -267,6 +277,7 @@ def inspect(items, config):
                 "covered_frames": shortest_run["end_frame"] - shortest_run["start_frame"],
                 "minimum_covered_run_frames": minimum_run,
                 "short_coverage_run_count": short_run_count,
+                "maximum_short_coverage_run_count": short_run_count_limits[category],
                 "message": f"Short {category} coverage runs may indicate unintended flashes",
             })
         run_limit = covered_run_count_limits[category]
