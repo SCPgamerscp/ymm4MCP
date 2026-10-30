@@ -108,5 +108,49 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.inspect()
 
 
+    def test_ambient_terminal_port_is_not_used_for_unconfigured_profile(self):
+        # Claude's entry has no YMM4_API_BASE; use the installed connection
+        # descriptor/default instead of an unrelated terminal override.
+        with patch.dict("os.environ", {"YMM4_API_BASE": "http://127.0.0.1:9999/api"}):
+            def probe():
+                self.assertNotIn("YMM4_API_BASE", __import__("os").environ)
+                return {"status": "running", "port": 8765}
+            self.status.side_effect = probe
+            self.assertTrue(self.inspect()["success"])
+            self.assertEqual(__import__("os").environ["YMM4_API_BASE"],
+                             "http://127.0.0.1:9999/api")
+
+    def test_concurrent_config_replacement_is_not_accepted(self):
+        def probe():
+            # Simulate a second installer changing the command after the
+            # first validation, while authenticated status still succeeds.
+            self.write_config(self.classic, command="C:/old/python.exe")
+            return {"status": "running", "port": 8765}
+        self.status.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "changed during"):
+            self.inspect()
+        self.status.assert_called_once()
+
+    def test_concurrent_config_removal_is_not_accepted(self):
+        def probe():
+            self.classic.unlink()
+            return {"status": "running", "port": 8765}
+        self.status.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "changed during"):
+            self.inspect()
+
+    def test_oversized_claude_config_fails_before_network(self):
+        # Large settings files must not be read without a memory bound.
+        self.classic.write_text('{"padding":"' + "x" * (1024 * 1024) + '"}')
+        with self.assertRaises(InstallationError):
+            self.inspect()
+        self.status.assert_not_called()
+
+    def test_stable_config_with_explicit_port_still_passes(self):
+        self.write_config(self.classic, env={
+            "YMM4_API_BASE": "http://127.0.0.1:8765/api"})
+        self.assertEqual(self.inspect()["port"], 8765)
+
+
 if __name__ == "__main__":
     unittest.main()
