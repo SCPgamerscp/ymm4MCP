@@ -124,8 +124,12 @@ handle. A changed path during capture returns `RIPPLE_PROJECT_CHANGED`.
 Verification by `plan_id` similarly reads the project identity on both
 sides of the fresh inventory fetch, then compares it with the original
 project path. This prevents a correct-looking timeline in a **different
-named project** from passing the captured plan's verification. Windows paths
-are compared case-insensitively with normalized separators.
+named project** from passing the captured plan's verification. Drive-qualified
+and complete UNC Windows paths are compared case-insensitively with normalized
+separators. POSIX absolute paths retain their case (two different project files
+may differ only by case). Drive-relative paths, Windows root-relative paths,
+bare UNC shares, and device-namespace paths cannot be used as evidence
+identities. This is still a path-based check, not an immutable project ID.
 
 This is **not** a project-instance lock. Reopening the same path, switching
 away and back between individual reads, or changing the underlying file
