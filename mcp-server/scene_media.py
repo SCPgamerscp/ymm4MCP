@@ -14,7 +14,7 @@ def _safe_identifier(value, limit):
     return (isinstance(value, str) and bool(value.strip()) and len(value) <= limit
             and value == value.strip() and unicodedata.is_normalized("NFC", value)
             and not any((category := unicodedata.category(char)) in {"Cc", "Cs"}
-                        or (category == "Cf" and char not in ("\\u200c", "\\u200d"))
+                        or (category == "Cf" and char not in ("\u200c", "\u200d"))
                         for char in value))
 
 
@@ -224,7 +224,7 @@ def with_coverage(index: dict) -> dict:
                     (not isinstance(kind, str) or not kind.strip() or
                      len(kind) > 128 or
                      any((category := unicodedata.category(c)) in {"Cc", "Cs"}
-                         or (category == "Cf" and c not in ("\\u200c", "\\u200d"))
+                         or (category == "Cf" and c not in ("\u200c", "\u200d"))
                          for c in kind))):
                 raise ValueError("scene item type must be a bounded readable string")
             # Validate unknown item spans too: excluding their type from QA
