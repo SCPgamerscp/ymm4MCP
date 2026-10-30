@@ -139,7 +139,13 @@ class OverallSceneCoverageTests(unittest.TestCase):
                           "uncovered_frames": 5, "coverage_ratio": 0.5,
                           "longest_uncovered_range":
                               {"start_frame": 5, "end_frame": 10,
-                               "scene_ids": ["a"]}})
+                               "scene_ids": ["a"]},
+                          "continuous_gap_count": 1,
+                          "uncovered_scene_count": 1,
+                          "empty_scene_count": 0,
+                          "largest_uncovered_ranges": [
+                              {"start_frame": 5, "end_frame": 10, "scene_ids": ["a"]}],
+                          "omitted_uncovered_range_count": 0})
 
 
 if __name__ == "__main__":
