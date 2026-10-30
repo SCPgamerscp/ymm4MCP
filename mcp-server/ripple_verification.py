@@ -10,7 +10,7 @@ MAX_ISSUES = 100
 # A move is allowed to change its position, derived end, and optimistic revision.
 # All other observed properties (including nested effects/animations/volume)
 # must remain identical. Missing/added fields are NOT silently ignored.
-MUTABLE_FIELDS = frozenset(("frame", "end_frame", "revision"))
+MUTABLE_FIELDS = frozenset(("frame", "end_frame", "endFrame", "revision"))
 
 
 def _canonical(value):
@@ -42,10 +42,13 @@ def _inventory(snapshot):
             length = _frame(item.get("length"), "length", 1)
             _frame(frame + length, "end", 1)
             _frame(item.get("layer"), "layer")
-            if "end_frame" in item and (
-                    type(item["end_frame"]) is not int or
-                    item["end_frame"] != frame + length):
-                return None
+            # The real YMM4 /api/items endpoint exposes camelCase endFrame.
+            # Both spellings are derived geometry, never immutable content.
+            for end_key in ("end_frame", "endFrame"):
+                if end_key in item and (
+                        type(item[end_key]) is not int or
+                        item[end_key] != frame + length):
+                    return None
         except (ValueError, TypeError, OverflowError, UnicodeError):
             return None
         by_id[identity] = item
@@ -103,8 +106,9 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
                       expected=expected, actual=actual[field])
         # A derived end frame must follow the move, never remain at its old
         # position. _inventory already validates consistency within each item.
-        if ("end_frame" in item) != ("end_frame" in actual):
-            issue("RIPPLE_CONTENT_CHANGED", identity, field="end_frame")
+        for end_key in ("end_frame", "endFrame"):
+            if (end_key in item) != (end_key in actual):
+                issue("RIPPLE_CONTENT_CHANGED", identity, field=end_key)
         # Compare all observed host data, not just text and source_path.
         # This catches unintended changes to effects, keyframes, opacity,
         # volume, source offsets, and any future fields added by YMM4.
