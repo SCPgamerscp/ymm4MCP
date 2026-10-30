@@ -53,12 +53,14 @@ def inspect(items, config):
                "min_visual_overall_coverage_ratio", "min_audio_overall_coverage_ratio",
                "max_visual_gap_count", "max_audio_gap_count",
                "max_visual_overall_gap_count", "max_audio_overall_gap_count",
-               "max_visual_uncovered_scene_count", "max_audio_uncovered_scene_count"}
+               "max_visual_uncovered_scene_count", "max_audio_uncovered_scene_count",
+               "max_visual_empty_scene_count", "max_audio_empty_scene_count"}
     if not isinstance(config, dict) or set(config) - allowed or "scene_ranges" not in config:
         raise ValueError("scene_check requires scene_ranges and supported coverage options")
     required, limits, total_limits, min_ratios = {}, {}, {}, {}
     continuous_limits, overall_limits, overall_min_ratios = {}, {}, {}
     gap_count_limits, overall_gap_count_limits, uncovered_scene_limits = {}, {}, {}
+    empty_scene_limits = {}
     for category in ("visual", "audio"):
         required[category] = config.get(f"require_{category}", True)
         if not isinstance(required[category], bool):
@@ -97,7 +99,8 @@ def inspect(items, config):
         for option, destination in (
                 ("gap_count", gap_count_limits),
                 ("overall_gap_count", overall_gap_count_limits),
-                ("uncovered_scene_count", uncovered_scene_limits)):
+                ("uncovered_scene_count", uncovered_scene_limits),
+                ("empty_scene_count", empty_scene_limits)):
             key = f"max_{category}_{option}"
             destination[category] = integer(config[key], key) if key in config else None
         if not required[category] and any(
@@ -105,7 +108,8 @@ def inspect(items, config):
                                           overall_key, overall_ratio_key,
                                            f"max_{category}_gap_count",
                                            f"max_{category}_overall_gap_count",
-                                           f"max_{category}_uncovered_scene_count")):
+                                           f"max_{category}_uncovered_scene_count",
+                                           f"max_{category}_empty_scene_count")):
             raise ValueError(f"disabled {category} coverage cannot have active ratio/total requirements")
     if not any(required.values()):
         raise ValueError("scene_check must require visual or audio coverage")
@@ -160,6 +164,8 @@ def inspect(items, config):
         longest, gap_count = _gap_statistics(index["scenes"], category)
         uncovered_scene_count = sum(bool(scene[f"{category}_uncovered_ranges"])
                                     for scene in index["scenes"])
+        empty_scene_count = sum(scene[f"{category}_covered_frames"] == 0
+                                for scene in index["scenes"])
         ratio = covered / scoped_frames
         overall[category] = {
             "scoped_frames": scoped_frames, "covered_frames": covered,
@@ -167,6 +173,7 @@ def inspect(items, config):
             "longest_uncovered_range": longest,
             "continuous_gap_count": gap_count,
             "uncovered_scene_count": uncovered_scene_count,
+            "empty_scene_count": empty_scene_count,
         }
         if not required[category]:
             continue
@@ -185,6 +192,14 @@ def inspect(items, config):
                 "severity": "error", "uncovered_scene_count": uncovered_scene_count,
                 "maximum_uncovered_scene_count": scene_limit,
                 "message": f"Too many scenes have uncovered {category} frames",
+            })
+        empty_limit = empty_scene_limits[category]
+        if empty_limit is not None and empty_scene_count > empty_limit:
+            issues.append({
+                "code": f"SCENE_{category.upper()}_EMPTY_SCENE_COUNT",
+                "severity": "error", "empty_scene_count": empty_scene_count,
+                "maximum_empty_scene_count": empty_limit,
+                "message": f"Too many scenes lack any {category} coverage",
             })
         continuous_limit = continuous_limits[category]
         if (continuous_limit is not None and longest is not None and
