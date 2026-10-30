@@ -48,8 +48,72 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["mcp_profiles_checked"], 2)
         self.assertEqual(report["mcp_stdio"], "ready")
         self.assertEqual(self.mcp.call_count, 2)
-        self.status.assert_called_once()
+        self.assertEqual(self.status.call_count, 2)
         self.assertNotIn("token", json.dumps(report).lower())
+
+    def test_second_profile_auth_failure_is_not_masked_by_first(self):
+        self.write_config(self.classic, env={"YMM4_API_TOKEN": "valid-test-token"})
+        self.write_config(self.store, env={"YMM4_API_TOKEN": "bad-test-token"})
+        seen = []
+        def authenticate():
+            token = __import__("os").environ.get("YMM4_API_TOKEN")
+            seen.append(token)
+            if token == "bad-test-token":
+                raise InstallationError("Authenticated YMM4 status check failed")
+            return {"status": "running", "port": 8765}
+        self.status.side_effect = authenticate
+        with self.assertRaisesRegex(InstallationError, "Authenticated"):
+            self.inspect()
+        self.assertEqual(seen, ["valid-test-token", "bad-test-token"])
+        self.mcp.assert_not_called()
+
+    def test_missing_profile_base_cannot_hide_different_descriptor_port(self):
+        self.write_config(self.classic, env={
+            "YMM4_API_BASE": "http://127.0.0.1:8765/api"})
+        self.write_config(self.store)
+        def authenticate():
+            base = __import__("os").environ.get("YMM4_API_BASE")
+            return {"status": "running", "port": 8765 if base else 8766}
+        self.status.side_effect = authenticate
+        with self.assertRaisesRegex(InstallationError, "disagree on the running port"):
+            self.inspect()
+        self.assertEqual(self.status.call_count, 2)
+        self.mcp.assert_not_called()
+
+    def test_ambient_terminal_token_and_descriptor_are_not_trusted(self):
+        from unittest.mock import patch
+        with patch.dict("os.environ", {
+            "YMM4_API_TOKEN": "ambient-wrong-token",
+            "YMM4_CONNECTION_FILE": "C:/unrelated/connection.json",
+            "YMM4_API_BASE": "http://127.0.0.1:9999/api",
+        }):
+            def authenticate():
+                for key in ("YMM4_API_TOKEN", "YMM4_CONNECTION_FILE", "YMM4_API_BASE"):
+                    self.assertNotIn(key, __import__("os").environ)
+                return {"status": "running", "port": 8765}
+            self.status.side_effect = authenticate
+            self.inspect()
+            child_env = self.mcp.call_args.kwargs["env"]
+            for key in ("YMM4_API_TOKEN", "YMM4_CONNECTION_FILE", "YMM4_API_BASE"):
+                self.assertNotIn(key, child_env)
+            self.assertEqual(__import__("os").environ["YMM4_API_TOKEN"],
+                             "ambient-wrong-token")
+            self.assertEqual(__import__("os").environ["YMM4_CONNECTION_FILE"],
+                             "C:/unrelated/connection.json")
+
+    def test_each_profile_uses_its_own_authentication_token(self):
+        self.write_config(self.classic, env={"YMM4_API_TOKEN": "classic-token"})
+        self.write_config(self.store, env={"YMM4_API_TOKEN": "store-token"})
+        seen = []
+        def authenticate():
+            seen.append(__import__("os").environ.get("YMM4_API_TOKEN"))
+            return {"status": "running", "port": 8765}
+        self.status.side_effect = authenticate
+        self.inspect()
+        self.assertEqual(seen, ["classic-token", "store-token"])
+        self.assertEqual(self.mcp.call_count, 2)
+        self.assertEqual(self.mcp.call_args.kwargs["env"]["YMM4_API_TOKEN"],
+                         "store-token")
 
     def test_missing_persistent_server_refuses_to_check_status(self):
         (self.server / "server.py").unlink()
