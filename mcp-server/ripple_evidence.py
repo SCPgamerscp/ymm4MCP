@@ -54,7 +54,7 @@ def project_identity(project):
             # below that share. Do not accept a bare network authority.
             parts = drive.replace("/", "\\").lstrip("\\").split("\\")
             if (len(parts) != 2 or not all(parts)
-                    or not tail.startswith(("\\", "/")) or tail in ("\\", "/")):
+                    or not tail.startswith(("\\", "/")) or not tail.strip("\\/")):
                 raise ValueError("Incomplete UNC project path")
         else:
             raise ValueError("Unsupported Windows project path")
