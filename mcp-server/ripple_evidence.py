@@ -7,6 +7,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import hashlib
 import json
+import ntpath
+import posixpath
 import secrets
 import time
 
@@ -19,6 +21,28 @@ class RippleEvidence:
     before_json: bytes
     parameters_json: bytes
     sha256: str
+    project_path: str
+
+
+def project_identity(project):
+    """Require a saved, named project; normalize the host's path for comparison.
+
+    A path is a useful guard against switching to another project, but is NOT
+    an immutable project instance ID or proof of an atomic edit.
+    """
+    if (not isinstance(project, dict) or project.get("success") is not True
+            or "error" in project or "error_code" in project):
+        raise ValueError("YMM4 project identity is unavailable")
+    path = project.get("projectPath")
+    if (not isinstance(path, str) or not path or path != path.strip()
+            or len(path) > 4096 or any(ord(c) < 32 or ord(c) == 127
+                                        or 0xD800 <= ord(c) <= 0xDFFF for c in path)):
+        raise ValueError("A valid saved project path is required")
+    if ntpath.isabs(path):
+        return "windows:" + ntpath.normcase(ntpath.normpath(path.replace("/", "\\\\")))
+    if posixpath.isabs(path):
+        return "posix:" + posixpath.normpath(path)
+    raise ValueError("An absolute saved project path is required")
 
 
 class RippleEvidenceStore:
@@ -36,13 +60,14 @@ class RippleEvidenceStore:
             if now - record.created >= self.TTL_SECONDS:
                 del self._records[key]
 
-    def capture(self, before, *, start_frame, end_frame, layers,
+    def capture(self, before, *, project_info, start_frame, end_frame, layers,
                 expected_revisions):
         """Capture a validated *host-returned* snapshot after successful preflight.
 
         Call without awaiting between host preflight and capture. This stores
         immutable JSON bytes, never a reference to a mutable caller dictionary.
         """
+        identity = project_identity(project_info)
         if _inventory(before) is None:
             raise ValueError("complete host inventory with count/items is required")
         parameters = dict(start_frame=start_frame, end_frame=end_frame,
@@ -62,8 +87,9 @@ class RippleEvidenceStore:
         token = secrets.token_urlsafe(24)
         digest = hashlib.sha256(before_json).hexdigest()
         self._records[token] = RippleEvidence(self._clock(), before_json,
-                                               parameters_json, digest)
+                                               parameters_json, digest, identity)
         return {"plan_id": token, "before_sha256": digest,
+                "project_identity_checked": True,
                 "evidence_source": "server_captured_host_inventory",
                 "evidence_expires_in_seconds": self.TTL_SECONDS}
 
@@ -73,14 +99,23 @@ class RippleEvidenceStore:
             return None
         return self._records.get(plan_id)
 
-    def verify(self, record, after):
+    def verify(self, record, after, *, project_info):
         if self._clock() - record.created >= self.TTL_SECONDS:
             return {"success": False, "passed": False,
                     "error_code": "RIPPLE_EVIDENCE_EXPIRED"}
+        try:
+            identity = project_identity(project_info)
+        except ValueError:
+            return {"success": False, "passed": False,
+                    "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+        if identity != record.project_path:
+            return {"success": False, "passed": False,
+                    "error_code": "RIPPLE_PROJECT_CHANGED"}
         before = json.loads(record.before_json)
         params = json.loads(record.parameters_json)
         result = verify_ripple_result(before, after, **params)
         result["evidence_source"] = "server_captured_host_inventory"
+        result["project_identity_checked"] = True
         result["before_sha256"] = record.sha256
         result["atomicity_verified"] = False
         return result
