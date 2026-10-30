@@ -95,6 +95,31 @@ class SceneShortRunBudgetTests(unittest.TestCase):
                          min_audio_covered_run_frames=3,
                          max_audio_short_covered_run_count=1)
 
+    def test_covered_run_diagnostics_include_shortest_range(self):
+        result = self.inspect(
+            [item("short", 0, 2), item("long", 5, 10)],
+            [scene("s", 0, 15)],
+            min_visual_covered_run_frames=3,
+            max_visual_short_covered_run_count=1)
+        stats = result["overall_coverage"]["visual"]
+        self.assertEqual(stats["covered_run_count"], 2)
+        self.assertEqual(stats["short_covered_run_count"], 1)
+        self.assertEqual(stats["shortest_covered_range"], {
+            "start_frame": 0, "end_frame": 2, "scene_ids": ["s"]})
+
+    def test_covered_run_diagnostics_are_opt_in(self):
+        result = self.inspect([item("v", 0, 10)],
+                              [scene("s", 0, 10)])
+        self.assertNotIn("covered_run_count", result["overall_coverage"]["visual"])
+
+    def test_run_count_gate_alone_exposes_run_diagnostics(self):
+        result = self.inspect(
+            [item("a", 0, 2), item("b", 5, 2)],
+            [scene("s", 0, 10)], max_visual_covered_run_count=2)
+        stats = result["overall_coverage"]["visual"]
+        self.assertEqual(stats["covered_run_count"], 2)
+        self.assertEqual(stats["short_covered_run_count"], 0)
+
     def test_audio_short_run_budget_is_independent(self):
         result = scene_qa.inspect(
             [item("video", 0, 20),
