@@ -4,6 +4,8 @@ ASGI servers need not enforce Content-Length and can deliver chunked bodies with
 one. This middleware caps received bytes before the MCP JSON parser sees any input,
 while preserving the receive channel for disconnect notifications.
 """
+from ipaddress import IPv6Address
+
 from starlette.responses import JSONResponse
 
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
@@ -84,14 +86,20 @@ class RequestBodyLimit:
             if authority.startswith(b"["):
                 closing = authority.find(b"]")
                 suffix = authority[closing + 1:] if closing >= 0 else b""
-                valid_authority = (closing > 1 and b":" in authority[1:closing]
-                                   and (not suffix or (suffix.startswith(b":")
-                                       and bool(suffix[1:]) and suffix[1:].isdigit())))
+                valid_authority = (closing > 1 and (not suffix or (suffix.startswith(b":")
+                                   and bool(suffix[1:]) and suffix[1:].isdigit()
+                                   and int(suffix[1:]) <= 65535)))
+                if valid_authority:
+                    try:
+                        IPv6Address(authority[1:closing].decode("ascii"))
+                    except (ValueError, UnicodeDecodeError):
+                        valid_authority = False
             else:
                 host, sep, port = authority.partition(b":")
                 valid_authority = (bool(host) and b"[" not in authority
                                    and b"]" not in authority
-                                   and (not sep or (bool(port) and port.isdigit())))
+                                   and (not sep or (bool(port) and port.isdigit()
+                                                    and int(port) <= 65535)))
             if not valid_authority:
                 return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                     scope, receive, send)
