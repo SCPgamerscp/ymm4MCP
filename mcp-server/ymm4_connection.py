@@ -1,6 +1,8 @@
 """Read the plugin's per-user connection descriptor without caching rotated tokens."""
 import json
+import math
 import os
+import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -9,9 +11,94 @@ class ConnectionConfigurationError(ValueError):
     pass
 
 
+# The plugin writes a small JSON descriptor. A corrupted or attacker-controlled
+# descriptor must not cause unbounded reads during every MCP request.
+MAX_DESCRIPTOR_BYTES = 64 * 1024
+MAX_DESCRIPTOR_DEPTH = 128
+MAX_API_TOKEN_LENGTH = 256
+# Numbers in the descriptor are metadata, not a reason to spend unbounded
+# CPU converting enormous integer or floating-point literals.
+MAX_DESCRIPTOR_INTEGER_DIGITS = 128
+MAX_DESCRIPTOR_FLOAT_CHARS = 128
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate connection descriptor key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_constant(value: str):
+    """Connection metadata must use standards-compliant JSON numbers."""
+    raise ValueError("nonfinite connection descriptor number")
+
+
+def _bounded_json_integer(literal: str) -> int:
+    """Reject huge integer tokens before int() performs expensive conversion."""
+    if len(literal.lstrip("-")) > MAX_DESCRIPTOR_INTEGER_DIGITS:
+        raise ValueError("connection descriptor integer is too long")
+    return int(literal)
+
+
+def _bounded_json_float(literal: str) -> float:
+    """Reject expensive or overflowing floating-point JSON metadata."""
+    if len(literal) > MAX_DESCRIPTOR_FLOAT_CHARS:
+        raise ValueError("connection descriptor floating-point literal is too long")
+    value = float(literal)
+    if not math.isfinite(value):
+        raise ValueError("nonfinite connection descriptor number")
+    return value
+
+
+def _descriptor_too_deep(body: str) -> bool:
+    """Bound JSON nesting without relying on the interpreter recursion limit."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_DESCRIPTOR_DEPTH:
+                return True
+        elif char in "]}":
+            depth -= 1
+    return False
+
+
+def _reject_unpaired_surrogates(value: object) -> None:
+    """Invalid escaped Unicode must not survive in ignored descriptor metadata."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in item):
+                raise ValueError("unpaired Unicode surrogate in connection descriptor")
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
 def connection_settings() -> tuple[str, dict[str, str]]:
     token = os.environ.get("YMM4_API_TOKEN", "")
     descriptor = {}
+    # An explicitly empty path is a configuration error, not a request to
+    # silently discover a different YMM4 instance via LOCALAPPDATA.
+    if "YMM4_CONNECTION_FILE" in os.environ and not os.environ["YMM4_CONNECTION_FILE"]:
+        raise ConnectionConfigurationError("YMM4_CONNECTION_FILE は空にできません")
     path = os.environ.get("YMM4_CONNECTION_FILE")
     if not path:
         local = os.environ.get("LOCALAPPDATA")
@@ -19,11 +106,50 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             path = str(Path(local) / "YMM4MCP" / "connection.json")
     if path:
         try:
-            with open(path, encoding="utf-8-sig") as source:
-                descriptor = json.load(source)
+            # Never block on a substituted FIFO/device or follow a descriptor
+            # symlink into another file. Check both before and after opening:
+            # a path can change between lstat() and open().
+            path_stat = os.lstat(path)
+            if not stat.S_ISREG(path_stat.st_mode):
+                raise ValueError("connection descriptor must be a regular file")
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as source:
+                opened_stat = os.fstat(source.fileno())
+                if not stat.S_ISREG(opened_stat.st_mode):
+                    raise ValueError("connection descriptor must be a regular file")
+                # O_NOFOLLOW is not available on every platform (notably
+                # Windows). Detect a regular-file swap between lstat and open
+                # instead of trusting the pre-open path inspection.
+                if (path_stat.st_ino and opened_stat.st_ino
+                        and (path_stat.st_dev, path_stat.st_ino)
+                        != (opened_stat.st_dev, opened_stat.st_ino)):
+                    raise ValueError("connection descriptor changed before opening")
+                raw = source.read(MAX_DESCRIPTOR_BYTES + 1)
+                # A concurrent writer can leave a valid-looking but torn
+                # descriptor. Reject changes observed during the read.
+                read_stat = os.fstat(source.fileno())
+                if (opened_stat.st_dev, opened_stat.st_ino, opened_stat.st_size,
+                    opened_stat.st_mtime_ns, opened_stat.st_ctime_ns) != (
+                    read_stat.st_dev, read_stat.st_ino, read_stat.st_size,
+                    read_stat.st_mtime_ns, read_stat.st_ctime_ns):
+                    raise ValueError("connection descriptor changed during reading")
+            if len(raw) > MAX_DESCRIPTOR_BYTES:
+                raise ValueError("connection descriptor is too large")
+            decoded = raw.decode("utf-8-sig")
+            if _descriptor_too_deep(decoded):
+                raise ValueError("connection descriptor is too deeply nested")
+            descriptor = json.loads(
+                decoded,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_nonfinite_constant,
+                parse_int=_bounded_json_integer,
+                parse_float=_bounded_json_float,
+            )
+            _reject_unpaired_surrogates(descriptor)
             if not isinstance(descriptor, dict):
                 raise ValueError("object required")
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             if not token:
                 raise ConnectionConfigurationError(
                     "YMM4接続情報を読めません。プラグインを起動し、YMM4_CONNECTION_FILEを確認してください"
@@ -35,7 +161,14 @@ def connection_settings() -> tuple[str, dict[str, str]]:
         )
     if not token:
         token = descriptor.get("token", "")
-    base = os.environ.get("YMM4_API_BASE") or descriptor.get("api_base") or "http://127.0.0.1:8765/api"
+    # A present but malformed base is a configuration error, not a signal to
+    # silently connect to the default port (possibly another YMM4 instance).
+    if "YMM4_API_BASE" in os.environ:
+        base = os.environ["YMM4_API_BASE"]
+    elif "api_base" in descriptor:
+        base = descriptor["api_base"]
+    else:
+        base = "http://127.0.0.1:8765/api"
     if not isinstance(base, str):
         raise ConnectionConfigurationError("YMM4_API_BASE は文字列で指定してください")
     # urllib.parse strips tabs/newlines and leading C0 controls silently.
@@ -51,7 +184,7 @@ def connection_settings() -> tuple[str, dict[str, str]]:
     if (parsed.scheme != "http" or "@" in parsed.netloc
             or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
             or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or parsed.path.rstrip("/") != "/api"):
+            or parsed.path not in ("/api", "/api/")):
         raise ConnectionConfigurationError("YMM4_API_BASE はローカルHTTPの /api URLのみ指定できます")
     try:
         # YMM4 never binds its API on the implicit HTTP port 80. An omitted
@@ -60,7 +193,8 @@ def connection_settings() -> tuple[str, dict[str, str]]:
             raise ValueError("port missing or out of range")
     except ValueError as exc:
         raise ConnectionConfigurationError("ポートは1024〜65535で指定してください") from exc
-    if not isinstance(token, str) or not token or any(not (33 <= ord(c) <= 126) for c in token):
+    if (not isinstance(token, str) or not token or len(token) > MAX_API_TOKEN_LENGTH
+            or any(not (33 <= ord(c) <= 126) for c in token)):
         raise ConnectionConfigurationError("有効なYMM4 APIトークンがありません")
     return base.rstrip("/"), {"X-Ymm4-Token": token}
 
