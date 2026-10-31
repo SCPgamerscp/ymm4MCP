@@ -71,6 +71,7 @@ def _invalid_content_type_parameters(value):
     if quoted or escaped:
         return True
     parameters.append(value[start:])
+    seen_names = set()
     for parameter in parameters:
         parameter = parameter.strip(b" \t")
         if b"=" not in parameter:
@@ -80,6 +81,11 @@ def _invalid_content_type_parameters(value):
         raw_value = raw_value.strip(b" \t")
         if not name or any(char not in _HEADER_TOKEN_BYTES for char in name):
             return True
+        # Duplicate parameter names are case-insensitive and ambiguous to consumers.
+        canonical_name = name.lower()
+        if canonical_name in seen_names:
+            return True
+        seen_names.add(canonical_name)
         if raw_value.startswith(b'"'):
             if len(raw_value) < 2 or not raw_value.endswith(b'"'):
                 return True
