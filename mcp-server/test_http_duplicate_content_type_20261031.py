@@ -68,6 +68,19 @@ class DuplicateContentTypeTests(unittest.TestCase):
             (b"content-type", b'application/json; profile="unterminated')
         ])), [400])
 
+    def test_invalid_media_type_syntax(self):
+        for value in (b"application", b"/json", b"application/", b"application//json",
+                      b"application /json", b"application/json extra", b"; charset=utf-8",
+                      b"application/@json"):
+            with self.subTest(value=value):
+                self.assertEqual(asyncio.run(dispatch([(b"content-type", value)])), [400])
+
+    def test_valid_media_type_tokens(self):
+        for value in (b"application/json", b"application/vnd.example+json",
+                      b"text/plain; charset=utf-8", b"application/*"):
+            with self.subTest(value=value):
+                self.assertEqual(asyncio.run(dispatch([(b"content-type", value)])), ["app", 200])
+
     def test_single_content_type_allowed(self):
         self.assertEqual(asyncio.run(dispatch([(b"content-type", b"application/json")])), ["app", 200])
 
