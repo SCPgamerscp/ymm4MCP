@@ -28,8 +28,11 @@ def _invalid_media_type(value):
     """Reject missing or invalid type/subtype tokens before optional parameters."""
     media_type = value.split(b";", 1)[0].strip()
     parts = media_type.split(b"/")
+    # Content-Type describes a concrete representation, not an Accept-style
+    # media range. Wildcards are tokens syntactically but invalid here.
     return (len(parts) != 2 or
-            any(not part or any(char not in _HEADER_TOKEN_BYTES for char in part)
+            any(not part or b"*" in part or
+                any(char not in _HEADER_TOKEN_BYTES for char in part)
                 for part in parts))
 
 
