@@ -78,6 +78,24 @@ class RequestBodyLimit:
             return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                 scope, receive, send)
 
+        # Reject malformed bracketed IPv6 authorities and nonnumeric ports.
+        if hosts:
+            authority = hosts[0]
+            if authority.startswith(b"["):
+                closing = authority.find(b"]")
+                suffix = authority[closing + 1:] if closing >= 0 else b""
+                valid_authority = (closing > 1 and b":" in authority[1:closing]
+                                   and (not suffix or (suffix.startswith(b":")
+                                       and bool(suffix[1:]) and suffix[1:].isdigit())))
+            else:
+                host, sep, port = authority.partition(b":")
+                valid_authority = (bool(host) and b"[" not in authority
+                                   and b"]" not in authority
+                                   and (not sep or (bool(port) and port.isdigit())))
+            if not valid_authority:
+                return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
+                    scope, receive, send)
+
         lengths = [value for name, value in normalized_headers if name == b"content-length"]
         transfers = [value for name, value in normalized_headers if name == b"transfer-encoding"]
         # Only a single chunked encoding is supported. Reject ambiguous or
