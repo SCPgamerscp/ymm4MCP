@@ -34,7 +34,10 @@ class HostAuthorityTests(unittest.TestCase):
                      b"user@example.com", b"example.com\x7f",
                      b"example.com\x80", b"example.com\xff", b"example.com:abc", b"example.com:",
                      b"example.com:80:90", b"[::1", b"[::1]suffix",
-                     b"[::1]:bad", b"[::1]:", b"foo]bar", b"[foo]"):
+                     b"[::1]:bad", b"[::1]:", b"foo]bar", b"[foo]",
+                     b"[:::]", b"[gggg::1]", b"[1:2:3]", b"[::1]:65536",
+                     b"example.com:65536", b"example.com:999999999999999999999",
+                     b"[::1]:999999999999999999999"):
             with self.subTest(host=host):
                 called, status = asyncio.run(run(host))
                 self.assertFalse(called)
@@ -55,7 +58,8 @@ class HostAuthorityTests(unittest.TestCase):
             }, receive, send)
             return called
 
-        for host in (b"example.com", b"example.com:8080", b"[::1]:8080"):
+        for host in (b"example.com", b"example.com:8080", b"[::1]:8080", b"[2001:db8::1]",
+                     b"example.com:65535", b"[::1]:65535"):
             with self.subTest(host=host):
                 self.assertEqual(asyncio.run(run(host))[0]["body"], b"{}")
 
