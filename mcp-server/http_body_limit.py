@@ -96,12 +96,12 @@ def _invalid_content_type_parameters(value):
             escaped = False
             for char in inner:
                 if escaped:
-                    if char < 32 or char == 127:
+                    if (char < 32 and char != 9) or char == 127:
                         return True
                     escaped = False
                 elif char == 92:
                     escaped = True
-                elif char == 34 or char < 32 or char == 127:
+                elif char == 34 or (char < 32 and char != 9) or char == 127:
                     return True
             if escaped:
                 return True
