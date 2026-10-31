@@ -261,6 +261,10 @@ class RequestBodyLimit:
                 if empty_events > MAX_EMPTY_REQUEST_EVENTS:
                     return await JSONResponse({"error": "Too many empty request chunks"}, status_code=413)(
                         scope, receive, send)
+            elif chunk:
+                # The empty-frame threshold measures consecutive lack of progress.
+                # A data-bearing frame resets it; the total event cap still applies.
+                empty_events = 0
             if len(chunk) > self.max_bytes - len(body):
                 return await JSONResponse({"error": "MCP request body too large"}, status_code=413)(
                     scope, receive, send)
