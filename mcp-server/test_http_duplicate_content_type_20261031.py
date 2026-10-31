@@ -46,7 +46,7 @@ class DuplicateContentTypeTests(unittest.TestCase):
         ])), [400])
 
     def test_empty_content_type_rejected(self):
-        self.assertEqual(asyncio.run(dispatch([(b"content-type", b"  \\t")])), [400])
+        self.assertEqual(asyncio.run(dispatch([(b"content-type", b"  \t")])), [400])
 
     def test_quoted_parameter_comma_rejected_fail_closed(self):
         self.assertEqual(asyncio.run(dispatch([
