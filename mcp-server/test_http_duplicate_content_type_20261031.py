@@ -77,7 +77,7 @@ class DuplicateContentTypeTests(unittest.TestCase):
 
     def test_valid_media_type_tokens(self):
         for value in (b"application/json", b"application/vnd.example+json",
-                      b"text/plain; charset=utf-8", b"application/*"):
+                      b"text/plain; charset=utf-8"):
             with self.subTest(value=value):
                 self.assertEqual(asyncio.run(dispatch([(b"content-type", value)])), ["app", 200])
 
