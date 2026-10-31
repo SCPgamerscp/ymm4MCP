@@ -49,6 +49,58 @@ def _invalid_content_type_list(value):
     return quoted or escaped
 
 
+def _invalid_content_type_parameters(value):
+    """Validate parameter names and values without splitting quoted semicolons."""
+    if b";" not in value:
+        return False
+    quoted = False
+    escaped = False
+    start = value.index(b";") + 1
+    parameters = []
+    for index in range(start, len(value)):
+        char = value[index]
+        if escaped:
+            escaped = False
+        elif quoted and char == 92:
+            escaped = True
+        elif char == 34:
+            quoted = not quoted
+        elif char == 59 and not quoted:
+            parameters.append(value[start:index])
+            start = index + 1
+    if quoted or escaped:
+        return True
+    parameters.append(value[start:])
+    for parameter in parameters:
+        parameter = parameter.strip(b" \t")
+        if b"=" not in parameter:
+            return True
+        name, raw_value = parameter.split(b"=", 1)
+        name = name.strip(b" \t")
+        raw_value = raw_value.strip(b" \t")
+        if not name or any(char not in _HEADER_TOKEN_BYTES for char in name):
+            return True
+        if raw_value.startswith(b'"'):
+            if len(raw_value) < 2 or not raw_value.endswith(b'"'):
+                return True
+            inner = raw_value[1:-1]
+            escaped = False
+            for char in inner:
+                if escaped:
+                    if char < 32 or char == 127:
+                        return True
+                    escaped = False
+                elif char == 92:
+                    escaped = True
+                elif char == 34 or char < 32 or char == 127:
+                    return True
+            if escaped:
+                return True
+        elif not raw_value or any(char not in _HEADER_TOKEN_BYTES for char in raw_value):
+            return True
+    return False
+
+
 class RequestBodyLimit:
     def __init__(self, app, max_bytes=MAX_REQUEST_BYTES):
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
@@ -147,7 +199,8 @@ class RequestBodyLimit:
 
         # Content-Type is a singleton field, not a comma-separated list. Reject
         # joined values that could be split differently by downstream parsers.
-        if content_types and (not content_types[0].strip(b" \t") or _invalid_media_type(content_types[0]) or _invalid_content_type_list(content_types[0])):
+        if content_types and (not content_types[0].strip(b" \t") or _invalid_media_type(content_types[0]) or _invalid_content_type_list(content_types[0]) or
+                              _invalid_content_type_parameters(content_types[0])):
             return await JSONResponse({"error": "Invalid Content-Type"}, status_code=400)(
                 scope, receive, send)
 
