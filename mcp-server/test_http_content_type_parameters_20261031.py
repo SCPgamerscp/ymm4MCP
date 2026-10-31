@@ -37,5 +37,18 @@ class ContentTypeParameterTests(unittest.TestCase):
                 self.assertTrue(module._invalid_content_type_parameters(value))
 
 
+    def test_duplicate_parameter_names_rejected(self):
+        for value in (
+            b"application/json; charset=utf-8; charset=ascii",
+            b"application/json; Charset=utf-8; CHARSET=ascii",
+            b'application/json; note="one"; NOTE="two"',
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(module._invalid_content_type_parameters(value))
+
+    def test_distinct_parameter_names_allowed(self):
+        value = b'application/json; charset=utf-8; note="hello; world"'
+        self.assertFalse(module._invalid_content_type_parameters(value))
+
 if __name__ == "__main__":
     unittest.main()
