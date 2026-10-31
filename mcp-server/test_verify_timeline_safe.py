@@ -57,14 +57,20 @@ class TimelineVerifierTests(TestCase):
             verifier.inspect([item("a", 2147483640, 10)])
 
     def test_nonzero_exit_for_qa_failure(self):
-        with mock.patch.object(verifier.asyncio, "run", return_value={"passed": False}):
+        # Mock the async operation, not asyncio.run: mocking run discards the
+        # verify() coroutine without awaiting it and hides async integration bugs.
+        with mock.patch.object(verifier, "verify", new_callable=mock.AsyncMock,
+                               return_value={"passed": False}) as verify:
             with mock.patch("builtins.print"):
                 self.assertEqual(2, verifier.main())
+            verify.assert_awaited_once_with()
 
     def test_nonzero_exit_for_connection_failure(self):
-        with mock.patch.object(verifier.asyncio, "run", side_effect=ValueError("bad response")):
+        with mock.patch.object(verifier, "verify", new_callable=mock.AsyncMock,
+                               side_effect=ValueError("bad response")) as verify:
             with mock.patch("builtins.print"):
                 self.assertEqual(1, verifier.main())
+            verify.assert_awaited_once_with()
 
 
 if __name__ == "__main__":

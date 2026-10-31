@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Windows;
@@ -17,6 +18,12 @@ namespace YMM4McpPlugin
         private int _port = Server.Settings.Port;
         private bool _autoStart = Server.Settings.AutoStart;
         private bool _allowAdvanced = Server.Settings.AllowAdvanced;
+        private SettingsViewSnapshot _observedSettings = new(Server.Settings.Port,
+            Server.Settings.AutoStart, Server.Settings.AllowAdvanced);
+        private static readonly string SettingsFilePath =
+            Path.Combine(McpSettings.DirectoryPath, "settings.json");
+        private string _observedFileFingerprint =
+            SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
 
         static McpViewModel()
         {
@@ -44,6 +51,8 @@ namespace YMM4McpPlugin
         {
             SaveSettings();
             Server.Start();
+            // A successful listener start resolves a previous bind/start error.
+            _startupError = "";
         }), _ => !IsRunning);
         public ICommand StopCommand => new RelayCommand(_ => RunSafely(Server.Stop), _ => IsRunning);
         public ICommand SaveSettingsCommand => new RelayCommand(_ => RunSafely(SaveSettings), _ => !IsRunning);
@@ -51,13 +60,67 @@ namespace YMM4McpPlugin
 
         private void SaveSettings()
         {
-            if (IsRunning) throw new InvalidOperationException("設定変更前にサーバーを停止してください");
             var candidate = new McpSettings { Port = Port, AutoStart = AutoStart, AllowAdvanced = AllowAdvanced };
-            candidate.Save();
-            Server.Settings.Port = candidate.Port;
-            Server.Settings.AutoStart = candidate.AutoStart;
-            Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
+            var saved = SettingsViewSaveCoordinator.TryCommit(
+                _observedSettings,
+                () => new SettingsViewSnapshot(Server.Settings.Port, Server.Settings.AutoStart,
+                                               Server.Settings.AllowAdvanced),
+                () =>
+                {
+                    // Check and persist while holding the same gate for all tool
+                    // windows. Otherwise two windows can both pass the stale-view
+                    // check before either has updated the shared settings.
+                    if (IsRunning)
+                        throw new InvalidOperationException("設定変更前にサーバーを停止してください");
+                    candidate.Save();
+                    Server.Settings.Port = candidate.Port;
+                    Server.Settings.AutoStart = candidate.AutoStart;
+                    Server.Settings.AllowAdvanced = candidate.AllowAdvanced;
+                    _observedSettings = new(candidate.Port, candidate.AutoStart, candidate.AllowAdvanced);
+                    _observedFileFingerprint =
+                        SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
+                    // Only clear a warning caused by corrupt settings. A failed
+                    // listener start is not fixed merely by saving a settings file.
+                    if (!string.IsNullOrEmpty(Server.Settings.LoadWarning))
+                    {
+                        if (_startupError == Server.Settings.LoadWarning) _startupError = "";
+                        Server.Settings.LoadWarning = "";
+                    }
+                },
+                diskUnchanged: () =>
+                {
+                    // A second YMM4 process may have changed settings.json
+                    // without updating this process's in-memory Server.Settings.
+                    // Check both the exact file and its decoded values.
+                    var diskFingerprint =
+                        SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
+                    if (!SettingsViewSaveCoordinator.SameReadableFingerprint(
+                            _observedFileFingerprint, diskFingerprint))
+                        return false;
+                    var disk = McpSettings.Load();
+                    if (!string.IsNullOrEmpty(Server.Settings.LoadWarning))
+                        return !string.IsNullOrEmpty(disk.LoadWarning);
+                    return string.IsNullOrEmpty(disk.LoadWarning) &&
+                        _observedSettings.Matches(disk.Port, disk.AutoStart,
+                                                  disk.AllowAdvanced);
+                });
+            if (!saved)
+            {
+                SyncSettingsFromServer();
+                throw new InvalidOperationException(
+                    "別のウィンドウまたはYMM4プロセスで設定が更新されました。別プロセスの場合はYMM4を再起動して最新の値を確認してください");
+            }
             Refresh();
+        }
+
+        private void SyncSettingsFromServer()
+        {
+            Port = Server.Settings.Port;
+            AutoStart = Server.Settings.AutoStart;
+            AllowAdvanced = Server.Settings.AllowAdvanced;
+            _observedSettings = new(Port, AutoStart, AllowAdvanced);
+            _observedFileFingerprint =
+                SettingsViewSaveCoordinator.FileFingerprint(SettingsFilePath);
         }
 
         private void RunSafely(Action action)
@@ -72,9 +135,7 @@ namespace YMM4McpPlugin
             _attached = true;
             Server.LogMessage += AddLog;
             Server.StateChanged += Refresh;
-            Port = Server.Settings.Port;
-            AutoStart = Server.Settings.AutoStart;
-            AllowAdvanced = Server.Settings.AllowAdvanced;
+            SyncSettingsFromServer();
             if (_startupError.Length > 0) AddLog(_startupError);
             Refresh();
         }

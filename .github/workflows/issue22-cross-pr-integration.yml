@@ -10,59 +10,33 @@ permissions:
 
 jobs:
   setup-cross-pr-integration:
-    # This workflow belongs to PR #228 until it is merged. A manual run can
-    # re-check the same set later; no GitHub PR is merged or pushed by this job.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    # Exercise #22/#140 acceptance regressions on the *same immutable source*
+    # as the full Python and Windows package jobs. Historical merged PR refs
+    # must not be re-merged into a second, potentially divergent test tree.
+    needs: audit-open-pr-merge-compatibility
+    if: needs.audit-open-pr-merge-compatibility.outputs.conflicts == '0'
     runs-on: windows-latest
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: composed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-          persist-credentials: false
+          name: all-open-prs-composed-source
+      - name: Restore the exact audited all-open-PR tree for #22/#140 checks
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          mkdir -p composed
+          tar -xf all-open-prs-composed.tar -C composed
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compose main with the open Issue 22 and 140 PRs (runner only)
-        shell: bash
-        env:
-          # A queued/rerun PR check must test the exact #228 revision it reports.
-          # Manual dispatches intentionally compose the latest open PR heads.
-          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-        run: |
-          set -euo pipefail
-          git config user.name "Issue 22 integration CI"
-          git config user.email "integration-ci@users.noreply.github.com"
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git checkout -B issue22-composed refs/remotes/origin/main
-          # These changes touch separate files but must work as one release:
-          # UI links, publishing/installer, HTTP host/body validation,
-          # connection discovery, settings persistence, and startup behavior.
-          # Also compose the five #140 keyframe fixes against the same plugin
-          # before shipping a .ymme. A successful standalone PR build cannot
-          # prove that both issue groups are compatible.
-          # PR #229 also modifies package-ymme.yml (export QA), so include
-          # it to catch cross-PR workflow conflicts before a manual merge.
-          # Merge in the same ascending order as the 50-PR audit. The prior
-          # hand-picked order merged #228/#229 before #219 and caused a
-          # package-ymme.yml conflict despite the all-PR audit succeeding.
-          # Keeping the order deterministic avoids a false release blocker.
-          # Include #260's Windows job-snapshot fix: the prior all-PR
-          # Windows integration failed without it even though #228 passed alone.
-          for number in 218 219 221 228 229 234 241 243 244 248 251 254 255 257 259 260; do
-            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
-              # Pin the triggering PR to its event SHA, not a newer moving ref.
-              git fetch --no-tags origin "$EVENT_PR_228_HEAD_SHA:refs/remotes/pr/${number}"
-            else
-              git fetch --no-tags origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
-            fi
-            printf 'Composing PR #%s at %s\n' "${number}" "$(git rev-parse "refs/remotes/pr/${number}")"
-            git merge --no-ff --no-edit "refs/remotes/pr/${number}"
-          done
-          git status --short
       - name: Test composed Issue 22 and 140 Python setup, transport and smoke harness
         shell: pwsh
         run: |
@@ -134,7 +108,7 @@ jobs:
       - name: State the remaining live acceptance gates
         shell: pwsh
         run: |
-          Write-Output 'Curated Issue #22/#140 regression suites passed; the all-open-PR Windows job separately gates the actual .ymme build. No PR was merged.'
+          Write-Output 'Issue #22/#140 regression suites passed on the exact audited all-open-PR tree; the Windows package job separately gates the .ymme build. No PR was merged.'
           Write-Output 'NOT TESTED: actual GitHub Release publication, YMM4 host installation, authenticated status, UI port-change E2E, and YMM4 4.56.1.1 keyframe E2E.'
 
   composed-real-export-qa:
@@ -186,7 +160,9 @@ jobs:
     # hand-picked 15-PR release composition. No remote ref is ever updated.
     # A conflicting PR is skipped so the remaining PRs can still be checked;
     # the summary explicitly states this is NOT a guarantee of mergeability.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 228
+    # Run the all-open-PR integration gate for every pull request update.
+    # Restricting this to #259 leaves newer PRs with only isolated CI and
+    # silently reuses a stale composition when their heads change.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
@@ -201,18 +177,23 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          # Pin the triggering #228 revision in BOTH composed trees. A newer
+          # Pin the triggering PR revision in BOTH composed trees. A newer
           # push during this run must not change the revision under test.
-          EVENT_PR_228_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EVENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
         run: |
           set -euo pipefail
           git config user.name "Read-only PR integration audit"
           git config user.email "pr-audit@users.noreply.github.com"
           # Query the current open PRs, rather than silently ignoring newly
           # opened fixes. Explicit API errors must fail, not mean "zero PRs".
+          # Record the complete PR set and immutable head SHAs. Without this
+          # check a PR pushed midway through the audit could silently leave a
+          # green composition that does not represent the current open heads.
           gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
-            --jq '.[].number' > "$RUNNER_TEMP/open-pr-numbers.txt"
-          mapfile -t numbers < <(sort -n -u "$RUNNER_TEMP/open-pr-numbers.txt")
+            --jq '.[] | "\(.number) \(.head.sha)"' | sort -n -k1,1 \
+            > "$RUNNER_TEMP/open-pr-heads-before.txt"
+          mapfile -t numbers < <(awk '{print $1}' "$RUNNER_TEMP/open-pr-heads-before.txt")
           if (( ${#numbers[@]} == 0 )); then
             echo "No open PRs to audit" >> "$GITHUB_STEP_SUMMARY"
             echo "conflicts=0" >> "$GITHUB_OUTPUT"
@@ -220,6 +201,7 @@ jobs:
           fi
           git fetch --no-tags origin main:refs/remotes/origin/main
           git checkout -B audit-open-prs refs/remotes/origin/main
+          audited_main_sha="$(git rev-parse HEAD)"
           passed=0
           failed=0
           {
@@ -234,8 +216,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           for number in "${numbers[@]}"; do
             refspec="refs/pull/${number}/head:refs/remotes/audit-pr/${number}"
-            if [[ "$number" == 228 && -n "$EVENT_PR_228_HEAD_SHA" ]]; then
-              refspec="${EVENT_PR_228_HEAD_SHA}:refs/remotes/audit-pr/${number}"
+            if [[ "$number" == "$EVENT_PR_NUMBER" && -n "$EVENT_PR_HEAD_SHA" ]]; then
+              refspec="${EVENT_PR_HEAD_SHA}:refs/remotes/audit-pr/${number}"
             fi
             if ! git fetch --no-tags origin "$refspec" \
               > "$RUNNER_TEMP/audit-fetch.log" 2>&1; then
@@ -269,6 +251,27 @@ jobs:
           done
           echo >> "$GITHUB_STEP_SUMMARY"
           echo "**Composed: ${passed}; skipped/failed: ${failed}; total: ${#numbers[@]}.**" >> "$GITHUB_STEP_SUMMARY"
+          # Re-query the open set after the last merge. A changed head or
+          # opened/closed PR invalidates the audit even if every git merge
+          # succeeded; do not archive or run integration against stale heads.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq '.[] | "\(.number) \(.head.sha)"' | sort -n -k1,1 \
+            > "$RUNNER_TEMP/open-pr-heads-after.txt"
+          if ! cmp -s "$RUNNER_TEMP/open-pr-heads-before.txt" "$RUNNER_TEMP/open-pr-heads-after.txt"; then
+            echo "::error::Open PR set or head SHA changed during composition; retry integration on the new heads."
+            diff -u "$RUNNER_TEMP/open-pr-heads-before.txt" "$RUNNER_TEMP/open-pr-heads-after.txt" || true
+            echo "conflicts=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # A new main commit can invalidate the tested base even when every
+          # PR head stayed fixed. Do not advertise a green release candidate
+          # assembled from an obsolete main revision.
+          latest_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          if [[ "$latest_main_sha" != "$audited_main_sha" ]]; then
+            echo "::error::main moved during all-PR composition ($audited_main_sha -> $latest_main_sha); retry on the new base."
+            echo "conflicts=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "conflicts=$failed" >> "$GITHUB_OUTPUT"
           if (( failed > 0 )); then
             echo "::error::${failed} open PRs could not be composed in numeric order; see the job summary."
@@ -372,3 +375,89 @@ jobs:
             throw "Expected one nonempty .ymme, found $($packages.Count)"
           }
           Write-Output "All-open-PR package built (not published): $($packages[0].Name)"
+      - name: Validate and bundle disposable all-PR acceptance candidate (#22/#140)
+        shell: pwsh
+        run: |
+          # The all-PR .ymme used to vanish with the runner. Preserve the exact
+          # audited candidate for a human YMM4 4.56.1.1 installation test.
+          # This is an Actions artifact, NEVER a public GitHub Release.
+          $version = (dotnet msbuild composed/YMM4McpPlugin/YMM4McpPlugin.csproj -getProperty:Version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Cannot determine a safe candidate version: $version"
+          }
+          $ymmePath = "composed/artifacts/YMM4McpPlugin-$version.ymme"
+          if (-not (Test-Path -LiteralPath $ymmePath -PathType Leaf)) {
+            throw "Missing composed plugin package: $ymmePath"
+          }
+          $ymme = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ymmePath).Path)
+          try {
+            $actual = @($ymme.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName })
+            $expected = @('YMM4McpPlugin/YMM4McpPlugin.dll', 'YMM4McpPlugin/YMM4McpPlugin.deps.json')
+            if (@(Compare-Object $expected $actual).Count -ne 0) {
+              throw "Unexpected composed .ymme contents: $($actual -join ', ')"
+            }
+          }
+          finally { $ymme.Dispose() }
+          # The source tree is a git archive of the audited merge, not the
+          # runner workspace. Keep the same mcp-server/ prefix as the Release ZIP.
+          $serverPath = "composed/artifacts/YMM4McpServer-$version.zip"
+          if (Test-Path -LiteralPath $serverPath) { throw "Candidate ZIP already exists: $serverPath" }
+          [IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path -LiteralPath composed/mcp-server).Path,
+            $serverPath, [IO.Compression.CompressionLevel]::Optimal, $true)
+          $server = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $serverPath).Path)
+          try {
+            $paths = @($server.Entries | ForEach-Object { $_.FullName })
+            foreach ($required in @(
+              'mcp-server/server.py', 'mcp-server/setup.ps1', 'mcp-server/install.cmd',
+              'mcp-server/check_connection.py', 'mcp-server/requirements.txt',
+              'mcp-server/skills/ymm4-jikkyou/SKILL.md'
+            )) {
+              if ($paths -notcontains $required) { throw "Missing candidate file: $required" }
+            }
+            $forbidden = @($paths | Where-Object {
+              $_ -match '(?i)(^|/)(connection\.json|settings\.local\.json|\.env(\.[^/]*)?|\.venv|__pycache__)(/|$)|\.pyc$'
+            })
+            if ($forbidden.Count -gt 0) {
+              throw "Sensitive or ephemeral files in candidate ZIP: $($forbidden -join ', ')"
+            }
+          }
+          finally { $server.Dispose() }
+          Write-Output "Disposable all-open-PR candidate ready: $ymmePath and $serverPath"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exercise packaged MCP stdio handshake on Windows (#22)
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          # Test the extracted shipping ZIP, not the checkout or a mock MCP.
+          # No YMM4 edit API is invoked and no release is published.
+          $archives = @(Get-ChildItem -LiteralPath composed/artifacts -Filter 'YMM4McpServer-*.zip' -File)
+          if ($archives.Count -ne 1) { throw "Expected one MCP ZIP, found $($archives.Count)" }
+          $root = Join-Path $env:RUNNER_TEMP 'ymm4mcp-packaged-stdio'
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $root -Force
+          $serverRoot = Join-Path $root 'mcp-server'
+          foreach ($required in @('server.py', 'requirements.txt', 'check_mcp_stdio.py', 'test_check_mcp_stdio.py')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $serverRoot $required) -PathType Leaf)) {
+              throw "Packaged MCP ZIP is missing $required"
+            }
+          }
+          python -m pip install -r (Join-Path $serverRoot 'requirements.txt')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged MCP dependencies failed to install' }
+          Push-Location $serverRoot
+          try {
+            python -m unittest -q test_check_mcp_stdio
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged MCP stdio handshake failed on Windows' }
+          }
+          finally { Pop-Location }
+          Write-Output 'Real packaged MCP initialize/tools-list passed; YMM4 host is NOT tested.'
+      - uses: actions/upload-artifact@v4
+        with:
+          # Explicitly not a tag/Release; expires after seven days.
+          name: all-open-prs-disposable-acceptance
+          path: |
+            composed/artifacts/YMM4McpPlugin-*.ymme
+            composed/artifacts/YMM4McpServer-*.zip
+          if-no-files-found: error
+          retention-days: 7
