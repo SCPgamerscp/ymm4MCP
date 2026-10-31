@@ -48,9 +48,24 @@ class DuplicateContentTypeTests(unittest.TestCase):
     def test_empty_content_type_rejected(self):
         self.assertEqual(asyncio.run(dispatch([(b"content-type", b"  \t")])), [400])
 
-    def test_quoted_parameter_comma_rejected_fail_closed(self):
+    def test_quoted_parameter_comma_allowed(self):
         self.assertEqual(asyncio.run(dispatch([
             (b"content-type", b'application/json; profile="a,b"')
+        ])), ["app", 200])
+
+    def test_escaped_quote_and_quoted_comma_allowed(self):
+        self.assertEqual(asyncio.run(dispatch([
+            (b"content-type", b'application/json; profile="a\\\"b,c"')
+        ])), ["app", 200])
+
+    def test_unquoted_comma_after_quoted_parameter_rejected(self):
+        self.assertEqual(asyncio.run(dispatch([
+            (b"content-type", b'application/json; profile="a,b", text/plain')
+        ])), [400])
+
+    def test_unclosed_quote_rejected(self):
+        self.assertEqual(asyncio.run(dispatch([
+            (b"content-type", b'application/json; profile="unterminated')
         ])), [400])
 
     def test_single_content_type_allowed(self):
