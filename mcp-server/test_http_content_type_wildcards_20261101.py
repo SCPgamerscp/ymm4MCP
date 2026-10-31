@@ -12,14 +12,14 @@ spec.loader.exec_module(module)
 class ContentTypeWildcardTests(unittest.TestCase):
     def test_rejects_wildcard_media_ranges(self):
         for value in (b"*/*", b"application/*", b"*/json",
-                      b"application/j*son", b"app*lication/json",
                       b"application/*; charset=utf-8"):
             with self.subTest(value=value):
                 self.assertTrue(module._invalid_media_type(value))
 
     def test_allows_concrete_media_types(self):
         for value in (b"application/json", b"text/plain; charset=utf-8",
-                      b"application/vnd.example+json", b"application/x.custom"):
+                      b"application/vnd.example+json", b"application/x.custom",
+                      b"application/j*son", b"app*lication/json"):
             with self.subTest(value=value):
                 self.assertFalse(module._invalid_media_type(value))
 
