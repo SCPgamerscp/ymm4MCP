@@ -32,6 +32,10 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
+from item_verification import validate_expected_items, verify_items
+from ripple_planning import plan_ripple_delete
+from ripple_verification import verify_ripple_result
+from ripple_evidence import RippleEvidenceStore, project_identity
 from jobs import job_id_ok, is_absolute_media_path, validate_export_request, validate_project_path
 import editplan
 import ducking
@@ -66,6 +70,7 @@ from mcp_skills import register_skills
 
 app = Server("ymm4-mcp")
 register_skills(app)
+_ripple_evidence = RippleEvidenceStore()
 
 # ============================================================
 # HTTPクライアント
@@ -129,7 +134,7 @@ TOOLS = [
     Tool(
         name="ymm4_interact",
         description=(
-            "validate=タイムライン整合性・期待する配置の検証。qa_gate=修正ループの合格・継続・停止判定。add_scriptはdry_runで実行前に確認できます。"
+            "validate=タイムライン整合性・期待する配置の検証。verify_items=安定IDで編集後の個別フィールドを読取検証。qa_gate=修正ループの合格・継続・停止判定。add_scriptはdry_runで実行前に確認できます。"
             "plan_edit/apply_edit/reconcile_editで完成状態のEditPlanを差分適用できます。"
             "シーン失敗時は追加分だけrollbackし、完了済みシーンは残します。"
             "YMM4を操作・情報取得するための単一ツール。制作前にymm4://skills/{jikkyou,kaisetsu,chaban,story}の該当リソースを読んでください。"
@@ -139,7 +144,7 @@ TOOLS = [
             "'edit_item'(face_param/property/effect/delete/duration/move/select/resolve_overlaps/shift/keyframe), "
             "'add_script'(複数セリフ一括追加・実音声長で重なり自動回避), "
             "'plan_edit'(宣言的編集のdry-run), 'apply_edit'(差分適用・シーン単位rollback), 'reconcile_edit'(不足分だけ再実行), "
-            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), "
+            "'visual_qa'(プレビューの黒画面・静止候補をサンプリング), 'plan_ripple_delete'(読み取り専用カット事前計画), 'verify_ripple_delete'(編集前後の全アイテム整合性検証・読み取り専用), "
             "'create_from_template'(テンプレートを開いて別名保存), 'duck_bgm'(Voice区間のBGM音量制御), "
             "'set_expression'(表情名からFacePathへ安全に変換)、'jump_tachie'/'shake_tachie'(立ち絵のリアクション)を指定する。"
         ),
@@ -148,7 +153,7 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "qa_gate",
+                    "enum": ["get_info", "control", "add_item", "edit_item", "add_script", "validate", "verify_items", "plan_ripple_delete", "verify_ripple_delete", "qa_gate",
                              "plan_edit", "apply_edit", "reconcile_edit", "visual_qa", "create_from_template", "duck_bgm", "set_expression", "jump_tachie", "shake_tachie"],
                     "description": "実行するアクションの種類"
                 },
@@ -186,7 +191,11 @@ TOOLS = [
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
                 "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
                 "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
-                "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置後に一意に存在すべきitem_id/revision/frame/layer/length/type/text"},
+                "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置期待値。verify_items: 必須item_idと検証対象revision/frame/layer/length/type/textを1つ以上指定（読み取り専用）"},
+                "before_snapshot": {"type": "object", "description": "verify_ripple_delete: 旧方式。呼び出し側提供の編集前スナップショット（真正性は保証されない）"},
+                "capture_evidence": {"type": "boolean", "description": "plan_ripple_delete: trueなら検証済みホストスナップショットをサーバー内に10分保存しplan_idを返す（読み取り専用）"},
+                "plan_id": {"type": "string", "maxLength": 128, "description": "verify_ripple_delete: capture_evidenceで取得したplan_id。編集前証拠はサーバー内の原本を使用"},
+                "expected_revisions": {"type": "object", "additionalProperties": {"type": "string"}, "description": "plan_ripple_delete: 影響する各item_idの現在revisionを必ず指定。変更は実行しない"},
                 "duration": {"type": "integer", "minimum": 1, "description": "validate: プロジェクトの上限フレーム（省略可）"},
                 "include_gaps": {"type": "boolean", "default": True, "description": "validate: 同一レイヤー内のアイテム間の空白を警告する"},
                 "subtitle_layers": {"type": "array", "minItems": 1, "maxItems": 128,
@@ -915,6 +924,96 @@ async def dispatch(args: dict) -> Any:
             return await create_from_template(args)
         case "visual_qa":
             return await run_visual_qa(args)
+        case "plan_ripple_delete":
+            # Never execute a cut: this action only computes a read-only plan.
+            start = integer(args.get("start_frame"), "start_frame")
+            end = integer(args.get("end_frame"), "end_frame", 1)
+            if end <= start:
+                raise ValueError("end_frame must be greater than start_frame")
+            capture = args.get("capture_evidence", False)
+            if type(capture) is not bool:
+                raise ValueError("capture_evidence must be boolean")
+            layers = args.get("layers")
+            revisions = args.get("expected_revisions")
+            # A captured plan must be tied to a named project. Read the
+            # identity on both sides of the inventory fetch to detect a
+            # project switch while planning (best effort, not an atomic read).
+            project_before = await ymm4_get("/project") if capture else None
+            if capture:
+                try:
+                    before_identity = project_identity(project_before)
+                except ValueError:
+                    return {"success": False, "dry_run": True, "executable": False,
+                            "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+            snapshot = await ymm4_get("/items")
+            plan = plan_ripple_delete(snapshot, start_frame=start, end_frame=end,
+                                      layers=layers, expected_revisions=revisions)
+            if not capture or not plan["success"]:
+                return plan
+            project_after = await ymm4_get("/project")
+            try:
+                after_identity = project_identity(project_after)
+            except ValueError:
+                return {**plan, "success": False, "executable": False,
+                        "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+            if before_identity != after_identity:
+                return {**plan, "success": False, "executable": False,
+                        "error_code": "RIPPLE_PROJECT_CHANGED"}
+            try:
+                evidence = _ripple_evidence.capture(
+                    snapshot, project_info=project_after, start_frame=start,
+                    end_frame=end, layers=layers, expected_revisions=revisions)
+            except (ValueError, TypeError, RecursionError) as exc:
+                return {**plan, "success": False, "executable": False,
+                        "error_code": "RIPPLE_EVIDENCE_UNAVAILABLE",
+                        "message": str(exc)}
+            return {**plan, **evidence}
+        case "verify_ripple_delete":
+            if "plan_id" in args:
+                # The original pre-edit snapshot and cut parameters are owned
+                # by the server, not supplied by the client at verification.
+                if any(key in args for key in (
+                        "before_snapshot", "start_frame", "end_frame",
+                        "layers", "expected_revisions")):
+                    raise ValueError("plan_id cannot override captured evidence")
+                record = _ripple_evidence.lookup(args["plan_id"])
+                if record is None:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_EVIDENCE_UNAVAILABLE"}
+                project_before = await ymm4_get("/project")
+                try:
+                    before_identity = project_identity(project_before)
+                except ValueError:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+                after = await ymm4_get("/items")
+                project_after = await ymm4_get("/project")
+                try:
+                    after_identity = project_identity(project_after)
+                except ValueError:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
+                if before_identity != after_identity:
+                    return {"success": False, "passed": False,
+                            "error_code": "RIPPLE_PROJECT_CHANGED"}
+                return _ripple_evidence.verify(record, after, project_info=project_after)
+            # Legacy caller-provided inventory remains available but cannot
+            # establish the provenance of the before state.
+            start = integer(args.get("start_frame"), "start_frame")
+            end = integer(args.get("end_frame"), "end_frame", 1)
+            if end <= start:
+                raise ValueError("end_frame must be greater than start_frame")
+            before = args.get("before_snapshot")
+            if not isinstance(before, dict):
+                raise ValueError("verify_ripple_delete requires before_snapshot or plan_id")
+            after = await ymm4_get("/items")
+            return verify_ripple_result(before, after, start_frame=start, end_frame=end,
+                                        layers=args.get("layers"),
+                                        expected_revisions=args.get("expected_revisions"))
+        case "verify_items":
+            expected = validate_expected_items(args.get("expected"))
+            snapshot = await ymm4_get("/items")
+            return verify_items(snapshot, expected)
         case "get_info":
             match sub_action:
                 case "status": return await ymm4_get("/status")

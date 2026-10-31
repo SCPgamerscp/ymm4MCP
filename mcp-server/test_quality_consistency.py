@@ -128,7 +128,7 @@ class QualityConsistencyTests(unittest.IsolatedAsyncioTestCase):
         def report(identity):
             return editing.validate_timeline([{"item_id": identity, "frame": 0, "length": 10, "layer": 1}],
                                               expected=expected)
-        self.assertEqual(editing.evaluate_qa_gate(report("b"), [report("a")])["reason_code"], "QA_ISSUES_REMAIN")
+        self.assertEqual(editing.evaluate_qa_gate(report("b"), [report("a")])["reason_code"], "QA_REGRESSED")
         self.assertEqual(editing.evaluate_qa_gate(report("a"), [report("a")])["reason_code"], "QA_STALLED")
 
     def test_no_preview_samples_cannot_pass(self):

@@ -2,8 +2,42 @@
 import hashlib
 import json
 import math
+from collections import Counter
 
 MAX_FRAME = 2_147_483_647
+MAX_QA_ISSUES = 1000
+
+
+def _bounded_qa_issues(issues):
+    """Keep QA gate reports usable without silently accepting truncated failures."""
+    if len(issues) <= MAX_QA_ISSUES:
+        return issues
+    # A dropped truncation marker represents its underlying omitted issues,
+    # not one additional issue. Preserve nested source-report omissions when
+    # combining already-bounded structural, visual and audio evidence.
+    omitted = sum(issue["omitted_count"] if issue.get("code") == "QA_ISSUES_TRUNCATED" else 1
+                  for issue in issues[MAX_QA_ISSUES - 1:])
+    return issues[:MAX_QA_ISSUES - 1] + [{
+        "code": "QA_ISSUES_TRUNCATED", "severity": "error",
+        "omitted_count": omitted,
+        "message": f"{omitted} additional QA issues were omitted; inspect the source reports",
+    }]
+
+
+def _require_json_safe_issues(issues, source):
+    """Reject non-JSON and non-finite evidence before storing QA history."""
+    try:
+        json.dumps(issues, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, OverflowError, UnicodeError) as exc:
+        raise ValueError(f"{source} issues must contain JSON-safe finite UTF-8 values") from exc
+
+
+
+
+def _valid_qa_code(value):
+    """Machine-readable QA codes must be bounded printable ASCII tokens."""
+    return (isinstance(value, str) and 1 <= len(value) <= 128 and
+            all(33 <= ord(char) <= 126 for char in value))
 
 
 def integer(value, name, minimum=0, maximum=MAX_FRAME):
@@ -20,9 +54,14 @@ def finite_number(value, name):
             value = float(value)
         except ValueError as exc:
             raise ValueError(f"{name} must be a finite number") from exc
-    if not isinstance(value, (int, float)) or not math.isfinite(value):
+    if not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite number")
-    return float(value)
+    try:
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite number")
+        return float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
 
 
 def plan_script(args):
@@ -31,7 +70,7 @@ def plan_script(args):
         raise ValueError("lines must contain 1..500 dialogue entries")
     fps = integer(args.get("fps", 30), "fps", 1, 240)
     speed = args.get("chars_per_sec", 5)
-    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or not 0 < speed <= 1000:
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0 < speed <= 1000 or not math.isfinite(speed):
         raise ValueError("chars_per_sec must be finite and in (0, 1000]")
     frame = integer(args.get("start_frame", 0), "start_frame")
     gap = integer(args.get("gap", 0), "gap")
@@ -75,10 +114,17 @@ def plan_script(args):
             "note": "No edits or voice synthesis performed. Actual voice durations may differ."}
 
 
+def _valid_item_id(value):
+    """Only usable host IDs may be referenced in repair suggestions."""
+    return (isinstance(value, str) and bool(value.strip()) and
+            not any(ord(char) < 32 or ord(char) == 127 or
+                    0xD800 <= ord(char) <= 0xDFFF for char in value))
+
+
 def _item_ids(items, indices):
-    """Return only stable IDs present on the affected items."""
+    """Return only usable IDs present on the affected items."""
     return [items[index]["item_id"] for index in indices
-            if isinstance(items[index], dict) and isinstance(items[index].get("item_id"), str)]
+            if isinstance(items[index], dict) and _valid_item_id(items[index].get("item_id"))]
 
 
 def validate_timeline(items, expected=None, duration=None, include_gaps=True, subtitle_layers=None,
@@ -100,7 +146,29 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
     layers = {}
     voices = []
     subtitles = []
+    seen_item_ids = {}
+    valid_indices = set()
+    # Count all stable IDs before offering an edit: duplicates later in the
+    # snapshot are just as ambiguous as duplicates already visited.
+    id_counts = Counter(item["item_id"] for item in items
+                        if isinstance(item, dict) and _valid_item_id(item.get("item_id")))
     for index, item in enumerate(items):
+        # Identity is independent of timing. An item with a malformed frame
+        # can still collide with a valid item's ID, making future edits unsafe.
+        # Check every object before skipping invalid timeline geometry.
+        if isinstance(item, dict) and item.get("item_id") is not None:
+            item_id = item["item_id"]
+            if not _valid_item_id(item_id):
+                problems.append({"code": "INVALID_ITEM_ID", "severity": "error",
+                                 "index": index, "item_ids": [],
+                                 "message": "Timeline item has an invalid stable item_id"})
+            elif item_id in seen_item_ids:
+                previous = seen_item_ids[item_id]
+                problems.append({"code": "DUPLICATE_ITEM_ID", "severity": "error",
+                                 "indices": [previous, index], "item_ids": [item_id],
+                                 "message": "Multiple timeline items share the same item_id"})
+            else:
+                seen_item_ids[item_id] = index
         try:
             if not isinstance(item, dict):
                 raise ValueError("item must be an object")
@@ -113,6 +181,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             problems.append({"code": "INVALID_ITEM", "severity": "error", "index": index,
                              "item_ids": ids, "message": str(exc)})
             continue
+        valid_indices.add(index)
         layers.setdefault(layer, []).append((frame, end, index))
         if subtitle_layers is not None:
             kind = item.get("type")
@@ -128,11 +197,15 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                        "item_ids": _item_ids(items, [index]), "frame_range": [frame, end],
                        "project_duration": duration}
             if frame < duration:
-                # Trimming an item that starts within the project fixes its
-                # end frame without moving unrelated timeline content.
-                problem["suggested_fix"] = {"action": "edit_item", "sub_action": "property",
-                                            "item_id": item.get("item_id"),
-                                            "prop": "Length", "value": duration - frame}
+                # A repair hint must identify exactly one real item. An absent,
+                # malformed or duplicated ID could edit the wrong item.
+                item_id = item.get("item_id")
+                if _valid_item_id(item_id) and id_counts[item_id] == 1:
+                    problem["suggested_fix"] = {"action": "edit_item", "sub_action": "property",
+                                                "item_id": item_id,
+                                                "prop": "Length", "value": duration - frame}
+                else:
+                    problem["message"] = "Cannot safely trim an item without a unique stable item_id"
             else:
                 # Moving to duration-1 leaves any item longer than one frame
                 # out of bounds. Never propose a non-fixing automatic edit.
@@ -189,6 +262,17 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                                      "item_ids": _item_ids(items, affected),
                                      "frame_range": [frame, end], "uncovered_ranges": gaps,
                                      "expected_text": voice_text})
+                # A correct subtitle must not mask a second, conflicting
+                # subtitle on another configured subtitle layer.
+                conflicting = [(s_index, text) for s_index, text in overlapping
+                               if not isinstance(text, str) or "".join(text.split()) != normalized]
+                if conflicting:
+                    affected = [index, *(s_index for s_index, _ in conflicting)]
+                    problems.append({"code": "SUBTITLE_TEXT_MISMATCH", "severity": "error",
+                                     "index": index, "indices": affected,
+                                     "item_ids": _item_ids(items, affected),
+                                     "frame_range": [frame, end], "expected_text": voice_text,
+                                     "actual_texts": [text for _, text in conflicting]})
                 continue
             matches = [s_index for s_index, _ in overlapping]
             problems.append({
@@ -212,8 +296,14 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             for key, value in wanted.items():
                 if key in {"frame", "layer", "length"}:
                     integer(value, f"expected[{index}].{key}", 1 if key == "length" else 0)
-                elif not isinstance(value, str) or (key != "text" and not value.strip()):
+                elif not isinstance(value, str) or (key != "text" and not value.strip()) or (
+                        key in ("id", "item_id") and not _valid_item_id(value)):
                     raise ValueError(f"expected[{index}].{key} must be a valid string")
+                if isinstance(value, str):
+                    try:
+                        value.encode("utf-8")
+                    except UnicodeError as exc:
+                        raise ValueError(f"expected[{index}].{key} must be valid UTF-8") from exc
             selector = dict(wanted)
             if "id" in selector:
                 legacy_id = selector.pop("id")
@@ -221,7 +311,8 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                     raise ValueError("expected id and item_id must not conflict")
                 selector["item_id"] = legacy_id
             matches = [i for i, item in enumerate(items)
-                       if isinstance(item, dict) and all(item.get(k) == v for k, v in selector.items())]
+                       if i in valid_indices and isinstance(item, dict) and
+                       all(item.get(k) == v for k, v in selector.items())]
             if len(matches) == 1 and matches[0] in claimed_item_indices:
                 problems.append({"code": "EXPECTED_REUSED", "severity": "error",
                                  "expected_index": index, "expected": selector,
@@ -235,6 +326,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                                  "expected": selector, "matches": matches,
                                  "item_ids": _item_ids(items, matches)})
 
+    problems = _bounded_qa_issues(problems)
     error_count = sum(problem["severity"] == "error" for problem in problems)
     warning_count = sum(problem["severity"] == "warning" for problem in problems)
     criteria = {"expected": expected, "duration": duration, "include_gaps": include_gaps,
@@ -280,18 +372,23 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
         if not isinstance(report, dict) or report.get("success") is not True or not isinstance(report.get("passed"), bool):
             raise ValueError("qa_history and current must contain successful validate reports")
         score = finite_number(report.get("score"), "score")
-        if not 0 <= score <= 100 or not isinstance(report.get("issues"), list):
-            raise ValueError("validate reports require a 0..100 score and issues array")
+        if not 0 <= score <= 100 or not isinstance(report.get("issues"), list) or len(report["issues"]) > 1000:
+            raise ValueError("validate reports require a 0..100 score and at most 1000 issues")
+        _require_json_safe_issues(report["issues"], "validate report")
         has_errors = False
         errors = warnings = 0
         for issue in report["issues"]:
-            if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"]:
+            if not isinstance(issue, dict) or not _valid_qa_code(issue.get("code")):
                 raise ValueError("validate report issues require a code")
             if issue.get("severity") not in ("error", "warning"):
                 raise ValueError("validate report issues require error or warning severity")
+            if issue["code"] == "QA_ISSUES_TRUNCATED" and (
+                    issue["severity"] != "error" or
+                    type(issue.get("omitted_count")) is not int or
+                    issue["omitted_count"] <= 0):
+                raise ValueError("QA_ISSUES_TRUNCATED requires a positive omitted_count and error severity")
             if "item_ids" in issue and (not isinstance(issue["item_ids"], list) or
-                    any(not isinstance(identity, str) or not identity.strip()
-                        for identity in issue["item_ids"])):
+                    any(not _valid_item_id(identity) for identity in issue["item_ids"])):
                 raise ValueError("validate report item_ids must be nonempty strings")
             if issue["severity"] == "error":
                 errors += 1
@@ -302,26 +399,98 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             raise ValueError("validate report passed status disagrees with error issues")
         if score != max(0, 100 - errors * 20 - warnings * 5):
             raise ValueError("validate report score disagrees with issue severities")
-        return score
+        if "valid" in report and report["valid"] is not report["passed"]:
+            raise ValueError("validate report valid status disagrees with passed")
+        if "issue_count" in report and (type(report["issue_count"]) is not int or
+                                        report["issue_count"] != len(report["issues"])):
+            raise ValueError("validate report issue_count disagrees with issues")
+        if "item_count" in report and (type(report["item_count"]) is not int or
+                                       report["item_count"] < 0):
+            raise ValueError("validate report item_count must be a non-negative integer")
+        if "problems" in report and report["problems"] != report["issues"]:
+            raise ValueError("validate report problems disagrees with issues")
+        if "summary" in report:
+            summary = report["summary"]
+            if (not isinstance(summary, dict) or
+                    type(summary.get("errors")) is not int or
+                    type(summary.get("warnings")) is not int or
+                    summary["errors"] != errors or summary["warnings"] != warnings):
+                raise ValueError("validate report summary disagrees with issue severities")
+        # The bounded report retains only the first 999 issues and a marker.
+        # Preserve the hidden count so worsening quality at the score floor is visible.
+        omitted = sum(issue.get("omitted_count", 0) for issue in report["issues"]
+                      if issue["code"] == "QA_ISSUES_TRUNCATED")
+        return score, errors, warnings, omitted
 
-    scores = [check_report(report) for report in [*history, current]]
-    if not isinstance(current.get("criteria_hash"), str) or any(
+    metrics = [check_report(report) for report in [*history, current]]
+    scores = [metric[0] for metric in metrics]
+    if not isinstance(current.get("criteria_hash"), str) or not current["criteria_hash"].strip() or any(
             report.get("criteria_hash") != current["criteria_hash"] for report in history):
         raise ValueError("qa_history must use the same validation criteria as current QA")
 
     def signature(report):
-        # Compare problem sets as a whole: one persistent issue does not block
-        # progress if other issues were fixed in the same repair attempt.
-        # Item ordering in a fresh timeline snapshot is not a change to the
-        # affected set. Keep severity so escalation is still visible.
-        return sorted((issue["code"], str(issue.get("severity", "")), str(issue.get("source", "")),
-                       str(sorted(issue.get("item_ids") or [])),
-                       str(issue.get("frame_range", [])), str(issue.get("layer", "")),
-                       str(issue.get("startSeconds", "")), str(issue.get("endSeconds", "")),
-                       json.dumps({key: issue[key] for key in
-                                   ("expected_index", "expected", "scene_id", "path", "uncovered_ranges")
-                                   if key in issue}, sort_keys=True, ensure_ascii=False))
-                      for issue in report["issues"])
+        # Compare complete issue evidence, not a hand-picked list of fields.
+        # Positional indices change when the host reorders the timeline; stable
+        # item IDs and actual QA evidence do not. Keep unknown future fields so
+        # a meaningful repair cannot be mistaken for an unchanged QA result.
+        def canonical(issue):
+            evidence = {key: value for key, value in issue.items()
+                        if key not in ("index", "indices", "matches")}
+            # Timeline positions are unstable, but the number of selector
+            # matches is meaningful: resolving one of three anonymous matches
+            # must count as progress even while EXPECTED_AMBIGUOUS remains.
+            if "matches" in issue:
+                matches = issue["matches"]
+                evidence["match_count"] = len(matches) if isinstance(matches, list) else matches
+            if "item_ids" in evidence:
+                evidence["item_ids"] = sorted(evidence["item_ids"])
+            return json.dumps(evidence, sort_keys=True, ensure_ascii=False,
+                              allow_nan=False, separators=(",", ":"))
+
+        # A change in the total number of timeline items is not necessarily
+        # QA progress: unrelated additions/removals must not reset the stall
+        # counter while the same failures remain. Compare issue evidence only.
+        return sorted(canonical(issue) for issue in report["issues"])
+
+    def error_identity(issue):
+        """Track new hard failures even when other repairs raise the QA score.
+
+        A stable item ID distinguishes separate failures with the same code.
+        When the host cannot provide IDs, use code/source rather than unstable
+        timeline indices; frame moves alone must not imply a new failure.
+        """
+        ids = issue.get("item_ids") or []
+        # Missing expected selectors have no item IDs. Two different missing
+        # expectations must not cancel each other out when one is repaired
+        # and another becomes broken with the same QA code and score.
+        # expected_index is stable within a criteria_hash; unlike timeline
+        # indices, it is not affected by reordering the host's items.
+        stable_context = {}
+        # Scene coverage diagnostics are scoped by a stable configured scene ID.
+        # A gap fixed in scene A must not mask a new gap in scene B.
+        if "scene_id" in issue:
+            stable_context["scene_id"] = issue["scene_id"]
+        if "expected_index" in issue:
+            stable_context["expected_index"] = issue["expected_index"]
+            if "expected" in issue:
+                stable_context["expected"] = issue["expected"]
+        # Anonymous voice/subtitle diagnostics also need their source text:
+        # fixing one missing subtitle must not conceal a new missing line.
+        if "expected_text" in issue:
+            stable_context["expected_text"] = issue["expected_text"]
+        return json.dumps([issue["code"], issue.get("source"), sorted(ids), stable_context],
+                          sort_keys=True, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"))
+
+    def introduces_new_error(previous, latest):
+        # Compare multiplicities too: three identical black-frame failures
+        # after two is a new failure even if another error was repaired.
+        previous_errors = Counter(error_identity(issue) for issue in previous["issues"]
+                                  if issue["severity"] == "error")
+        latest_errors = Counter(error_identity(issue) for issue in latest["issues"]
+                                if issue["severity"] == "error")
+        return any(count > previous_errors[identity]
+                   for identity, count in latest_errors.items())
 
     reason = "QA_PASSED" if current["passed"] else "QA_ISSUES_REMAIN"
     if not current["passed"]:
@@ -329,7 +498,15 @@ def evaluate_qa_gate(current, history=None, *, max_repairs=3, repeat_limit=2,
             reason = "TIME_LIMIT_REACHED"
         elif max_api_calls is not None and api_calls >= max_api_calls:
             reason = "API_LIMIT_REACHED"
-        elif history and scores[-1] < scores[-2]:
+        elif history and (introduces_new_error(history[-1], current) or
+                          metrics[-1][1] > metrics[-2][1] or
+                          metrics[-1][3] > metrics[-2][3] or
+                          scores[-1] < scores[-2] or
+                          (scores[-1] == scores[-2] and
+                           metrics[-1][1:] > metrics[-2][1:])):
+            # Error escalation is unsafe even when clearing many warnings
+            # increases the weighted score. Also catch regressions at the
+            # score floor where the numeric score cannot fall further.
             reason = "QA_REGRESSED"
         else:
             repeated = 1
@@ -353,28 +530,82 @@ def combine_qa_reports(structural, checks, criteria):
     """Fold freshly run quality checks into the existing gate's score and history scope."""
     if not isinstance(checks, dict) or not isinstance(criteria, dict):
         raise ValueError("QA checks and criteria must be objects")
+    if isinstance(structural, dict) and "checks" in structural:
+        raise ValueError("structural QA must be a raw timeline report, not a composite QA report")
+    # Never launder a forged structural result into a passing composite report.
+    evaluate_qa_gate(structural)
     problems = list(structural["issues"])
     for source, report in checks.items():
+        if (not isinstance(source, str) or not source.strip() or len(source) > 64 or
+                any(ord(ch) < 32 or ord(ch) == 127 for ch in source)):
+            raise ValueError("QA check source must be a printable nonempty name")
         if not isinstance(report, dict) or report.get("success") is not True or \
                 not isinstance(report.get("passed"), bool) or not isinstance(report.get("issues"), list) or \
                 len(report["issues"]) > 1000:
             raise ValueError(f"{source} did not return a complete QA report")
+        _require_json_safe_issues(report["issues"], f"{source} QA")
         for issue in report["issues"]:
-            if not isinstance(issue, dict) or not isinstance(issue.get("code"), str) or not issue["code"] or \
-                    issue.get("severity") not in ("error", "warning"):
+            if (not isinstance(issue, dict) or not _valid_qa_code(issue.get("code")) or
+                    issue.get("severity") not in ("error", "warning") or
+                    ("item_ids" in issue and (not isinstance(issue["item_ids"], list) or
+                     any(not _valid_item_id(identity) for identity in issue["item_ids"])))):
                 raise ValueError(f"{source} returned an invalid QA issue")
+            if issue["code"] == "QA_ISSUES_TRUNCATED" and (
+                    issue["severity"] != "error" or
+                    type(issue.get("omitted_count")) is not int or
+                    issue["omitted_count"] <= 0):
+                raise ValueError(f"{source} returned an invalid QA truncation marker")
+            if "frame_range" in issue:
+                span = issue["frame_range"]
+                if (not isinstance(span, list) or len(span) != 2 or
+                        type(span[0]) is not int or type(span[1]) is not int or
+                        not 0 <= span[0] <= span[1] <= MAX_FRAME):
+                    raise ValueError(f"{source} returned an invalid QA frame_range")
             normalized = {**issue, "source": source}
-            if source == "visual" and "start_frame" in issue and "end_frame" in issue:
-                normalized["frame_range"] = [issue["start_frame"], issue["end_frame"]]
+            if source == "visual":
+                has_start, has_end = "start_frame" in issue, "end_frame" in issue
+                if has_start != has_end:
+                    raise ValueError("visual QA start_frame and end_frame must be supplied together")
+                if has_start:
+                    start, end = issue["start_frame"], issue["end_frame"]
+                    if (type(start) is not int or type(end) is not int or
+                            not 0 <= start <= end <= MAX_FRAME or
+                            ("frame_range" in issue and issue["frame_range"] != [start, end])):
+                        raise ValueError("visual QA returned an invalid or conflicting frame interval")
+                    normalized["frame_range"] = [start, end]
             problems.append(normalized)
         has_errors = any(i["severity"] == "error" for i in report["issues"])
         if report["passed"] == has_errors:
             raise ValueError(f"{source} passed status disagrees with its error issues")
+        if "valid" in report and report["valid"] is not report["passed"]:
+            raise ValueError(f"{source} valid status disagrees with passed")
+        if "issue_count" in report and (type(report["issue_count"]) is not int or
+                                        report["issue_count"] != len(report["issues"])):
+            raise ValueError(f"{source} issue_count disagrees with issues")
+        if "problems" in report and report["problems"] != report["issues"]:
+            raise ValueError(f"{source} problems disagrees with issues")
+        if "summary" in report:
+            summary = report["summary"]
+            error_count = sum(i["severity"] == "error" for i in report["issues"])
+            warning_count = len(report["issues"]) - error_count
+            if (not isinstance(summary, dict) or
+                    type(summary.get("errors")) is not int or
+                    type(summary.get("warnings")) is not int or
+                    summary["errors"] != error_count or summary["warnings"] != warning_count):
+                raise ValueError(f"{source} summary disagrees with issue severities")
+    if set(checks) != set(criteria):
+        raise ValueError("QA check sources must match their criteria entries")
+    problems = _bounded_qa_issues(problems)
     errors = sum(i["severity"] == "error" for i in problems)
     warnings = sum(i["severity"] == "warning" for i in problems)
-    digest = hashlib.sha256(json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
-                                     sort_keys=True, ensure_ascii=False, separators=(",", ":"),
-                                     allow_nan=False).encode("utf-8")).hexdigest()
+    try:
+        criteria_json = json.dumps({"structural": structural["criteria_hash"], "checks": criteria},
+                                   sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                                   allow_nan=False)
+        criteria_bytes = criteria_json.encode("utf-8")
+    except (TypeError, ValueError, OverflowError, UnicodeError) as exc:
+        raise ValueError("QA criteria must be JSON-safe, finite and UTF-8") from exc
+    digest = hashlib.sha256(criteria_bytes).hexdigest()
     return {**structural, "passed": errors == 0, "valid": errors == 0,
             "score": max(0, 100 - errors * 20 - warnings * 5),
             "issue_count": len(problems), "summary": {"errors": errors, "warnings": warnings},

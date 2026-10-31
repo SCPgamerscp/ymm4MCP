@@ -583,6 +583,65 @@ namespace YMM4McpPlugin
         /// 各レイヤーをframe昇順に並べ、後続アイテムが前のアイテムのend(frame+length)に重なる場合、後ろへシフトする。
         /// gap で各アイテム間に最小すき間（フレーム）を確保できる。
         /// </summary>
+        // Reflection frame writes must be readable and writable before any
+        // batch starts. GetPropObj suppresses getter errors, so use direct
+        // reflection here to fail closed on an unsupported host shape.
+        private static PropertyInfo RequireBatchFrameProperty(object item)
+        {
+            var prop = item.GetType().GetProperty("Frame",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (prop == null || prop.PropertyType != typeof(int) ||
+                prop.GetIndexParameters().Length != 0 || prop.GetGetMethod(true) == null ||
+                prop.GetSetMethod(true) == null)
+                throw new InvalidOperationException("Frame property is not readable/writable");
+            return prop;
+        }
+
+        private static int ReadBatchFrame(object item)
+            => (int)(RequireBatchFrameProperty(item).GetValue(item)
+                ?? throw new InvalidOperationException("Frame getter returned null"));
+
+        private static void WriteBatchFrame(object item, int frame)
+            => RequireBatchFrameProperty(item).SetValue(item, frame);
+
+        private object ApplyBatchFrameMoves(object vm,
+            List<(object item, int original, int target, int layer)> planned,
+            string operation, int fromFrame = 0, int delta = 0)
+        {
+            var changes = planned.Select(p => (p.item, p.original, p.target)).ToArray();
+            var result = TimelineFrameTransaction.Apply(changes, ReadBatchFrame, WriteBatchFrame);
+            // Even a compensated setter may have changed host-side history or
+            // other properties. Invalidate optimistic item revisions whenever
+            // any setter was attempted, including a setter that threw.
+            foreach (var item in result.Touched) MarkItemChanged(item);
+            if (!result.Success)
+                return new
+                {
+                    success = false, error_code = result.ErrorCode,
+                    rollback_verified = result.RollbackVerified,
+                    outcome_unknown = result.OutcomeUnknown,
+                    attempted = result.Touched.Count,
+                    note = "Frame-only compensation is not a full project rollback; inspect the host before retrying"
+                };
+            if (result.Touched.Count > 0)
+            {
+                var model = GetMainModel(vm);
+                if (model != null) TryRecordHistory(model);
+            }
+            var moved = planned.Select(p => new
+            {
+                item_id = GetItemIdentity(p.item).id,
+                layer = p.layer, oldFrame = p.original, newFrame = p.target,
+                revision = GetItemRevision(p.item)
+            }).ToArray();
+            return new
+            {
+                success = true, movedCount = moved.Length, fromFrame, delta,
+                operation, moved, frame_readback_verified = true,
+                full_project_atomicity_verified = false
+            };
+        }
+
         private async Task<object> ResolveOverlaps(HttpListenerRequest req)
         {
             var b = await ReadBody(req);
@@ -605,25 +664,20 @@ namespace YMM4McpPlugin
                     if (onlyLayers != null && !onlyLayers.Contains(layer)) continue;
                     candidates.Add((item, frame, length, layer));
                 }
-
-                var moved = new List<object>();
-                TimelineInputValidation.ApplyResolve(candidates, gap, (item, frame, newFrame, length, layer) =>
-                {
-                    try
-                    {
-                        var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        fProp?.SetValue(item, newFrame);
-                        moved.Add(new { layer, oldFrame = frame, newFrame, length });
-                    }
-                    catch (Exception ex) { moved.Add(new { layer, oldFrame = frame, error = ex.Message }); }
-                });
-                return (object)new { success = true, movedCount = moved.Count, moved };
+                // ApplyResolve computes and validates every destination first.
+                // Its callback only builds the plan; no host mutation yet.
+                var planned = new List<(object item, int original, int target, int layer)>();
+                TimelineInputValidation.ApplyResolve(candidates, gap,
+                    (item, frame, newFrame, _, layer) =>
+                        planned.Add((item, frame, newFrame, layer)));
+                return ApplyBatchFrameMoves(vm, planned, "resolve_overlaps");
             });
         }
 
         /// <summary>
-        /// 指定フレーム以降のアイテムを一括で前後にシフトする（挿入・詰めに使う）。
-        /// fromFrame 以上のアイテムの Frame に delta を加算する。layers 指定でレイヤーを絞れる。
+        /// Shift timeline items from a frame boundary, with all-target
+        /// preflight, setter readback, and best-effort frame compensation.
+        /// A failed setter is never reported as success.
         /// </summary>
         private async Task<object> ShiftItems(HttpListenerRequest req)
         {
@@ -649,18 +703,11 @@ namespace YMM4McpPlugin
                     if (onlyLayers != null && !onlyLayers.Contains(layer)) continue;
                     candidates.Add((item, frame, length, layer));
                 }
-                var moved = new List<object>();
-                TimelineInputValidation.ApplyShift(candidates, delta, (item, frame, newFrame, layer) =>
-                {
-                    try
-                    {
-                        var fProp = item.GetType().GetProperty("Frame", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        fProp?.SetValue(item, newFrame);
-                        moved.Add(new { layer, oldFrame = frame, newFrame });
-                    }
-                    catch (Exception ex) { moved.Add(new { layer, oldFrame = frame, error = ex.Message }); }
-                });
-                return (object)new { success = true, movedCount = moved.Count, fromFrame, delta, moved };
+                var planned = new List<(object item, int original, int target, int layer)>();
+                TimelineInputValidation.ApplyShift(candidates, delta,
+                    (item, frame, newFrame, layer) =>
+                        planned.Add((item, frame, newFrame, layer)));
+                return ApplyBatchFrameMoves(vm, planned, "shift_items", fromFrame, delta);
             });
         }
 
