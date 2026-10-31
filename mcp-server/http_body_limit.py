@@ -19,6 +19,10 @@ MAX_HEADER_BYTES = 64 * 1024
 # RFC 9110 field names are ASCII tokens, not arbitrary header text.
 _HEADER_TOKEN_BYTES = frozenset(b"!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
+# DNS host labels use ASCII letters, digits and interior hyphens.
+_DNS_ALNUM_BYTES = frozenset(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+_DNS_LABEL_BYTES = _DNS_ALNUM_BYTES | {45}
+
 
 class RequestBodyLimit:
     def __init__(self, app, max_bytes=MAX_REQUEST_BYTES):
@@ -97,7 +101,10 @@ class RequestBodyLimit:
             else:
                 host, sep, port = authority.partition(b":")
                 valid_authority = (bool(host) and len(host.rstrip(b".")) <= 253
-                                   and all(1 <= len(label) <= 63 for label in host.rstrip(b".").split(b"."))
+                                   and all(1 <= len(label) <= 63 and label[0] in _DNS_ALNUM_BYTES
+                                           and label[-1] in _DNS_ALNUM_BYTES
+                                           and all(char in _DNS_LABEL_BYTES for char in label)
+                                           for label in host.rstrip(b".").split(b"."))
                                    and host != b"." and not host.startswith(b".")
                                    and not host.endswith(b"..")
                                    and b"[" not in authority and b"]" not in authority
