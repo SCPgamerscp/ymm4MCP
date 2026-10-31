@@ -1,13 +1,98 @@
 """Turn read-only host asset checks into an explicit final QA criterion."""
 
 import ntpath
+import posixpath
+import re
+import unicodedata
+
+MAX_ITEM_ID_LENGTH = 256
+MAX_POSIX_PATH_LENGTH = 4096
+MAX_WINDOWS_PATH_LENGTH = 32767
+MAX_PATH_COMPONENT_LENGTH = 255
+
+# Windows device names are aliases even when an extension is appended.
+_RESERVED_WINDOWS_NAME = re.compile(
+    r"(?i)^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$"
+)
+_INVALID_WINDOWS_CHARS = re.compile(r'[<>"|?*]')
+
+# Reject invisible control/format characters that can disguise QA identities.
+_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def _unsafe_controls(value: str) -> bool:
+    return any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
+               or 0xd800 <= ord(char) <= 0xdfff
+               or (unicodedata.category(char) == "Cf" and char not in "\u200c\u200d")
+               or char in _BIDI_CONTROLS for char in value)
+
+
+def _path_too_long(path: str) -> bool:
+    """Use native path code units, not Python's Unicode character count."""
+    if ntpath.splitdrive(path)[0]:
+        return len(path.encode("utf-16-le")) // 2 > MAX_WINDOWS_PATH_LENGTH
+    return len(path.encode("utf-8")) > MAX_POSIX_PATH_LENGTH
+
+
+def _oversized_path_component(path: str) -> bool:
+    """Check per-component filesystem limits in native encoded units."""
+    if ntpath.splitdrive(path)[0]:
+        parts = re.split(r"[\\/]", path)
+        return any(len(part.encode("utf-16-le")) // 2 > MAX_PATH_COMPONENT_LENGTH
+                   for part in parts if part)
+    return any(len(part.encode("utf-8")) > MAX_PATH_COMPONENT_LENGTH
+               for part in path.split("/") if part)
+
+
+def _invalid_windows_component(part: str) -> bool:
+    return (not part or part in (".", "..") or part.endswith((".", " "))
+            or _INVALID_WINDOWS_CHARS.search(part) is not None
+            or _RESERVED_WINDOWS_NAME.fullmatch(part) is not None
+            or _unsafe_controls(part) or ":" in part)
+
 
 from jobs import is_absolute_media_path
 
 
 def _valid_item_id(value: object) -> bool:
-    return (isinstance(value, str) and bool(value.strip())
-            and not any(ord(char) < 32 or ord(char) == 127 for char in value))
+    # Whitespace-padded IDs are ambiguous aliases, not distinct timeline items.
+    return (isinstance(value, str) and 0 < len(value) <= MAX_ITEM_ID_LENGTH
+            and value.strip() == value
+            and not _unsafe_controls(value))
+
+
+def _ambiguous_windows_path(path: str) -> bool:
+    """Reject Win32 aliases, device namespaces, and invalid file components."""
+    # Extended-length and Win32 device paths bypass normal filename rules.
+    if path.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+        return True
+    drive, tail = ntpath.splitdrive(path)
+    if not drive:
+        return False  # POSIX filenames can legally contain Windows punctuation.
+    if not tail:
+        return True  # A UNC share root is not a media file.
+    # ntpath.splitdrive strips UNC server/share components from the tail.
+    # Validate those components, not only the final file path.
+    if drive.startswith(("\\\\", "//")):
+        share_parts = re.split(r"[\\/]", drive[2:])
+        if len(share_parts) != 2 or any(
+                _invalid_windows_component(part) for part in share_parts):
+            return True
+    elif not re.fullmatch(r"[A-Za-z]:", drive):
+        return True
+    # Keep empty segments rather than normalizing them away.
+    parts = re.split(r"[\\/]", tail)
+    return any(_invalid_windows_component(part) for part in parts[1:])
+
+
+def _ambiguous_posix_path(path: str) -> bool:
+    """Do not accept alternate spellings of the same POSIX media file."""
+    if ntpath.splitdrive(path)[0] or not path.startswith("/"):
+        return False
+    # A single initial slash is expected. Empty interior components and
+    # dot segments are aliases of other paths; ordinary punctuation is fine.
+    parts = path.split("/")
+    return any(part in ("", ".", "..") for part in parts[1:])
 
 
 def report(availability: dict) -> dict:
@@ -23,8 +108,12 @@ def report(availability: dict) -> dict:
     count = availability.get("checked_count")
     if not isinstance(complete, bool) or complete != (not unknown and not unchecked):
         raise ValueError("asset availability completeness is inconsistent")
-    if type(count) is not int or count < 0:
-        raise ValueError("checked_count must be a non-negative integer")
+    # The producer checks at most 100 distinct source paths. Reject a
+    # contradictory count rather than certifying an impossible host snapshot.
+    if type(count) is not int or not 0 <= count <= 100:
+        raise ValueError("checked_count must be an integer in 0..100")
+    if count + len(unchecked) > 100:
+        raise ValueError("asset source count exceeds the host check limit")
 
     # Host paths are grouped by canonical Windows path: a source cannot be
     # both missing and unchecked, and an item cannot have multiple statuses.
@@ -38,12 +127,25 @@ def report(availability: dict) -> dict:
 
     for source in [*missing, *unchecked]:
         if (not isinstance(source, dict) or not isinstance(source.get("path"), str) or
-                not is_absolute_media_path(source["path"])):
+                source["path"].strip() != source["path"] or
+                _unsafe_controls(source["path"]) or
+                _path_too_long(source["path"]) or
+                _oversized_path_component(source["path"]) or
+                (source["path"].endswith("/") or
+                 (ntpath.splitdrive(source["path"])[0] and
+                  source["path"].endswith("\\"))) or
+                not is_absolute_media_path(source["path"]) or
+                (_ambiguous_windows_path(source["path"]) or
+                 _ambiguous_posix_path(source["path"]))):
             raise ValueError("asset source entries require a valid path")
         item_ids = source.get("item_ids")
         if not isinstance(item_ids, list) or not item_ids:
             raise ValueError("asset source entries require item IDs")
-        canonical_path = ntpath.normcase(ntpath.normpath(source["path"]))
+        # POSIX paths are case-sensitive and backslash is a literal character.
+        # ntpath would incorrectly merge distinct source files.
+        path = source["path"]
+        canonical_path = (ntpath.normcase(ntpath.normpath(path))
+                          if ntpath.splitdrive(path)[0] else posixpath.normpath(path))
         if canonical_path in seen_paths:
             raise ValueError("asset source path appears in multiple states")
         seen_paths.add(canonical_path)
@@ -58,12 +160,12 @@ def report(availability: dict) -> dict:
     issues = []
     for source in missing:
         issues.append({"code": "ASSET_MISSING", "severity": "error", "path": source["path"],
-                       "item_ids": source["item_ids"]})
+                       "item_ids": list(source["item_ids"])})
     if unknown:
-        issues.append({"code": "ASSET_SOURCE_UNKNOWN", "severity": "error", "item_ids": unknown})
+        issues.append({"code": "ASSET_SOURCE_UNKNOWN", "severity": "error", "item_ids": list(unknown)})
     for source in unchecked:
         issues.append({"code": "ASSET_CHECK_UNAVAILABLE", "severity": "error", "path": source["path"],
-                       "item_ids": source["item_ids"]})
+                       "item_ids": list(source["item_ids"])})
     if not complete and not issues:
         raise ValueError("incomplete asset check has no explanation")
     return {"success": True, "passed": not issues, "issues": issues,
