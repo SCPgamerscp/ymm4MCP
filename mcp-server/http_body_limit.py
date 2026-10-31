@@ -24,6 +24,15 @@ _DNS_ALNUM_BYTES = frozenset(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm
 _DNS_LABEL_BYTES = _DNS_ALNUM_BYTES | {45}
 
 
+def _invalid_media_type(value):
+    """Reject missing or invalid type/subtype tokens before optional parameters."""
+    media_type = value.split(b";", 1)[0].strip()
+    parts = media_type.split(b"/")
+    return (len(parts) != 2 or
+            any(not part or any(char not in _HEADER_TOKEN_BYTES for char in part)
+                for part in parts))
+
+
 def _invalid_content_type_list(value):
     """Detect joined media types without rejecting quoted parameter commas."""
     quoted = False
@@ -138,7 +147,7 @@ class RequestBodyLimit:
 
         # Content-Type is a singleton field, not a comma-separated list. Reject
         # joined values that could be split differently by downstream parsers.
-        if content_types and (not content_types[0].strip(b" \t") or _invalid_content_type_list(content_types[0])):
+        if content_types and (not content_types[0].strip(b" \t") or _invalid_media_type(content_types[0]) or _invalid_content_type_list(content_types[0])):
             return await JSONResponse({"error": "Invalid Content-Type"}, status_code=400)(
                 scope, receive, send)
 
