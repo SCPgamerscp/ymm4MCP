@@ -96,7 +96,8 @@ class RequestBodyLimit:
                         valid_authority = False
             else:
                 host, sep, port = authority.partition(b":")
-                valid_authority = (bool(host) and all(label for label in host.rstrip(b".").split(b"."))
+                valid_authority = (bool(host) and len(host.rstrip(b".")) <= 253
+                                   and all(1 <= len(label) <= 63 for label in host.rstrip(b".").split(b"."))
                                    and host != b"." and not host.startswith(b".")
                                    and not host.endswith(b"..")
                                    and b"[" not in authority and b"]" not in authority
