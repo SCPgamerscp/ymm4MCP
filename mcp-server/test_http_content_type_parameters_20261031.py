@@ -20,6 +20,23 @@ class ContentTypeParameterTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertFalse(module._invalid_content_type_parameters(value))
 
+    def test_quoted_htab_is_valid_but_other_controls_are_not(self):
+        # RFC 9110 quoted-string permits HTAB, including in quoted-pair.
+        for value in (
+            b'application/json; note="a\\tb"',
+            b'application/json; note="a\\\\\\tb"',
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(module._invalid_content_type_parameters(value))
+        for value in (
+            b'application/json; note="a\\x00b"',
+            b'application/json; note="a\\x1fb"',
+            b'application/json; note="a\\x7fb"',
+            b'application/json; note="a\\\\\\x00b"',
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(module._invalid_content_type_parameters(value))
+
     def test_invalid_parameters(self):
         for value in (
             b"application/json;",
