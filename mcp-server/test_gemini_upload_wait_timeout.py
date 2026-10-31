@@ -19,7 +19,7 @@ class GeminiUploadWaitTimeoutTests(unittest.TestCase):
         self.client.files.get.side_effect = [
             file_state("PROCESSING"), file_state("PROCESSING"),
         ]
-        with patch.object(gemini_video.time, "monotonic", side_effect=[0, 4, 11]), \
+        with patch.object(gemini_video.time, "monotonic", side_effect=[0, 0, 4, 4, 7, 11]), \
              patch.object(gemini_video.time, "sleep") as sleep:
             with self.assertRaises(TimeoutError):
                 gemini_video._wait_file_active(self.client, self.uploaded, timeout_sec=10)
@@ -30,11 +30,12 @@ class GeminiUploadWaitTimeoutTests(unittest.TestCase):
         self.client.files.get.side_effect = [
             file_state("PROCESSING"), file_state("PROCESSING"),
         ]
-        with patch.object(gemini_video.time, "monotonic", side_effect=[0, 9.5, 10.1]), \
+        with patch.object(gemini_video.time, "monotonic", side_effect=[0, 0, 9.5, 9.5, 10.1]), \
              patch.object(gemini_video.time, "sleep") as sleep:
             with self.assertRaises(TimeoutError):
                 gemini_video._wait_file_active(self.client, self.uploaded, timeout_sec=10)
         self.assertAlmostEqual(sleep.call_args.args[0], 0.5)
+        self.assertEqual(self.client.files.get.call_count, 1)
 
     def test_active_and_failed_states_keep_existing_behavior(self):
         self.client.files.get.return_value = file_state("ACTIVE")

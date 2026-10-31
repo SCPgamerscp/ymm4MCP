@@ -18,12 +18,16 @@ APIキー:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
 import time
 from typing import Any, Optional
+
+import httpx
+import requests
 
 # google-genai は遅延 import する(未インストールでもサーバー自体は起動できるように)
 _GENAI_IMPORT_ERROR: Optional[str] = None
@@ -36,15 +40,47 @@ except Exception as e:  # pragma: no cover
     _GENAI_IMPORT_ERROR = str(e)
 
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+MAX_MODEL_CONFIG_BYTES = 64 * 1024
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
+
+
+def _unique_model_config_object(pairs: list[tuple[str, Any]]) -> dict:
+    """Reject ambiguous model configuration keys, including nested metadata."""
+    config = {}
+    for key, value in pairs:
+        if key in config:
+            raise ValueError("duplicate Gemini model configuration key")
+        config[key] = value
+    return config
+
+
+def _valid_model_id(value: Any) -> bool:
+    """Allow explicit model names while rejecting ambiguous path segments."""
+    return (isinstance(value, str) and _MODEL_ID.fullmatch(value) is not None
+            and all(segment not in ("", ".", "..") for segment in value.split("/")))
+
+
 def _get_default_model() -> str:
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     try:
         if os.path.isfile(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f).get("default_model", "gemini-2.5-flash")
-    except Exception:
+            # A local corrupt/oversized config must not prevent video analysis.
+            with open(config_path, "rb") as f:
+                raw = f.read(MAX_MODEL_CONFIG_BYTES + 1)
+            if len(raw) > MAX_MODEL_CONFIG_BYTES:
+                return DEFAULT_GEMINI_MODEL
+            config = json.loads(
+                raw.decode("utf-8-sig"),
+                object_pairs_hook=_unique_model_config_object,
+            )
+            if isinstance(config, dict):
+                model = config.get("default_model")
+                if _valid_model_id(model):
+                    return model
+    except (OSError, UnicodeError, ValueError, RecursionError):
         pass
-    return "gemini-2.5-flash"
+    return DEFAULT_GEMINI_MODEL
 
 DEFAULT_MODEL = _get_default_model()
 
@@ -52,6 +88,8 @@ DEFAULT_MODEL = _get_default_model()
 MAX_FRAME_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_AUDIO_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
+# Gemini File API has a per-file size limit; avoid unbounded video uploads.
+MAX_VIDEO_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 
 # デフォルトの検出指示(イベント全種類)。AIがカスタムプロンプトを渡せば上書きされる。
 DEFAULT_EVENT_INSTRUCTION = (
@@ -108,6 +146,82 @@ def _build_prompt(event_instruction: str) -> str:
     )
 
 
+MAX_GEMINI_RESPONSE_CHARS = 4 * 1024 * 1024
+MAX_GEMINI_JSON_INTEGER_DIGITS = 128
+MAX_GEMINI_JSON_DEPTH = 128
+
+
+def _bounded_gemini_integer(token: str) -> int:
+    """Bound integer parsing even on Python versions with a higher int limit."""
+    if len(token.lstrip("-")) > MAX_GEMINI_JSON_INTEGER_DIGITS:
+        raise ValueError("JSON integer literal is too long")
+    return int(token)
+
+
+def _gemini_json_too_deep(body: str) -> bool:
+    """Count actual JSON containers, ignoring braces inside escaped strings."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_GEMINI_JSON_DEPTH:
+                return True
+        elif char in "]}":
+            depth -= 1
+    return False
+
+
+
+
+def _unique_gemini_object(pairs: list[tuple[str, Any]]) -> dict:
+    """Reject conflicting claims in nested model-generated JSON objects."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_gemini_constant(token: str) -> None:
+    raise ValueError(f"nonstandard JSON numeric constant: {token}")
+
+
+def _finite_gemini_float(token: str) -> float:
+    if len(token) > 128:
+        raise ValueError("JSON floating-point literal is too long")
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError("JSON floating-point number is not finite")
+    return value
+
+
+def _reject_gemini_surrogates(value: Any) -> None:
+    """JSON escaped unpaired surrogates cannot be encoded as valid UTF-8."""
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in current):
+                raise ValueError("unpaired Unicode surrogate in Gemini JSON")
+        elif isinstance(current, dict):
+            pending.extend(current.keys())
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+
+
 def _extract_json(text: str) -> dict:
     """Geminiの応答からJSONを頑健に抽出する。コードフェンスや前後テキストを許容。"""
     if not isinstance(text, str):
@@ -118,6 +232,10 @@ def _extract_json(text: str) -> dict:
         return {"summary": "", "events": [], "_parse_error": "Gemini response exceeds 16777216 characters"}
     if not text:
         return {"summary": "", "events": [], "_parse_error": "空の応答"}
+    # The response has already been downloaded, but do not parse an unbounded
+    # model response into a potentially huge object graph.
+    if len(text) > MAX_GEMINI_RESPONSE_CHARS:
+        return {"summary": "", "events": [], "_parse_error": "Gemini JSON response is too large"}
     # ```json ... ``` を剥がす
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidate = fence.group(1) if fence else None
@@ -127,7 +245,16 @@ def _extract_json(text: str) -> dict:
         end = text.rfind("}")
         candidate = text[start : end + 1] if (start >= 0 and end > start) else text
     try:
-        parsed = json.loads(candidate)
+        if _gemini_json_too_deep(candidate):
+            raise ValueError("Gemini JSON exceeds the nesting depth limit")
+        parsed = json.loads(
+            candidate,
+            object_pairs_hook=_unique_gemini_object,
+            parse_constant=_reject_gemini_constant,
+            parse_int=_bounded_gemini_integer,
+            parse_float=_finite_gemini_float,
+        )
+        _reject_gemini_surrogates(parsed)
         if (not isinstance(parsed, dict)
                 or not isinstance(parsed.get("summary"), str)
                 or not isinstance(parsed.get("events"), list)
@@ -145,6 +272,17 @@ def _extract_json(text: str) -> dict:
                     isinstance(end, bool) or not isinstance(end, (int, float))
                     or not math.isfinite(end) or end < start):
                 raise ValueError(f"events[{index}].end_sec must not precede time_sec")
+            # Optional fields are optional for compatibility, but present
+            # values must match the documented response schema.
+            for field in ("type", "label", "description"):
+                if field in event and not isinstance(event[field], str):
+                    raise ValueError(f"events[{index}].{field} must be text")
+            if "audio" in event and event["audio"] is not None and not isinstance(event["audio"], str):
+                raise ValueError(f"events[{index}].audio must be text or null")
+            if "importance" in event and (
+                    type(event["importance"]) is not int
+                    or not 1 <= event["importance"] <= 5):
+                raise ValueError(f"events[{index}].importance must be an integer in 1..5")
         # Gemini can return valid events out of order. Preserve relative order
         # for ties while guaranteeing the chronological contract for callers.
         parsed["events"].sort(key=lambda event: event["time_sec"])
@@ -153,12 +291,99 @@ def _extract_json(text: str) -> dict:
         return {"summary": "", "events": [], "_parse_error": f"JSON解析失敗: {e}", "_raw": text[:2000]}
 
 
+def _video_signature(path: str) -> tuple[int, int, int, int]:
+    """Detect replacement or mutation of the file being analyzed."""
+    info = os.stat(path)
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def _video_digest(path: str, signature: tuple[int, int, int, int]) -> bytes:
+    """Fingerprint a source video without buffering it in memory.
+
+    The metadata checks detect replacement during the digest pass. The digest
+    also detects same-size rewrites whose original mtime was restored.
+    """
+    if _video_signature(path) != signature:
+        raise OSError("video changed before checksum")
+    hasher = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    if _video_signature(path) != signature:
+        raise OSError("video changed while checksumming")
+    return hasher.digest()
+
+
+def _video_still_matches(path: str, signature: tuple[int, int, int, int],
+                         digest: bytes) -> bool:
+    try:
+        return _video_signature(path) == signature and _video_digest(path, signature) == digest
+    except OSError:
+        return False
+
+
+def _media_still_matches(snapshots: list[tuple[str, tuple[int, int, int, int], bytes]]) -> bool:
+    """Recheck selected preview media after sampling and after model inference.
+
+    Stat alone cannot detect an in-place rewrite that restores the timestamp.
+    Compare both file identity and a streaming digest of the exact bytes sent.
+    """
+    for path, original, digest in snapshots:
+        try:
+            if _video_signature(path) != original:
+                return False
+            hasher = hashlib.sha256()
+            with open(path, "rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            if _video_signature(path) != original or hasher.digest() != digest:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _transient_file_api_error(exc: Exception) -> bool:
+    """Only retry temporary File API failures, never auth or bad requests."""
+    return (getattr(exc, "code", None) in (429, 500, 502, 503, 504)
+            or getattr(exc, "status_code", None) in (429, 500, 502, 503, 504)
+            or isinstance(exc, (TimeoutError, ConnectionError, httpx.TransportError,
+                                requests.exceptions.Timeout,
+                                requests.exceptions.ConnectionError)))
+
+
 def _wait_file_active(client, file_obj, timeout_sec: int = 180):
     """File API にアップロードした動画が ACTIVE になるまで待つ。"""
     name = file_obj.name
     deadline = time.monotonic() + timeout_sec
+    consecutive_errors = 0
     while True:
-        f = client.files.get(name=name)
+        # SDK v0.3.0 silently ignored HTTP timeouts. Since v1.0.0,
+        # GetFileConfig.http_options.timeout is passed to the HTTP transport
+        # in milliseconds. Bound each request by the *remaining* budget,
+        # rather than checking the deadline only after a blocked call returns.
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms < 1:
+            raise TimeoutError("Gemini File API polling timed out")
+        try:
+            f = client.files.get(
+                name=name, config={"http_options": {"timeout": remaining_ms}}
+            )
+        except Exception as exc:
+            if not _transient_file_api_error(exc):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Gemini File API polling timed out") from exc
+            # Back off under 429/5xx, but never sleep beyond the same deadline.
+            consecutive_errors += 1
+            time.sleep(min(3 * (2 ** min(consecutive_errors - 1, 3)), remaining))
+            continue
+        # Even an ACTIVE response is too late if the network call exceeded
+        # the polling budget; otherwise it can incorrectly certify stale QA.
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Gemini File API polling timed out")
+        consecutive_errors = 0
         state = getattr(f.state, "name", str(f.state))
         if state == "ACTIVE":
             return f
@@ -193,6 +418,19 @@ def analyze_video_file(
         return {"success": False, "error": msg}
     if not os.path.isfile(video_path):
         return {"success": False, "error": f"動画ファイルが見つかりません: {video_path}"}
+    try:
+        signature = _video_signature(video_path)
+    except OSError as exc:
+        return {"success": False, "error": f"動画ファイルを確認できません: {exc}"}
+    if signature[2] <= 0 or signature[2] > MAX_VIDEO_UPLOAD_BYTES:
+        return {"success": False, "error": "Video file is empty or exceeds the Gemini upload size limit"}
+
+    # The File API accepts a path and opens it independently. Keep a content
+    # fingerprint so same-size in-place rewrites cannot certify stale QA.
+    try:
+        video_digest = _video_digest(video_path, signature)
+    except OSError as exc:
+        return {"success": False, "error": f"Cannot fingerprint video: {exc}", "source": "file"}
 
     instruction = event_instruction or DEFAULT_EVENT_INSTRUCTION
     client = None
@@ -200,11 +438,17 @@ def analyze_video_file(
     try:
         client = _client()
         uploaded = client.files.upload(file=video_path)
+        # A file modified during upload may not match the local media that
+        # the QA report will be attributed to. Never certify such a result.
+        if not _video_still_matches(video_path, signature, video_digest):
+            return {"success": False, "error": "Video changed during Gemini upload", "source": "file"}
         active = _wait_file_active(client, uploaded)
         resp = client.models.generate_content(
             model=model,
             contents=[active, _build_prompt(instruction)],
         )
+        if not _video_still_matches(video_path, signature, video_digest):
+            return {"success": False, "error": "Video changed during Gemini analysis", "source": "file"}
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
             return {"success": False, "error": parsed["_parse_error"], "source": "file"}
@@ -606,6 +850,7 @@ def analyze_frames_dir(
         client = _client()
         total_payload_bytes = 0
         analyzed_images = 0
+        media_snapshots: list[tuple[str, tuple[int, int, int, int], bytes]] = []
         for e in entries:
             path = _safe_frame_path(frames_dir, e["file"])
             if path is None:
@@ -639,6 +884,12 @@ def analyze_frames_dir(
                     or total_payload_bytes + len(img_bytes) > MAX_TOTAL_BYTES):
                 return {"success": False, "error": "Frame payload exceeds the upload size limit",
                         "source": "frames_dir"}
+            frame_signature = _video_signature(path)
+            if frame_signature[2] != len(img_bytes):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Selected PNG frame changed while being read"}
+            media_snapshots.append(
+                (path, frame_signature, hashlib.sha256(img_bytes).digest()))
             total_payload_bytes += len(img_bytes)
             contents.append(genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
             analyzed_images += 1
@@ -666,6 +917,7 @@ def analyze_frames_dir(
             if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
                 return {"success": False, "error": "Audio exceeds the upload size limit",
                         "source": "frames_dir"}
+            audio_signature = _video_signature(audio_path)
             with open(audio_path, "rb") as fh:
                 wav_bytes = fh.read(MAX_AUDIO_BYTES + 1)
             if (len(wav_bytes) > MAX_AUDIO_BYTES
@@ -688,6 +940,12 @@ def analyze_frames_dir(
             if chunk_error:
                 return {"success": False, "source": "frames_dir",
                         "error": chunk_error}
+            if (_video_signature(audio_path) != audio_signature
+                    or len(wav_bytes) != audio_signature[2]):
+                return {"success": False, "source": "frames_dir",
+                        "error": "Requested audio changed while being read"}
+            media_snapshots.append(
+                (audio_path, audio_signature, hashlib.sha256(wav_bytes).digest()))
             total_payload_bytes += len(wav_bytes)
             contents.append(genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"))
             contents.append(genai_types.Part.from_text(
@@ -711,7 +969,13 @@ def analyze_frames_dir(
             )
         contents.append(genai_types.Part.from_text(text=prompt))
 
+        if not _media_still_matches(media_snapshots):
+            return {"success": False, "source": "frames_dir",
+                    "error": "Preview media changed before Gemini analysis"}
         resp = client.models.generate_content(model=model, contents=contents)
+        if not _media_still_matches(media_snapshots):
+            return {"success": False, "source": "frames_dir",
+                    "error": "Preview media changed during Gemini analysis"}
         parsed = _extract_json(getattr(resp, "text", "") or "")
         if "_parse_error" in parsed:
             return {"success": False, "error": parsed["_parse_error"], "source": "frames_dir"}
