@@ -40,6 +40,19 @@ class HostEmptyLabelTests(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertEqual(asyncio.run(request(host)), [400])
 
+    def test_reject_overlong_dns_names(self):
+        for host in (b"a" * 64 + b".example", b"a" * 254,
+                     b".".join([b"a" * 63] * 4)):
+            with self.subTest(host=host):
+                self.assertEqual(asyncio.run(request(host)), [400])
+
+    def test_accept_dns_length_boundaries(self):
+        for host in (b"a" * 63 + b".example",
+                     b".".join([b"a" * 63] * 3 + [b"a" * 61]),
+                     b".".join([b"a" * 63] * 3 + [b"a" * 61]) + b"."):
+            with self.subTest(host=host):
+                self.assertEqual(asyncio.run(request(host)), [True, 200])
+
     def test_accept_normal_and_trailing_dot(self):
         for host in (b"localhost", b"example.com", b"example.com.",
                      b"example.com:443", b"[::1]:8000"):
