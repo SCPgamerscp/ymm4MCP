@@ -114,6 +114,12 @@ class RequestBodyLimit:
                 return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                     scope, receive, send)
 
+        # A duplicated Content-Type may be interpreted inconsistently by parsers.
+        content_types = [value for name, value in normalized_headers if name == b"content-type"]
+        if len(content_types) > 1:
+            return await JSONResponse({"error": "Duplicate Content-Type"}, status_code=400)(
+                scope, receive, send)
+
         lengths = [value for name, value in normalized_headers if name == b"content-length"]
         transfers = [value for name, value in normalized_headers if name == b"transfer-encoding"]
         # Only a single chunked encoding is supported. Reject ambiguous or
