@@ -24,6 +24,22 @@ _DNS_ALNUM_BYTES = frozenset(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm
 _DNS_LABEL_BYTES = _DNS_ALNUM_BYTES | {45}
 
 
+def _invalid_content_type_list(value):
+    """Detect joined media types without rejecting quoted parameter commas."""
+    quoted = False
+    escaped = False
+    for char in value:
+        if escaped:
+            escaped = False
+        elif quoted and char == 92:  # quoted-pair escape
+            escaped = True
+        elif char == 34:  # double quote
+            quoted = not quoted
+        elif char == 44 and not quoted:  # comma outside a quoted-string
+            return True
+    return quoted or escaped
+
+
 class RequestBodyLimit:
     def __init__(self, app, max_bytes=MAX_REQUEST_BYTES):
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
@@ -122,7 +138,7 @@ class RequestBodyLimit:
 
         # Content-Type is a singleton field, not a comma-separated list. Reject
         # joined values that could be split differently by downstream parsers.
-        if content_types and (not content_types[0].strip(b" \t") or b"," in content_types[0]):
+        if content_types and (not content_types[0].strip(b" \t") or _invalid_content_type_list(content_types[0])):
             return await JSONResponse({"error": "Invalid Content-Type"}, status_code=400)(
                 scope, receive, send)
 
