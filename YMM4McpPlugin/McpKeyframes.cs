@@ -61,25 +61,34 @@ namespace YMM4McpPlugin
                         var anim = ResolveAnimation(item, name);
                         if (anim == null)
                         {
+                            if (!string.IsNullOrWhiteSpace(prop))
+                                return Failure("KEYFRAME_UNSUPPORTED",
+                                    "プロパティ '" + name + "' はAnimationではありません");
                             if (strictInventory)
                                 return Failure("ANIMATION_INVENTORY_INCOMPLETE",
                                     "アニメーション " + name + " を再取得できませんでした");
                             continue;
                         }
+                        // Read before advertising the property: an unreadable
+                        // animation must never appear in the returned inventory.
+                        var keyframes = ReadKeyframes(anim, located.frame);
                         names.Add(name);
                         animations.Add(new
                         {
                             prop = name,
                             type = anim.GetType().Name,
-                            keyframes = ReadKeyframes(anim, located.frame)
+                            keyframes
                         });
                     }
                     catch (Exception)
                     {
-                        if (strictInventory)
+                        // Best-effort inventory remains usable when one host
+                        // property is broken. Explicit and strict reads must
+                        // instead fail closed rather than hide that corruption.
+                        if (strictInventory || !string.IsNullOrWhiteSpace(prop))
                             return Failure("ANIMATION_INVENTORY_INCOMPLETE",
                                 "アニメーション " + name + " の読取に失敗しました");
-                        throw;
+                        continue;
                     }
                 }
                 return (object)new
@@ -128,6 +137,14 @@ namespace YMM4McpPlugin
                 if (anim == null)
                     return Failure("KEYFRAME_UNSUPPORTED", "プロパティ '" + prop + "' はAnimationではありません");
 
+                // Do not create a key beyond the item's visible duration.
+                // The host can otherwise accept a frame which will not survive
+                // a project save/reload or which targets another time span.
+                if (action == "set" && !KeyframeMutationVerification.IsInItemRange(
+                        relativeFrame, ReadItemInfo(item).length))
+                    return Failure("KEYFRAME_OUT_OF_RANGE",
+                        "キーフレーム位置がアイテムの長さの範囲外です。0以上、Length未満を指定してください");
+
                 // KeyFrames belongs to the timeline item and is shared across
                 // its animations.  Bind a detached Animation before adding a
                 // nonzero keyframe; do not replace an existing binding.
@@ -136,18 +153,100 @@ namespace YMM4McpPlugin
                 if (KeyframeHostBinding.HasConflictingBinding(item, anim))
                     return Failure("KEYFRAME_BINDING_CONFLICT",
                         "Animationが別のアイテムのKeyFramesに接続されています。誤ったアイテムを変更しないため処理を中止しました");
+                // Capture observable state before invoking reflection-based
+                // native methods. They can partially mutate then return false.
+                List<int> framesBefore;
+                List<double> valuesBefore;
+                try
+                {
+                    framesBefore = ReadFrameList(anim);
+                    valuesBefore = ReadValueList(anim);
+                }
+                catch (Exception)
+                {
+                    // No native edit has started. Never mutate an animation
+                    // whose initial state cannot be represented faithfully.
+                    return Failure("KEYFRAME_READBACK_INVALID",
+                        "変更前のAnimationに読取不能なFrames/Valuesがあります。編集せず中止しました");
+                }
+                // Reject an already malformed or unordered host layout before
+                // binding a detached animation or calling a native mutation.
+                if (!KeyframeMutationVerification.HasReadableLayout(
+                        framesBefore, valuesBefore))
+                    return Failure("KEYFRAME_READBACK_INVALID",
+                        "変更前のFrames/Valuesの順序または対応関係が不正です。編集せず中止しました");
                 if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
                     return Failure("KEYFRAME_BINDING_UNAVAILABLE",
                         "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
                 bool changed;
-                if (action == "clear")
-                    changed = ClearKeyframes(anim);
-                else if (action == "remove")
-                    changed = RemoveKeyframe(anim, relativeFrame);
-                else
-                    changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
+                List<int> framesAfter;
+                List<double> valuesAfter;
+                double? defaultAfter;
+                try
+                {
+                    if (action == "clear")
+                        changed = ClearKeyframes(anim);
+                    else if (action == "remove")
+                        changed = RemoveKeyframe(anim, relativeFrame);
+                    else
+                        changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
+                    // Both readbacks must succeed before a native result is trusted.
+                    framesAfter = ReadFrameList(anim);
+                    valuesAfter = ReadValueList(anim);
+                    // A throwing default getter must invalidate the revision
+                    // too: it executes after the host has already mutated.
+                    defaultAfter = action == "set" ? TryGetDefaultValue(anim) : null;
+                }
+                catch (Exception)
+                {
+                    // A native call may have modified the animation before
+                    // throwing, or the host may refuse to expose its new state.
+                    // Fail closed and invalidate any optimistic revision.
+                    MarkItemChanged(item);
+                    return Failure("KEYFRAME_PARTIAL_MUTATION",
+                        "YMM4の操作または読戻しで例外が発生しました。部分変更の可能性があるため再試行前に状態を確認してください");
+                }
                 if (!changed)
+                {
+                    if (KeyframeMutationVerification.HasObservableChange(
+                            framesBefore, valuesBefore, framesAfter, valuesAfter))
+                    {
+                        // Even a failed call can have changed the host model.
+                        // Invalidate optimistic revisions and require inspection.
+                        MarkItemChanged(item);
+                        return Failure("KEYFRAME_PARTIAL_MUTATION",
+                            "YMM4の操作が失敗しましたが、Animationが部分変更されています。再試行前に状態を確認してください");
+                    }
                     return Failure("KEYFRAME_METHOD_UNAVAILABLE", "YMM4のAnimation/KeyFrames APIを呼べませんでした。inspectで署名を確認してください");
+                }
+                // A reflected native method can return successfully without
+                // changing the requested frame/value. Do not acknowledge that
+                // as a successful edit. Invalidate stale revisions because the
+                // host may have been partially mutated despite the mismatch.
+                if (!KeyframeMutationVerification.Confirm(
+                        action, relativeFrame, value, framesAfter,
+                        valuesAfter, defaultAfter) ||
+                    !KeyframeMutationVerification.PreservesUnrelatedKeys(
+                        action, relativeFrame, framesBefore, valuesBefore,
+                        framesAfter, valuesAfter))
+                {
+                    MarkItemChanged(item);
+                    return Failure("KEYFRAME_READBACK_MISMATCH",
+                        "YMM4が操作成功を返しましたが、キーフレームの読戻しが一致しません。再試行前にinspectで状態を確認してください");
+                }
+                List<object> resultKeyframes;
+                try
+                {
+                    // A second host read can fail even after mutation confirmation.
+                    // Do not leak an unstructured error or claim edit success.
+                    resultKeyframes = ReadKeyframes(anim, located.frame);
+                }
+                catch (Exception)
+                {
+                    MarkItemChanged(item);
+                    return Failure("KEYFRAME_PARTIAL_MUTATION",
+                        "編集後の一覧読戻しに失敗しました。変更済みの可能性があるため状態を再確認してください");
+                }
                 MarkItemChanged(item);
                 var vm = GetMainViewModel();
                 if (vm != null)
@@ -165,7 +264,7 @@ namespace YMM4McpPlugin
                     prop,
                     action,
                     at = relativeFrame,
-                    keyframes = ReadKeyframes(anim, located.frame)
+                    keyframes = resultKeyframes
                 };
             });
         }
@@ -189,19 +288,22 @@ namespace YMM4McpPlugin
             }
             else
             {
-                foreach (var iv in rawItems)
-                {
-                    var info = ReadItemInfo(iv);
-                    if (info.frame == frame && info.layer == layer)
+                // Do not stop at the first coordinate match: YMM4 can have
+                // multiple overlapping items on the same frame/layer.
+                var match = KeyframeSelectorSafety.FindUniqueCoordinateItem(
+                    rawItems, frame, layer, iv =>
                     {
-                        if (KeyframeSelectorSafety.IsAmbiguousMatch(target, info.item))
-                            return (null, 0, 0, Failure("ITEM_COORDINATES_AMBIGUOUS",
-                                "同じframe/layerに複数のアイテムがあります。item_idで指定してください"));
-                        target = info.item;
-                        foundFrame = info.frame;
-                        foundLayer = info.layer;
-                        break;
-                    }
+                        var info = ReadItemInfo(iv);
+                        return (info.item, info.frame, info.layer);
+                    });
+                if (match.ambiguous)
+                    return (null, 0, 0, Failure("ITEM_COORDINATES_AMBIGUOUS",
+                        "同じframe/layerに複数のアイテムがあります。item_idで指定してください"));
+                target = match.item;
+                if (target != null)
+                {
+                    foundFrame = frame;
+                    foundLayer = layer;
                 }
             }
             if (target == null)
@@ -271,6 +373,9 @@ namespace YMM4McpPlugin
         {
             var frames = ReadFrameList(anim);
             var values = ReadValueList(anim);
+            if (!KeyframeMutationVerification.HasReadableLayout(frames, values))
+                throw new InvalidOperationException(
+                    "Animation Frames/Values layout is inconsistent");
             var result = new List<object>();
             bool valuesHasStart = values.Count == frames.Count + 1;
             if (frames.Count == 0)
@@ -294,36 +399,22 @@ namespace YMM4McpPlugin
         private static List<int> ReadFrameList(object anim)
         {
             var keyFrames = GetPropObj(anim, "KeyFrames") ?? anim;
-            var framesObj = GetPropObj(keyFrames, "Frames") ?? GetPropObj(keyFrames, "FrameList") ?? GetPropEnum(keyFrames, "Frames");
-            var list = new List<int>();
-            if (framesObj is IEnumerable enumerable && framesObj is not string)
-            {
-                foreach (var x in enumerable)
-                {
-                    if (x == null) continue;
-                    if (int.TryParse(Convert.ToString(x, CultureInfo.InvariantCulture), out int frame) && frame >= 0)
-                        list.Add(frame);
-                }
-            }
-            return list;
+            var framesObj = GetPropObj(keyFrames, "Frames") ??
+                GetPropObj(keyFrames, "FrameList") ?? GetPropEnum(keyFrames, "Frames");
+            if (framesObj == null) return new List<int>();
+            if (framesObj is not IEnumerable enumerable || framesObj is string)
+                throw new InvalidOperationException("Animation Frames is not enumerable");
+            return KeyframeMutationVerification.ParseObservedFrames(enumerable);
         }
 
         private static List<double> ReadValueList(object anim)
         {
             var valuesObj = GetPropObj(anim, "Values") ?? GetPropEnum(anim, "Values");
-            var list = new List<double>();
-            if (valuesObj is IEnumerable enumerable && valuesObj is not string)
-            {
-                foreach (var x in enumerable)
-                {
-                    if (x == null) continue;
-                    var inner = GetPropObj(x, "Value") ?? x;
-                    if (double.TryParse(Convert.ToString(inner, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
-                        && double.IsFinite(value))
-                        list.Add(value);
-                }
-            }
-            return list;
+            if (valuesObj == null) return new List<double>();
+            if (valuesObj is not IEnumerable enumerable || valuesObj is string)
+                throw new InvalidOperationException("Animation Values is not enumerable");
+            return KeyframeMutationVerification.ParseObservedValues(
+                enumerable, entry => GetPropObj(entry, "Value") ?? entry);
         }
 
         private static double? TryGetDefaultValue(object anim)

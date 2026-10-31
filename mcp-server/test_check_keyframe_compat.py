@@ -19,6 +19,9 @@ class FakeYmm4:
         self.posts = []
         self.revision = 1
         self.fail_set = None
+        self.fail_reedit = None
+        self.bad_reedit_value = None
+        self.unversioned_reedit = None
         self.timeout_after_failed_set = False
         self.omit_set_revision = False
         self.external_change_after_unversioned_set = False
@@ -71,7 +74,7 @@ class FakeYmm4:
                 self.frames["Opacity"][0]["value"] += 1
                 self.revision += 1
             if (prop == self.external_change_before_cleanup
-                    and self.property_get_count[prop] == 4):
+                    and self.property_get_count[prop] == 5):
                 # Simulate a second editor replacing the just-inserted frame
                 # between probe readback and the cleanup GET.
                 self.frames[prop][-1]["value"] += 50
@@ -93,10 +96,20 @@ class FakeYmm4:
                 return httpx.Response(200, json={"success": False,
                                                   "error_code": "REVISION_CONFLICT"})
             value = body["value"]
-            if prop == self.bad_value:
+            existing = [f for f in self.frames[prop] if f["at"] == at]
+            is_reedit = bool(existing)
+            if prop == self.bad_value or (is_reedit and prop == self.bad_reedit_value):
                 value += 10
-            self.frames[prop].append({"at": at, "value": value})
+            if existing:
+                existing[0]["value"] = value
+            else:
+                self.frames[prop].append({"at": at, "value": value})
             self.revision += 1
+            if is_reedit and prop == self.fail_reedit:
+                return httpx.Response(200, json={"success": False,
+                                                  "error_code": "KEYFRAME_METHOD_UNAVAILABLE"})
+            if is_reedit and prop == self.unversioned_reedit:
+                return httpx.Response(200, json={"success": True})
             if prop == self.fail_set:
                 # The host can mutate and then report failure. Another editor
                 # may also modify this item before the probe can read it back.
@@ -146,13 +159,40 @@ class LiveProbeProtocolTests(unittest.TestCase):
     def test_success_sets_reads_and_removes_both_properties(self):
         fake = FakeYmm4()
         probe(fake)
-        self.assertEqual(len(fake.posts), 4)
+        self.assertEqual(len(fake.posts), 6)
         self.assertEqual([p["action"] for p in fake.posts],
-                         ["set", "remove", "set", "remove"])
+                         ["set", "set", "remove", "set", "set", "remove"])
         self.assertEqual([p["prop"] for p in fake.posts],
-                         ["Zoom", "Zoom", "X", "X"])
+                         ["Zoom", "Zoom", "Zoom", "X", "X", "X"])
+        self.assertAlmostEqual(fake.posts[1]["value"], 1.125)
+        self.assertAlmostEqual(fake.posts[4]["value"], 72.0)
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertEqual([f["at"] for f in fake.frames["X"]], [0])
+
+    def test_wrong_reedit_value_fails_and_removes_only_own_frame(self):
+        fake = FakeYmm4()
+        fake.bad_reedit_value = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "wrong value after re-edit"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts],
+                         ["set", "set", "remove"])
+        self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
+
+    def test_reedit_failure_after_mutation_refuses_stale_cleanup(self):
+        fake = FakeYmm4()
+        fake.fail_reedit = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*changed after readback"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "set"])
+        self.assertEqual(len(fake.frames["Zoom"]), 2)
+
+    def test_reedit_without_revision_refuses_stale_cleanup(self):
+        fake = FakeYmm4()
+        fake.unversioned_reedit = "Zoom"
+        with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*changed after readback"):
+            probe(fake)
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "set"])
+        self.assertEqual(len(fake.frames["Zoom"]), 2)
 
     def test_existing_keyframe_aborts_before_any_write(self):
         fake = FakeYmm4()
@@ -196,7 +236,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
         fake.external_change_before_second_write = True
         with self.assertRaisesRegex(ProbeError, "changed before write"):
             probe(fake)
-        self.assertEqual([p["action"] for p in fake.posts], ["set", "remove"])
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "set", "remove"])
         self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
         self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
 
@@ -213,8 +253,8 @@ class LiveProbeProtocolTests(unittest.TestCase):
         fake.external_change_before_cleanup = "Zoom"
         with self.assertRaisesRegex(ProbeError, "CLEANUP FAILED.*changed after readback"):
             probe(fake)
-        self.assertEqual([p["action"] for p in fake.posts], ["set"])
-        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.25})
+        self.assertEqual([p["action"] for p in fake.posts], ["set", "set"])
+        self.assertEqual(fake.frames["Zoom"][-1], {"at": 24, "value": 51.125})
 
     def test_out_of_bounds_frame_rejected_before_write(self):
         fake = FakeYmm4()
@@ -334,7 +374,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertNotEqual(fake.frames["Zoom"][0]["value"], 1.0)
-        self.assertEqual(len(fake.posts), 2)
+        self.assertEqual(len(fake.posts), 3)
 
     def test_cleanup_rejects_collateral_damage_to_other_animation(self):
         fake = FakeYmm4()
@@ -343,7 +383,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
             probe(fake)
         self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
         self.assertNotEqual(fake.frames["X"][0]["value"], 0.0)
-        self.assertEqual(len(fake.posts), 2)
+        self.assertEqual(len(fake.posts), 3)
 
     def test_cleanup_rejects_damage_to_unrelated_animation(self):
         fake = FakeYmm4()
@@ -353,7 +393,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
         self.assertEqual(fake.frames["Zoom"], [{"at": 0, "value": 1.0}])
         self.assertEqual(fake.frames["X"], [{"at": 0, "value": 0.0}])
         self.assertEqual(fake.frames["Opacity"][0]["value"], 101.0)
-        self.assertEqual(len(fake.posts), 2)
+        self.assertEqual(len(fake.posts), 3)
 
 
 if __name__ == "__main__":

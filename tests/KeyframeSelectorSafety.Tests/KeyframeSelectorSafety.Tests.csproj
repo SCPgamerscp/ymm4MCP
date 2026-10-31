@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/KeyframeSelectorSafety.cs" Link="KeyframeSelectorSafety.cs" />
+    <Compile Include="../../YMM4McpPlugin/KeyframeMutationVerification.cs" Link="KeyframeMutationVerification.cs" />
   </ItemGroup>
 </Project>

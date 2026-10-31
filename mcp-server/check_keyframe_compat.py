@@ -1,7 +1,7 @@
 """Opt-in YMM4 4.56.x keyframe end-to-end smoke test for Issue #140.
 
 Run only on a disposable copy of a project with a test image item.
-The script adds and then removes *new* keyframes; it does not save the project.
+The script inserts, re-edits, and then removes *new* keyframes; it does not save the project.
 It deliberately refuses to overwrite existing keyframes at the test frame.
 """
 from __future__ import annotations
@@ -208,6 +208,32 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                     or not math.isclose(actual, value, rel_tol=1e-5, abs_tol=1e-5)):
                 raise ProbeError(f"{prop}: wrong value after insertion: {actual!r}")
             print(f"PASS {prop}: inserted frame={at} value={actual}")
+            # Exercise the second half of #140: editing an EXISTING keyframe.
+            # Use a distinct, finite value without changing the frame. This
+            # checks that the host replaces rather than appends a duplicate.
+            reedit_value = value * 0.9 if abs(value) >= 1.0 else value + 0.5
+            reedit = api(client, base, headers, "POST", "/items/keyframe",
+                         {"item_id": item_id, "expected_revision": cleanup_revision,
+                          "prop": prop, "action": "set", "at": at,
+                          "value": reedit_value})
+            new_revision = reedit.get("revision")
+            if not isinstance(new_revision, str) or not new_revision:
+                # Keep the last acknowledged revision. If the host actually
+                # mutated, the cleanup guard below will refuse a stale write.
+                raise ProbeError(f"{prop}: re-edit succeeded without revision")
+            cleanup_revision = new_revision
+            frames, readback_revision = keyframes(client, base, headers, item_id, prop)
+            if readback_revision != cleanup_revision:
+                raise ProbeError(f"{prop}: item changed after re-edit; refusing cleanup")
+            matches = [f for f in frames if f["at"] == at]
+            if len(matches) != 1:
+                raise ProbeError(f"{prop}: re-edit created a missing or duplicate frame")
+            actual = matches[0].get("value")
+            if (type(actual) not in (int, float) or not math.isfinite(actual)
+                    or not math.isclose(actual, reedit_value,
+                                        rel_tol=1e-5, abs_tol=1e-5)):
+                raise ProbeError(f"{prop}: wrong value after re-edit: {actual!r}")
+            print(f"PASS {prop}: re-edited frame={at} value={actual}")
         except Exception as exc:
             failure = exc
             # The plugin's revision guard rejects the write before mutation.
@@ -280,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ProbeError, ValueError) as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
-    print("PASS: Zoom/X insertion, readback and removal; save/reopen still needs manual verification")
+    print("PASS: Zoom/X insertion, re-edit, readback and removal; save/reopen still needs manual verification")
     return 0
 
 
