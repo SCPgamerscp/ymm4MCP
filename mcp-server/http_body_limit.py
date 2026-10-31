@@ -29,9 +29,9 @@ def _invalid_media_type(value):
     media_type = value.split(b";", 1)[0].strip()
     parts = media_type.split(b"/")
     # Content-Type describes a concrete representation, not an Accept-style
-    # media range. Wildcards are tokens syntactically but invalid here.
+    # media range. A full-token wildcard is invalid here, while an\n    # embedded asterisk is permitted by the HTTP token grammar.
     return (len(parts) != 2 or
-            any(not part or b"*" in part or
+            any(not part or part == b"*" or
                 any(char not in _HEADER_TOKEN_BYTES for char in part)
                 for part in parts))
 
