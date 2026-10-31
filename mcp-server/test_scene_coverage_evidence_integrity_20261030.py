@@ -1,0 +1,168 @@
+"""Regression tests for scene coverage evidence and trusted type identities."""
+import copy
+import unittest
+
+from editing import MAX_FRAME
+from scene_media import MAX_SCENE_ITEMS, with_coverage
+
+
+def scene(items=None, *, start=0, end=20, **extra):
+    return {"start_frame": start, "end_frame": end,
+            "items": [] if items is None else items, **extra}
+
+
+def video(kind="VideoItem"):
+    return {"type": kind, "visible_start_frame": 0,
+            "visible_end_frame": 20}
+
+
+class SceneCoverageEvidenceIntegrityTests(unittest.TestCase):
+    def test_rejects_malformed_index_containers(self):
+        for value in (None, [], {}, {"scenes": None}, {"scenes": {}},
+                      {"scenes": []}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                with_coverage(value)
+
+    def test_rejects_too_many_scenes(self):
+        with self.assertRaisesRegex(ValueError, "1..200"):
+            with_coverage({"scenes": [scene() for _ in range(201)]})
+
+    def test_rejects_invalid_scene_rows(self):
+        for invalid in (None, [], "scene", 1):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                with_coverage({"scenes": [invalid]})
+
+    def test_rejects_negative_or_oversized_scene_frames(self):
+        for start, end in ((-1, 20), (0, MAX_FRAME + 1)):
+            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+                with_coverage({"scenes": [scene(start=start, end=end)]})
+
+    def test_missing_scene_frame_fields_raise_validation_error(self):
+        for missing in ("start_frame", "end_frame"):
+            bad = scene()
+            del bad[missing]
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                with_coverage({"scenes": [bad]})
+
+    def test_missing_known_item_visible_fields_raise_validation_error(self):
+        for missing in ("visible_start_frame", "visible_end_frame"):
+            bad = video()
+            del bad[missing]
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                with_coverage({"scenes": [scene([bad])]})
+
+    def test_rejects_missing_or_invalid_scene_item_array(self):
+        for invalid in (None, {}, "items", 5):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                bad = scene()
+                bad["items"] = invalid
+                with_coverage({"scenes": [bad]})
+        with self.assertRaises(ValueError):
+            with_coverage({"scenes": [{"start_frame": 0, "end_frame": 20}]})
+
+    def test_rejects_oversized_scene_item_array(self):
+        with self.assertRaisesRegex(ValueError, "bounded array"):
+            with_coverage({"scenes": [scene([{}] * (MAX_SCENE_ITEMS + 1))]})
+
+    def test_rejects_non_object_items_even_when_unknown(self):
+        for invalid in (None, 2, "item", []):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "scene item must be an object"):
+                with_coverage({"scenes": [scene([invalid])]})
+
+    def test_rejects_contradictory_item_count(self):
+        for invalid in (0, 2, True, 1.0, "1", None):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "item_count"):
+                with_coverage({"scenes": [scene([video()], item_count=invalid)]})
+
+    def test_accepts_consistent_item_count(self):
+        result = with_coverage({"scenes": [scene([video()], item_count=1)]})
+        self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
+
+    def test_rejects_duplicate_or_invalid_scene_ids(self):
+        for invalid in ("", " ", "x" * 65, None, "line\nfeed", "bidi\u202e"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "scene IDs"):
+                with_coverage({"scenes": [scene(id=invalid)]})
+        with self.assertRaisesRegex(ValueError, "scene IDs"):
+            with_coverage({"scenes": [scene(id="intro"), scene(start=20, end=40, id="intro")]})
+
+    def test_malformed_type_qualifiers_cannot_hide_gaps(self):
+        for kind in ("Other..VideoItem", ".VideoItem", "Other+.VideoItem",
+                     "Other.\\nVideoItem", "Other.VideoItem+"):
+            with self.subTest(kind=kind):
+                result = with_coverage({"scenes": [scene([video(kind)])]})
+                self.assertEqual(result["scenes"][0]["visual_covered_frames"], 0)
+        # Padded and control-character types are invalid evidence, not
+        # merely unknown types: accepting them can hide real media coverage.
+        for kind in (" VideoItem", "VideoItem ", "Other.\nVideoItem"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                    ValueError, "scene item type"):
+                with_coverage({"scenes": [scene([video(kind)])]})
+
+    def test_legitimate_namespaced_and_nested_types_still_cover(self):
+        for kind in ("VideoItem", "VIDEOITEM",
+                     "YukkuriMovieMaker.Project.Items.VideoItem",
+                     "YukkuriMovieMaker.Items+VideoItem"):
+            with self.subTest(kind=kind):
+                result = with_coverage({"scenes": [scene([video(kind)])]})
+                self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
+
+    def test_source_item_range_must_match_visible_evidence(self):
+        good = {"item_id": "v", "type": "VideoItem", "frame": 0,
+                "end_frame": 20, "visible_start_frame": 0,
+                "visible_end_frame": 20}
+        result = with_coverage({"scenes": [scene([good])]})
+        self.assertEqual(result["scenes"][0]["visual_covered_frames"], 20)
+        for changed in ({"visible_end_frame": 19}, {"visible_start_frame": 1},
+                        {"end_frame": 19}, {"frame": 1}):
+            item = {**good, **changed}
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                    ValueError, "contradicts source"):
+                with_coverage({"scenes": [scene([item])]})
+
+    def test_source_range_clipped_at_scene_boundary_is_valid(self):
+        item = {"item_id": "v", "type": "VideoItem", "frame": 5,
+                "end_frame": 30, "visible_start_frame": 5,
+                "visible_end_frame": 20}
+        result = with_coverage({"scenes": [scene([item])]})
+        self.assertEqual(result["scenes"][0]["visual_covered_frames"], 15)
+
+    def test_source_range_requires_complete_valid_integer_fields(self):
+        good = {"item_id": "v", "type": "VideoItem", "frame": 0,
+                "end_frame": 20, "visible_start_frame": 0,
+                "visible_end_frame": 20}
+        for changed in ({"frame": True}, {"end_frame": 20.0},
+                        {"frame": -1}, {"end_frame": 0},
+                        {"end_frame": MAX_FRAME + 1}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                    ValueError, "source item range"):
+                with_coverage({"scenes": [scene([{**good, **changed}])]})
+        missing = dict(good)
+        del missing["end_frame"]
+        with self.assertRaisesRegex(ValueError, "source item range"):
+            with_coverage({"scenes": [scene([missing])]})
+
+    def test_rejects_duplicate_item_identity_within_scene(self):
+        one = {**video(), "item_id": "same"}
+        with self.assertRaisesRegex(ValueError, "scene item IDs"):
+            with_coverage({"scenes": [scene([one, dict(one)])]})
+
+    def test_rejects_invalid_item_identity_when_supplied(self):
+        for invalid in ("", " ", "x" * 257, None, True, "line\nfeed", "bidi\u202e"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "scene item IDs"):
+                with_coverage({"scenes": [scene([{**video(), "item_id": invalid}])]})
+
+    def test_later_invalid_scene_does_not_mutate_earlier_scene(self):
+        index = {"scenes": [scene([video()], id="first"),
+                            scene([video()], start=20, end=40, id="first")]}
+        original = copy.deepcopy(index)
+        with self.assertRaises(ValueError):
+            with_coverage(index)
+        self.assertEqual(index, original)
+
+
+if __name__ == "__main__":
+    unittest.main()
