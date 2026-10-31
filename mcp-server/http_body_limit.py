@@ -120,6 +120,12 @@ class RequestBodyLimit:
             return await JSONResponse({"error": "Duplicate Content-Type"}, status_code=400)(
                 scope, receive, send)
 
+        # Content-Type is a singleton field, not a comma-separated list. Reject
+        # joined values that could be split differently by downstream parsers.
+        if content_types and (not content_types[0].strip(b" \t") or b"," in content_types[0]):
+            return await JSONResponse({"error": "Invalid Content-Type"}, status_code=400)(
+                scope, receive, send)
+
         lengths = [value for name, value in normalized_headers if name == b"content-length"]
         transfers = [value for name, value in normalized_headers if name == b"transfer-encoding"]
         # Only a single chunked encoding is supported. Reject ambiguous or
