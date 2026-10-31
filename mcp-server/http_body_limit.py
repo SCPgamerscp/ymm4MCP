@@ -87,7 +87,7 @@ class RequestBodyLimit:
                 closing = authority.find(b"]")
                 suffix = authority[closing + 1:] if closing >= 0 else b""
                 valid_authority = (closing > 1 and (not suffix or (suffix.startswith(b":")
-                                   and bool(suffix[1:]) and suffix[1:].isdigit()
+                                   and 1 <= len(suffix[1:]) <= 5 and suffix[1:].isdigit()
                                    and int(suffix[1:]) <= 65535)))
                 if valid_authority:
                     try:
@@ -98,7 +98,7 @@ class RequestBodyLimit:
                 host, sep, port = authority.partition(b":")
                 valid_authority = (bool(host) and b"[" not in authority
                                    and b"]" not in authority
-                                   and (not sep or (bool(port) and port.isdigit()
+                                   and (not sep or (1 <= len(port) <= 5 and port.isdigit()
                                                     and int(port) <= 65535)))
             if not valid_authority:
                 return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
