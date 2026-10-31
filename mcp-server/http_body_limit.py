@@ -19,6 +19,96 @@ MAX_HEADER_BYTES = 64 * 1024
 # RFC 9110 field names are ASCII tokens, not arbitrary header text.
 _HEADER_TOKEN_BYTES = frozenset(b"!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
+# DNS host labels use ASCII letters, digits and interior hyphens.
+_DNS_ALNUM_BYTES = frozenset(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+_DNS_LABEL_BYTES = _DNS_ALNUM_BYTES | {45}
+
+
+def _invalid_media_type(value):
+    """Reject missing or invalid type/subtype tokens before optional parameters."""
+    media_type = value.split(b";", 1)[0].strip()
+    parts = media_type.split(b"/")
+    # Content-Type describes a concrete representation, not an Accept-style
+    # media range. A full-token wildcard is invalid here, while an\n    # embedded asterisk is permitted by the HTTP token grammar.
+    return (len(parts) != 2 or
+            any(not part or part == b"*" or
+                any(char not in _HEADER_TOKEN_BYTES for char in part)
+                for part in parts))
+
+
+def _invalid_content_type_list(value):
+    """Detect joined media types without rejecting quoted parameter commas."""
+    quoted = False
+    escaped = False
+    for char in value:
+        if escaped:
+            escaped = False
+        elif quoted and char == 92:  # quoted-pair escape
+            escaped = True
+        elif char == 34:  # double quote
+            quoted = not quoted
+        elif char == 44 and not quoted:  # comma outside a quoted-string
+            return True
+    return quoted or escaped
+
+
+def _invalid_content_type_parameters(value):
+    """Validate parameter names and values without splitting quoted semicolons."""
+    if b";" not in value:
+        return False
+    quoted = False
+    escaped = False
+    start = value.index(b";") + 1
+    parameters = []
+    for index in range(start, len(value)):
+        char = value[index]
+        if escaped:
+            escaped = False
+        elif quoted and char == 92:
+            escaped = True
+        elif char == 34:
+            quoted = not quoted
+        elif char == 59 and not quoted:
+            parameters.append(value[start:index])
+            start = index + 1
+    if quoted or escaped:
+        return True
+    parameters.append(value[start:])
+    seen_names = set()
+    for parameter in parameters:
+        parameter = parameter.strip(b" \t")
+        if b"=" not in parameter:
+            return True
+        name, raw_value = parameter.split(b"=", 1)
+        name = name.strip(b" \t")
+        raw_value = raw_value.strip(b" \t")
+        if not name or any(char not in _HEADER_TOKEN_BYTES for char in name):
+            return True
+        # Duplicate parameter names are case-insensitive and ambiguous to consumers.
+        canonical_name = name.lower()
+        if canonical_name in seen_names:
+            return True
+        seen_names.add(canonical_name)
+        if raw_value.startswith(b'"'):
+            if len(raw_value) < 2 or not raw_value.endswith(b'"'):
+                return True
+            inner = raw_value[1:-1]
+            escaped = False
+            for char in inner:
+                if escaped:
+                    if (char < 32 and char != 9) or char == 127:
+                        return True
+                    escaped = False
+                elif char == 92:
+                    escaped = True
+                elif char == 34 or (char < 32 and char != 9) or char == 127:
+                    return True
+            if escaped:
+                return True
+        elif not raw_value or any(char not in _HEADER_TOKEN_BYTES for char in raw_value):
+            return True
+    return False
+
 
 class RequestBodyLimit:
     def __init__(self, app, max_bytes=MAX_REQUEST_BYTES):
@@ -96,13 +186,32 @@ class RequestBodyLimit:
                         valid_authority = False
             else:
                 host, sep, port = authority.partition(b":")
-                valid_authority = (bool(host) and b"[" not in authority
-                                   and b"]" not in authority
+                valid_authority = (bool(host) and len(host.rstrip(b".")) <= 253
+                                   and all(1 <= len(label) <= 63 and label[0] in _DNS_ALNUM_BYTES
+                                           and label[-1] in _DNS_ALNUM_BYTES
+                                           and all(char in _DNS_LABEL_BYTES for char in label)
+                                           for label in host.rstrip(b".").split(b"."))
+                                   and host != b"." and not host.startswith(b".")
+                                   and not host.endswith(b"..")
+                                   and b"[" not in authority and b"]" not in authority
                                    and (not sep or (1 <= len(port) <= 5 and port.isdigit()
                                                     and int(port) <= 65535)))
             if not valid_authority:
                 return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                     scope, receive, send)
+
+        # A duplicated Content-Type may be interpreted inconsistently by parsers.
+        content_types = [value for name, value in normalized_headers if name == b"content-type"]
+        if len(content_types) > 1:
+            return await JSONResponse({"error": "Duplicate Content-Type"}, status_code=400)(
+                scope, receive, send)
+
+        # Content-Type is a singleton field, not a comma-separated list. Reject
+        # joined values that could be split differently by downstream parsers.
+        if content_types and (not content_types[0].strip(b" \t") or _invalid_media_type(content_types[0]) or _invalid_content_type_list(content_types[0]) or
+                              _invalid_content_type_parameters(content_types[0])):
+            return await JSONResponse({"error": "Invalid Content-Type"}, status_code=400)(
+                scope, receive, send)
 
         lengths = [value for name, value in normalized_headers if name == b"content-length"]
         transfers = [value for name, value in normalized_headers if name == b"transfer-encoding"]
@@ -155,6 +264,10 @@ class RequestBodyLimit:
                 if empty_events > MAX_EMPTY_REQUEST_EVENTS:
                     return await JSONResponse({"error": "Too many empty request chunks"}, status_code=413)(
                         scope, receive, send)
+            elif chunk:
+                # The empty-frame threshold measures consecutive lack of progress.
+                # A data-bearing frame resets it; the total event cap still applies.
+                empty_events = 0
             if len(chunk) > self.max_bytes - len(body):
                 return await JSONResponse({"error": "MCP request body too large"}, status_code=413)(
                     scope, receive, send)
