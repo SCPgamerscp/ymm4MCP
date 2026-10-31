@@ -83,7 +83,7 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_apply_uses_revision_chain_and_verifies(self):
         planned = ducking.plan(ITEMS["items"][0], ITEMS["items"][1:], 100)
-        verified = {"success": True, "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
+        verified = {"success": True, "item_id": "bgm:1", "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
             {"at": 0, "value": 100}, *planned]}]}
         gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, verified]
         posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
@@ -103,7 +103,8 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
                  {"success": True, "revision": "r2"},
                  {"success": False, "error_code": "KEYFRAME_METHOD_UNAVAILABLE"}])):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
-        self.assertEqual(result["error_code"], "BGM_DUCKING_PARTIAL")
+        self.assertEqual(result["error_code"], "BGM_DUCKING_OUTCOME_UNKNOWN")
+        self.assertTrue(result["outcome_unknown"])
         self.assertEqual(len(result["applied"]), 1)
         self.assertEqual(result["backup_path"], "C:/backup/cp.ymmp")
 
