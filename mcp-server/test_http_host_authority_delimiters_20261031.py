@@ -31,6 +31,7 @@ class HostAuthorityTests(unittest.TestCase):
 
         for host in (b"example.com ", b" example.com", b"example.com\t", b"foo bar",
                      b"example.com/path", b"example.com?query", b"example.com#fragment",
+                     b"example.com\\evil", b"example.com%2fadmin", b"example.com%5cadmin",
                      b"user@example.com", b"example.com\x7f",
                      b"example.com\x80", b"example.com\xff", b"example.com:abc", b"example.com:",
                      b"example.com:80:90", b"[::1", b"[::1]suffix",
