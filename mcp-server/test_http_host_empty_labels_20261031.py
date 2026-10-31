@@ -53,6 +53,19 @@ class HostEmptyLabelTests(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertEqual(asyncio.run(request(host)), [True, 200])
 
+    def test_reject_invalid_dns_label_syntax(self):
+        for host in (b"-example.com", b"example-.com", b"foo.-bar",
+                     b"foo.bar-", b"foo_bar.com", b"foo!bar.com",
+                     b"foo+bar.com", b"foo=bar.com", b"foo:bar:443"):
+            with self.subTest(host=host):
+                self.assertEqual(asyncio.run(request(host)), [400])
+
+    def test_accept_interior_hyphens_and_digits(self):
+        for host in (b"a-b.example", b"123.example", b"a1-b2.example:443",
+                     b"xn--bcher-kva.example", b"localhost."):
+            with self.subTest(host=host):
+                self.assertEqual(asyncio.run(request(host)), [True, 200])
+
     def test_accept_normal_and_trailing_dot(self):
         for host in (b"localhost", b"example.com", b"example.com.",
                      b"example.com:443", b"[::1]:8000"):
