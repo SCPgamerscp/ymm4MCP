@@ -76,7 +76,7 @@ class RequestBodyLimit:
         # differently by upstream proxies and the application router.
         hosts = [value for name, value in normalized_headers if name == b"host"]
         if len(hosts) > 1 or (hosts and (not hosts[0] or any(
-                char <= 32 or char >= 127 or char in b",/@?#" for char in hosts[0]))):
+                char <= 32 or char >= 127 or char in b",/@?#\\%" for char in hosts[0]))):
             return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                 scope, receive, send)
 
