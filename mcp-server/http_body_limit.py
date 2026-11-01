@@ -156,14 +156,6 @@ class RequestBodyLimit:
                     scope, receive, send)
             normalized_headers.append((name.lower(), value))
 
-        # Apply the header count, byte budget, and field syntax checks to all
-        # HTTP methods, including GET/DELETE, before dispatching downstream.
-        if method != "POST":
-            if method.upper() == "POST":
-                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
-                    scope, receive, send)
-            return await self.app(scope, receive, send)
-
         # Multiple Host fields or comma-joined authorities can be interpreted
         # differently by upstream proxies and the application router.
         hosts = [value for name, value in normalized_headers if name == b"host"]
@@ -201,6 +193,14 @@ class RequestBodyLimit:
             if not valid_authority:
                 return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                     scope, receive, send)
+
+        # Apply the header count, byte budget, and field syntax checks to all
+        # HTTP methods, including GET/DELETE, before dispatching downstream.
+        if method != "POST":
+            if method.upper() == "POST":
+                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
+                    scope, receive, send)
+            return await self.app(scope, receive, send)
 
         # A duplicated Content-Type may be interpreted inconsistently by parsers.
         content_types = [value for name, value in normalized_headers if name == b"content-type"]
