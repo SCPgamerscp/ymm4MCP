@@ -109,7 +109,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
              not isinstance(report, dict) or report.get("item_id") != expected_item_id)):
         return False
     if (expected_start_frame is not None and
-            (type(expected_start_frame) is not int or expected_start_frame < 0)):
+            (type(expected_start_frame) is not int or not 0 <= expected_start_frame <= 2_147_483_647)):
         return False
     if (not valid_identifier(revision, max_length=256) or
             not isinstance(report, dict) or report.get("success") is not True or
@@ -146,7 +146,8 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         return False
     seen = set()
     for key in found:
-        if not isinstance(key, dict) or not isinstance(key.get("value"), (int, float)):
+        if (not isinstance(key, dict) or isinstance(key.get("value"), bool) or
+                not isinstance(key.get("value"), (int, float))):
             return False
         try:
             at = integer(key.get("at"), "keyframe.at")
@@ -158,6 +159,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             return False
         if (expected_start_frame is not None and "absolute_frame" in key and
                 (type(key["absolute_frame"]) is not int or
+                 expected_start_frame + at > 2_147_483_647 or
                  key["absolute_frame"] != expected_start_frame + at)):
             return False
         seen.add(at)
