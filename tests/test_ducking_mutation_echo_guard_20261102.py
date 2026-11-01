@@ -14,7 +14,8 @@ class MutationEchoGuardTests(unittest.TestCase):
                       {"at": True, "value": 0.3},
                       {"at": 3, "value": True},
                       {"at": 3, "value": "0.3"},
-                      {"at": -1, "value": 0.3}):
+                      {"at": -1, "value": 0.3},
+                      {"at": 2_147_483_648, "value": 0.3}):
             with self.subTest(point=point):
                 self.assertFalse(verify_mutation_point(echo, point))
 
