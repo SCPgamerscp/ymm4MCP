@@ -194,14 +194,6 @@ class RequestBodyLimit:
                 return await JSONResponse({"error": "Invalid Host header"}, status_code=400)(
                     scope, receive, send)
 
-        # Apply the header count, byte budget, and field syntax checks to all
-        # HTTP methods, including GET/DELETE, before dispatching downstream.
-        if method != "POST":
-            if method.upper() == "POST":
-                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
-                    scope, receive, send)
-            return await self.app(scope, receive, send)
-
         # A duplicated Content-Type may be interpreted inconsistently by parsers.
         content_types = [value for name, value in normalized_headers if name == b"content-type"]
         if len(content_types) > 1:
@@ -238,6 +230,15 @@ class RequestBodyLimit:
         if declared is not None and declared > self.max_bytes:
             return await JSONResponse({"error": "MCP request body too large"}, status_code=413)(
                 scope, receive, send)
+
+        # Validate framing on every method before handing the request to the
+        # downstream app. Conflicting Content-Length/Transfer-Encoding on GET
+        # or DELETE is just as ambiguous as it is on POST.
+        if method != "POST":
+            if method.upper() == "POST":
+                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
+                    scope, receive, send)
+            return await self.app(scope, receive, send)
 
         body = bytearray()
         events = 0
