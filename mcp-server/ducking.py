@@ -78,7 +78,7 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
 def verify_mutation_point(keyframes: list, point: dict) -> bool:
     """Check a host mutation echo before allowing the next write."""
     if (not isinstance(keyframes, list) or len(keyframes) > 2001 or
-            not isinstance(point, dict) or type(point.get("at")) is not int or point["at"] < 0 or
+            not isinstance(point, dict) or type(point.get("at")) is not int or not 0 <= point["at"] <= 2_147_483_647 or
             isinstance(point.get("value"), bool) or
             not isinstance(point.get("value"), (int, float))):
         return False
