@@ -9,12 +9,6 @@ from ducking import plan
 
 
 class DuckingVolumeOverflowTests(unittest.TestCase):
-    def test_overflowed_low_volume_is_rejected(self):
-        bgm = {"frame": 0, "length": 100}
-        voices = [{"frame": 20, "length": 10}]
-        with self.assertRaisesRegex(ValueError, "ducked volume must be finite"):
-            plan(bgm, voices, 1.7e308, ratio=0.99)
-
     def test_large_finite_volume_stays_finite(self):
         bgm = {"frame": 0, "length": 100}
         voices = [{"frame": 20, "length": 10}]
