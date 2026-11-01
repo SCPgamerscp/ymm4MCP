@@ -140,6 +140,9 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             if expected[at] <= 0:
                 return False
         expected.setdefault(0, base_volume)
+        if (expected_start_frame is not None and
+                any(expected_start_frame + at > 2_147_483_647 for at in expected)):
+            return False
     except (ValueError, OverflowError):
         return False
     if not isinstance(found, list) or len(found) > 2001 or len(found) != len(expected):
