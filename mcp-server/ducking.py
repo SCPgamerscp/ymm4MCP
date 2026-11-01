@@ -84,6 +84,11 @@ def verify_mutation_point(keyframes: list, point: dict) -> bool:
         return False
     matches = [key for key in keyframes if isinstance(key, dict) and
                type(key.get("at")) is int and key["at"] == point["at"]]
+    # Host echoes must preserve JSON number types; numeric strings are not proof
+    # that the requested keyframe was actually stored as a numeric value.
+    if len(matches) == 1 and (isinstance(matches[0].get("value"), bool) or
+                              not isinstance(matches[0].get("value"), (int, float))):
+        return False
     if len(matches) != 1:
         return False
     try:
