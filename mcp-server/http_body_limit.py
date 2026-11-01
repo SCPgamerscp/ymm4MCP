@@ -127,12 +127,6 @@ class RequestBodyLimit:
                 scope, receive, send)
         # HTTP method tokens are case-sensitive (RFC 9110). Do not silently
         # reinterpret a different token such as "post" as POST.
-        if method != "POST":
-            if method.upper() == "POST":
-                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
-                    scope, receive, send)
-            return await self.app(scope, receive, send)
-
         headers = scope.get("headers", [])
         if not isinstance(headers, (list, tuple)) or len(headers) > MAX_HEADER_FIELDS:
             return await JSONResponse({"error": "Invalid request headers"}, status_code=400)(
@@ -161,6 +155,14 @@ class RequestBodyLimit:
                 return await JSONResponse({"error": "Request headers too large"}, status_code=431)(
                     scope, receive, send)
             normalized_headers.append((name.lower(), value))
+
+        # Apply the header count, byte budget, and field syntax checks to all
+        # HTTP methods, including GET/DELETE, before dispatching downstream.
+        if method != "POST":
+            if method.upper() == "POST":
+                return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
+                    scope, receive, send)
+            return await self.app(scope, receive, send)
 
         # Multiple Host fields or comma-joined authorities can be interpreted
         # differently by upstream proxies and the application router.
