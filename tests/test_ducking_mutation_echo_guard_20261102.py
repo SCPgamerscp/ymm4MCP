@@ -23,6 +23,9 @@ class MutationEchoGuardTests(unittest.TestCase):
         self.assertTrue(verify_mutation_point([point.copy()], point))
         self.assertFalse(verify_mutation_point([point.copy(), point.copy()], point))
         self.assertFalse(verify_mutation_point([{"at": 3, "value": 0.4}], point))
+        # A string echo is not evidence that the host stored a numeric keyframe.
+        self.assertFalse(verify_mutation_point([{"at": 3, "value": "0.3"}], point))
+        self.assertFalse(verify_mutation_point([{"at": 3, "value": True}], point))
 
 
 if __name__ == "__main__":
