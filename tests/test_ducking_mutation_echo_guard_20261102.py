@@ -131,5 +131,14 @@ class MutationEchoGuardTests(unittest.TestCase):
         del report["animations"][0]["keyframes"][1]["absolute_frame"]
         self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
 
+    def test_duplicate_unrelated_animation_properties_fail_closed(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]},
+            {"prop": "Zoom", "keyframes": []},
+            {"prop": "Zoom", "keyframes": []}]}
+        self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        report["animations"].pop()
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
 if __name__ == "__main__":
     unittest.main()
