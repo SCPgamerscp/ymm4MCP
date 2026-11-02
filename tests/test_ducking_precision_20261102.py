@@ -19,6 +19,12 @@ class DuckingPrecisionTests(unittest.TestCase):
         points = plan(self.BGM, self.VOICES, 1.0, ratio=0.3)
         self.assertIn({"at": 20, "value": 0.3}, points)
 
+    def test_no_voice_overlap_skips_unnecessary_precision_failure(self):
+        for voices in ([], [{"frame": 200, "length": 10}]):
+            with self.subTest(voices=voices):
+                self.assertEqual(plan(self.BGM, voices, 1e-323, ratio=0.9), [])
+                self.assertEqual(plan(self.BGM, voices, 5e-324, ratio=0.5), [])
+
     def test_underflow_to_zero_still_rejected(self):
         with self.assertRaisesRegex(ValueError, "underflows to zero"):
             plan(self.BGM, self.VOICES, 5e-324, ratio=0.5)
