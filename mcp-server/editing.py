@@ -116,8 +116,9 @@ def plan_script(args):
 
 def _valid_item_id(value):
     """Only usable host IDs may be referenced in repair suggestions."""
-    return (isinstance(value, str) and bool(value.strip()) and
-            not any(ord(char) < 32 or ord(char) == 127 or
+    return (isinstance(value, str) and 1 <= len(value) <= 1024 and
+            value == value.strip() and
+            not any(ord(char) < 32 or 127 <= ord(char) <= 159 or
                     0xD800 <= ord(char) <= 0xDFFF for char in value))
 
 
