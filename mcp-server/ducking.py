@@ -147,6 +147,9 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         return False
     # Every animation must have a well-formed curve. A corrupt unrelated
     # curve means the host read-back is not a trustworthy complete snapshot.
+    # All animations belong to the same timeline item. A consistent origin
+    # within each curve is insufficient if different properties disagree.
+    item_start = None
     for animation in report["animations"]:
         keys = animation["keyframes"]
         if len(keys) > 2001:
@@ -180,6 +183,12 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                 observed_start = start
         if 0 < absolute_count < len(keys):
             return False
+        if observed_start is not None:
+            if item_start is not None and observed_start != item_start:
+                return False
+            item_start = observed_start
+            if expected_start_frame is not None and observed_start != expected_start_frame:
+                return False
     volume = [a for a in report["animations"] if a["prop"] == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
