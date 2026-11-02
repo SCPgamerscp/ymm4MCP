@@ -93,7 +93,11 @@ def plan_script(args):
                 raise ValueError(f"lines[{index}].{key} contains an invalid Unicode surrogate")
         if line["character"] != line["character"].strip():
             raise ValueError(f"lines[{index}].character must not have surrounding whitespace")
-        if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in line["character"]):
+        # Bidirectional formatting controls can visually spoof speaker names.
+        if any(ord(char) < 32 or 127 <= ord(char) <= 159 or
+               ord(char) in (0x061C, 0x200E, 0x200F) or
+               0x202A <= ord(char) <= 0x202E or
+               0x2066 <= ord(char) <= 0x2069 for char in line["character"]):
             raise ValueError(f"lines[{index}].character contains a control character")
         if len(line["character"]) > 256:
             raise ValueError(f"lines[{index}].character exceeds 256 characters")
