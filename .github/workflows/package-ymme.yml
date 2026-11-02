@@ -24,7 +24,7 @@ jobs:
       - name: Test timeline QA stable IDs and script Unicode validation
         run: |
           python -m pip install pytest
-          python -m pytest -q tests/test_qa_stable_id_validation_20261102.py tests/test_script_unicode_surrogates_20261102.py
+          python -m pytest -q tests/test_qa_stable_id_validation_20261102.py tests/test_script_unicode_surrogates_20261102.py tests/test_script_character_length_20261102.py
 
   package:
     runs-on: windows-latest
