@@ -46,5 +46,15 @@ class MutationEchoGuardTests(unittest.TestCase):
             report, "rev1", [{"at": 1, "value": 0.3}], 1.0,
             expected_start_frame=2_147_483_648))
 
+    def test_absolute_frame_echo_is_bounded_even_without_start_hint(self):
+        for invalid in (-1, 2_147_483_648, True, "0"):
+            report = {"success": True, "revision": "rev1", "animations": [
+                {"prop": "Volume", "keyframes": [
+                    {"at": 0, "value": 1.0, "absolute_frame": invalid}]}]}
+            with self.subTest(absolute_frame=invalid):
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        report["animations"][0]["keyframes"][0]["absolute_frame"] = 0
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
 if __name__ == "__main__":
     unittest.main()
