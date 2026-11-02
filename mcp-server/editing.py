@@ -72,7 +72,8 @@ def plan_script(args):
         raise ValueError("lines must contain 1..500 dialogue entries")
     fps = integer(args.get("fps", 30), "fps", 1, 240)
     speed = args.get("chars_per_sec", 5)
-    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0 < speed <= 1000 or not math.isfinite(speed):
+    if (isinstance(speed, bool) or not isinstance(speed, (int, float)) or
+            not 0 < speed <= 1000):
         raise ValueError("chars_per_sec must be finite and in (0, 1000]")
     frame = integer(args.get("start_frame", 0), "start_frame")
     gap = integer(args.get("gap", 0), "gap")
