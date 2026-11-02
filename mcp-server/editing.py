@@ -87,6 +87,8 @@ def plan_script(args):
                 raise ValueError(f"lines[{index}].{key} is required")
             if any(0xD800 <= ord(char) <= 0xDFFF for char in line[key]):
                 raise ValueError(f"lines[{index}].{key} contains an invalid Unicode surrogate")
+        if len(line["character"]) > 256:
+            raise ValueError(f"lines[{index}].character exceeds 256 characters")
         if len(line["text"]) > 10000:
             raise ValueError(f"lines[{index}].text exceeds 10000 characters")
         if "layer" in line:
