@@ -55,6 +55,8 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
             merged.append((left, right))
     points = {}
     low = base_volume * ratio
+    if not math.isfinite(low):
+        raise ValueError("ducked volume must be finite")
     if low == 0:
         raise ValueError("duck_ratio underflows to zero volume")
     for left, right in merged:
