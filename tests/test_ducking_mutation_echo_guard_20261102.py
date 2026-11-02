@@ -69,6 +69,27 @@ class MutationEchoGuardTests(unittest.TestCase):
         report["animations"].append({"prop": "Zoom", "keyframes": []})
         self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
 
+    def test_full_curve_rejects_corrupt_unrelated_animation_curves(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]},
+            {"prop": "Zoom", "keyframes": [{"at": 5, "value": 1.0}]}]}
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+        for corrupt in (
+            [None], [{"at": True, "value": 1.0}],
+            [{"at": -1, "value": 1.0}],
+            [{"at": 2_147_483_648, "value": 1.0}],
+            [{"at": 5, "value": float("nan")}],
+            [{"at": 5, "value": float("inf")}],
+            [{"at": 5, "value": True}],
+            [{"at": 5, "value": "1.0"}],
+            [{"at": 5, "value": 1.0}, {"at": 5, "value": 2.0}],
+        ):
+            with self.subTest(corrupt=corrupt):
+                report["animations"][1]["keyframes"] = corrupt
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        report["animations"][1]["keyframes"] = [{"at": 5, "value": 1.0}]
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
     def test_full_curve_rejects_host_boolean_values(self):
         report = {"success": True, "revision": "rev1", "animations": [
             {"prop": "Volume", "keyframes": [{"at": 0, "value": True}]}]}
