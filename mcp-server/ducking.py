@@ -168,6 +168,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
     # All absolute positions in a host snapshot must describe the same item
     # start, even when the caller did not supply an expected start frame.
     observed_start = None
+    absolute_frame_count = 0
     for key in found:
         if (not isinstance(key, dict) or isinstance(key.get("value"), bool) or
                 not isinstance(key.get("value"), (int, float))):
@@ -181,6 +182,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                 not math.isclose(value, expected[at], rel_tol=1e-9, abs_tol=0.0)):
             return False
         if "absolute_frame" in key:
+            absolute_frame_count += 1
             absolute = key["absolute_frame"]
             if (type(absolute) is not int or not at <= absolute <= 2_147_483_647 or
                     (expected_start_frame is not None and
@@ -191,4 +193,8 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                 return False
             observed_start = start
         seen.add(at)
+    # Mixed absolute/relative-only snapshots cannot establish a coherent
+    # timeline origin for the entire returned curve.
+    if 0 < absolute_frame_count < len(found):
+        return False
     return True
