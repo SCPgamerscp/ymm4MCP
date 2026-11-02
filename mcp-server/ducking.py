@@ -140,7 +140,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
            not a["prop"] or not isinstance(a.get("keyframes"), list)
            for a in report["animations"]):
         return False
-    volume = [a for a in report["animations"] if a["prop"] == "Volume"]
+    # Duplicate property entries make the host snapshot ambiguous, even when\n    # the Volume entry itself appears valid.\n    props = [a["prop"] for a in report["animations"]]\n    if len(set(props)) != len(props):\n        return False\n    volume = [a for a in report["animations"] if a["prop"] == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
     # abs(actual - NaN) >= tolerance is False for *every* actual value.
