@@ -165,6 +165,9 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
     if not isinstance(found, list) or len(found) > 2001 or len(found) != len(expected):
         return False
     seen = set()
+    # All absolute positions in a host snapshot must describe the same item
+    # start, even when the caller did not supply an expected start frame.
+    observed_start = None
     for key in found:
         if (not isinstance(key, dict) or isinstance(key.get("value"), bool) or
                 not isinstance(key.get("value"), (int, float))):
@@ -183,5 +186,9 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                     (expected_start_frame is not None and
                      absolute != expected_start_frame + at)):
                 return False
+            start = absolute - at
+            if observed_start is not None and start != observed_start:
+                return False
+            observed_start = start
         seen.add(at)
     return True
