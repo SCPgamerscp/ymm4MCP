@@ -103,5 +103,19 @@ class MutationEchoGuardTests(unittest.TestCase):
         report["animations"][0]["keyframes"][1]["absolute_frame"] = 30
         self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
 
+    def test_partial_absolute_frame_snapshots_fail_closed(self):
+        points = [{"at": 10, "value": 0.3}]
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 20},
+                {"at": 10, "value": 0.3}]}]}
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        report["animations"][0]["keyframes"][1]["absolute_frame"] = 30
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+        del report["animations"][0]["keyframes"][0]["absolute_frame"]
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        del report["animations"][0]["keyframes"][1]["absolute_frame"]
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+
 if __name__ == "__main__":
     unittest.main()
