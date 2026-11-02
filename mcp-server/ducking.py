@@ -152,6 +152,8 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         if len(keys) > 2001:
             return False
         seen_offsets = set()
+        observed_start = None
+        absolute_count = 0
         for key in keys:
             if not isinstance(key, dict) or type(key.get("at")) is not int:
                 return False
@@ -167,6 +169,17 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                     return False
             except OverflowError:
                 return False
+            if "absolute_frame" in key:
+                absolute_count += 1
+                absolute = key["absolute_frame"]
+                if type(absolute) is not int or not at <= absolute <= 2_147_483_647:
+                    return False
+                start = absolute - at
+                if observed_start is not None and observed_start != start:
+                    return False
+                observed_start = start
+        if 0 < absolute_count < len(keys):
+            return False
     volume = [a for a in report["animations"] if a["prop"] == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
