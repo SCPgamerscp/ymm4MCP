@@ -99,6 +99,11 @@ def plan_script(args):
             raise ValueError(f"lines[{index}].character contains a control character")
         if len(line["character"]) > 256:
             raise ValueError(f"lines[{index}].character exceeds 256 characters")
+        # NUL and non-text control bytes cannot be represented safely in host dialogue fields.
+        # Preserve tabs and line breaks used for legitimate multiline subtitles.
+        if any((ord(char) < 32 and char not in "\\t\\n\\r") or ord(char) == 127
+               for char in line["text"]):
+            raise ValueError(f"lines[{index}].text contains a control character")
         if len(line["text"]) > 10000:
             raise ValueError(f"lines[{index}].text exceeds 10000 characters")
         if "layer" in line:
