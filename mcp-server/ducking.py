@@ -179,7 +179,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             return False
         if "absolute_frame" in key:
             absolute = key["absolute_frame"]
-            if (type(absolute) is not int or not 0 <= absolute <= 2_147_483_647 or
+            if (type(absolute) is not int or not at <= absolute <= 2_147_483_647 or
                     (expected_start_frame is not None and
                      absolute != expected_start_frame + at)):
                 return False
