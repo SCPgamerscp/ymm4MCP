@@ -160,10 +160,11 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         if (at in seen or at not in expected or value <= 0 or
                 not math.isclose(value, expected[at], rel_tol=1e-9, abs_tol=0.0)):
             return False
-        if (expected_start_frame is not None and "absolute_frame" in key and
-                (type(key["absolute_frame"]) is not int or
-                 expected_start_frame + at > 2_147_483_647 or
-                 key["absolute_frame"] != expected_start_frame + at)):
-            return False
+        if "absolute_frame" in key:
+            absolute = key["absolute_frame"]
+            if (type(absolute) is not int or not 0 <= absolute <= 2_147_483_647 or
+                    (expected_start_frame is not None and
+                     absolute != expected_start_frame + at)):
+                return False
         seen.add(at)
     return True
