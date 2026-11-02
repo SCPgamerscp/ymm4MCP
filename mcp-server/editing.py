@@ -76,8 +76,8 @@ def plan_script(args):
         raise ValueError("chars_per_sec must be finite and in (0, 1000]")
     frame = integer(args.get("start_frame", 0), "start_frame")
     gap = integer(args.get("gap", 0), "gap")
-    if "dry_run" in args and not isinstance(args["dry_run"], bool):
-        raise ValueError("dry_run must be boolean")
+    if "dry_run" in args and args["dry_run"] is not True:
+        raise ValueError("plan_script is side-effect-free; dry_run must be true")
     used_layers = set()
     for index, line in enumerate(lines):
         if not isinstance(line, dict):
