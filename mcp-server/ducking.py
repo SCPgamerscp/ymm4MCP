@@ -145,6 +145,28 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
     props = [a["prop"] for a in report["animations"]]
     if len(set(props)) != len(props):
         return False
+    # Every animation must have a well-formed curve. A corrupt unrelated
+    # curve means the host read-back is not a trustworthy complete snapshot.
+    for animation in report["animations"]:
+        keys = animation["keyframes"]
+        if len(keys) > 2001:
+            return False
+        seen_offsets = set()
+        for key in keys:
+            if not isinstance(key, dict) or type(key.get("at")) is not int:
+                return False
+            at = key["at"]
+            if not 0 <= at <= 2_147_483_647 or at in seen_offsets:
+                return False
+            seen_offsets.add(at)
+            value = key.get("value")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            try:
+                if not math.isfinite(value):
+                    return False
+            except OverflowError:
+                return False
     volume = [a for a in report["animations"] if a["prop"] == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
