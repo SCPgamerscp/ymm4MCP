@@ -65,6 +65,8 @@ def finite_number(value, name):
 
 
 def plan_script(args):
+    if not isinstance(args, dict):
+        raise ValueError("script plan arguments must be an object")
     lines = args.get("lines", [])
     if not isinstance(lines, list) or not 1 <= len(lines) <= 500:
         raise ValueError("lines must contain 1..500 dialogue entries")
