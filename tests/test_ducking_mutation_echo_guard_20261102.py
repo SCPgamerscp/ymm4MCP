@@ -161,5 +161,23 @@ class MutationEchoGuardTests(unittest.TestCase):
         report["animations"].pop()
         self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
 
+    def test_unrelated_animation_absolute_frames_are_coherent(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]},
+            {"prop": "X", "keyframes": [
+                {"at": 0, "value": -10.0, "absolute_frame": 20},
+                {"at": 5, "value": 10.0, "absolute_frame": 25}]}]}
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+        other = report["animations"][1]["keyframes"]
+        for bad in (-1, True, "25", 2_147_483_648, 26):
+            with self.subTest(absolute_frame=bad):
+                other[1]["absolute_frame"] = bad
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        other[1]["absolute_frame"] = 25
+        del other[1]["absolute_frame"]
+        self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        del other[0]["absolute_frame"]
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
 if __name__ == "__main__":
     unittest.main()
