@@ -82,8 +82,11 @@ def verify_mutation_point(keyframes: list, point: dict) -> bool:
             isinstance(point.get("value"), bool) or
             not isinstance(point.get("value"), (int, float))):
         return False
-    matches = [key for key in keyframes if isinstance(key, dict) and
-               type(key.get("at")) is int and key["at"] == point["at"]]
+    # An incomplete or malformed host snapshot cannot prove a successful write.
+    if any(not isinstance(key, dict) or type(key.get("at")) is not int or
+           not 0 <= key["at"] <= 2_147_483_647 for key in keyframes):
+        return False
+    matches = [key for key in keyframes if key["at"] == point["at"]]
     # Host echoes must preserve JSON number types; numeric strings are not proof
     # that the requested keyframe was actually stored as a numeric value.
     if len(matches) == 1 and (isinstance(matches[0].get("value"), bool) or
