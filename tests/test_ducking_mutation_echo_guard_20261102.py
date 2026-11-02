@@ -40,6 +40,21 @@ class MutationEchoGuardTests(unittest.TestCase):
         self.assertTrue(verify_mutation_point(
             [expected.copy(), {"at": 4, "value": 1.0}], expected))
 
+    def test_mutation_echo_rejects_invalid_unrelated_values_and_duplicates(self):
+        expected = {"at": 3, "value": 0.3}
+        for bad in ({"at": 4, "value": True},
+                    {"at": 4, "value": "1.0"},
+                    {"at": 4, "value": float("nan")},
+                    {"at": 4, "value": float("inf")},
+                    {"at": 4, "value": -1.0},
+                    {"at": 4, "value": 0.0}):
+            with self.subTest(bad=bad):
+                self.assertFalse(verify_mutation_point([expected.copy(), bad], expected))
+        self.assertFalse(verify_mutation_point(
+            [expected.copy(), {"at": 4, "value": 1.0}, {"at": 4, "value": 2.0}], expected))
+        self.assertTrue(verify_mutation_point(
+            [expected.copy(), {"at": 4, "value": 1.0}], expected))
+
     def test_full_curve_rejects_host_boolean_values(self):
         report = {"success": True, "revision": "rev1", "animations": [
             {"prop": "Volume", "keyframes": [{"at": 0, "value": True}]}]}
