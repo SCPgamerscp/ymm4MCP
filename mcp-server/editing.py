@@ -87,6 +87,10 @@ def plan_script(args):
                 raise ValueError(f"lines[{index}].{key} is required")
             if any(0xD800 <= ord(char) <= 0xDFFF for char in line[key]):
                 raise ValueError(f"lines[{index}].{key} contains an invalid Unicode surrogate")
+        if line["character"] != line["character"].strip():
+            raise ValueError(f"lines[{index}].character must not have surrounding whitespace")
+        if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in line["character"]):
+            raise ValueError(f"lines[{index}].character contains a control character")
         if len(line["character"]) > 256:
             raise ValueError(f"lines[{index}].character exceeds 256 characters")
         if len(line["text"]) > 10000:
