@@ -179,5 +179,27 @@ class MutationEchoGuardTests(unittest.TestCase):
         del other[0]["absolute_frame"]
         self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
 
+    def test_cross_property_absolute_origins_must_match(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 20},
+                {"at": 10, "value": 0.3, "absolute_frame": 30}]},
+            {"prop": "X", "keyframes": [
+                {"at": 0, "value": -10.0, "absolute_frame": 21},
+                {"at": 5, "value": 10.0, "absolute_frame": 26}]}]}
+        points = [{"at": 10, "value": 0.3}]
+        # Each curve is internally consistent, but the item cannot start
+        # at both frame 20 and frame 21.
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        self.assertFalse(verify_keyframes(
+            report, "rev1", points, 1.0, expected_start_frame=20))
+        report["animations"][1]["keyframes"][0]["absolute_frame"] = 20
+        report["animations"][1]["keyframes"][1]["absolute_frame"] = 25
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+        self.assertTrue(verify_keyframes(
+            report, "rev1", points, 1.0, expected_start_frame=20))
+        self.assertFalse(verify_keyframes(
+            report, "rev1", points, 1.0, expected_start_frame=19))
+
 if __name__ == "__main__":
     unittest.main()
