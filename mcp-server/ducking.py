@@ -134,7 +134,13 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             report.get("revision") != revision or not isinstance(report.get("animations"), list) or
             len(report["animations"]) > 256):
         return False
-    volume = [a for a in report["animations"] if isinstance(a, dict) and a.get("prop") == "Volume"]
+    # An unrelated malformed animation means the host snapshot is incomplete.
+    # Do not accept a matching Volume curve from an untrustworthy response.
+    if any(not isinstance(a, dict) or not isinstance(a.get("prop"), str) or
+           not a["prop"] or not isinstance(a.get("keyframes"), list)
+           for a in report["animations"]):
+        return False
+    volume = [a for a in report["animations"] if a["prop"] == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
     # abs(actual - NaN) >= tolerance is False for *every* actual value.
