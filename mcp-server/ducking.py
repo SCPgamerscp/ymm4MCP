@@ -86,6 +86,20 @@ def verify_mutation_point(keyframes: list, point: dict) -> bool:
     if any(not isinstance(key, dict) or type(key.get("at")) is not int or
            not 0 <= key["at"] <= 2_147_483_647 for key in keyframes):
         return False
+    # A snapshot with duplicate frames or malformed unrelated values is not a
+    # trustworthy read-back of the host curve, even when the target matches.
+    seen_frames = set()
+    for key in keyframes:
+        at = key["at"]
+        value = key.get("value")
+        if at in seen_frames or isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        try:
+            if finite_number(value, "keyframe.value") <= 0:
+                return False
+        except (ValueError, OverflowError):
+            return False
+        seen_frames.add(at)
     matches = [key for key in keyframes if key["at"] == point["at"]]
     # Host echoes must preserve JSON number types; numeric strings are not proof
     # that the requested keyframe was actually stored as a numeric value.
