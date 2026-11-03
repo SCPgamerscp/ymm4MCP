@@ -11,7 +11,7 @@ def valid_identifier(value, *, max_length=1024):
             value == value.strip() and
             not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or
                     0xD800 <= ord(ch) <= 0xDFFF or
-                    ord(ch) in (0x061C, 0x200E, 0x200F) or
+                    ord(ch) in (0x061C, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF) or
                     0x202A <= ord(ch) <= 0x202E or
                     0x2066 <= ord(ch) <= 0x2069 for ch in value))
 
