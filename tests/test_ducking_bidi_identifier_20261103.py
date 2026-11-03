@@ -67,3 +67,20 @@ def test_rejects_additional_invisible_identifier_spoofing(control):
 def test_additional_invisible_revision_fails_readback_verification():
     report = {"success": True, "revision": "rev\u2063x", "animations": []}
     assert not verify_keyframes(report, "rev\u2063x", [], 1.0)
+
+
+@pytest.mark.parametrize("control", [
+    "\u00ad",  # SOFT HYPHEN: invisible in ordinary identifier rendering
+    "\u0600",  # ARABIC NUMBER SIGN: format character
+    "\u206a",  # INHIBIT SYMMETRIC SWAPPING
+    "\u206f",  # NOMINAL DIGIT SHAPES
+])
+def test_rejects_other_unicode_format_controls(control):
+    assert not valid_identifier("bgm" + control + "1")
+    assert not valid_identifier("rev" + control + "1", max_length=256)
+
+
+def test_rejects_soft_hyphen_revision_in_host_readback():
+    revision = "rev\u00ad1"
+    report = {"success": True, "revision": revision, "animations": []}
+    assert not verify_keyframes(report, revision, [], 1.0)
