@@ -10,7 +10,10 @@ def valid_identifier(value, *, max_length=1024):
     return (isinstance(value, str) and 1 <= len(value) <= max_length and
             value == value.strip() and
             not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or
-                    0xD800 <= ord(ch) <= 0xDFFF for ch in value))
+                    0xD800 <= ord(ch) <= 0xDFFF or
+                    ord(ch) in (0x061C, 0x200E, 0x200F) or
+                    0x202A <= ord(ch) <= 0x202E or
+                    0x2066 <= ord(ch) <= 0x2069 for ch in value))
 
 
 def _finite_input(value, name):
