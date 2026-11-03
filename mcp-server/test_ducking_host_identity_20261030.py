@@ -19,7 +19,7 @@ BACKUP = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
 def readback(item_id="bgm:1"):
     points = ducking.plan(BGM, [VOICE], 100.0)
     report = {"success": True, "revision": "r5", "animations": [
-        {"prop": "Volume", "keyframes": [{"at": 0, "value": 100.0}, *points]}]}
+        {"prop": "Volume", "keyframes": [{"at": 0, "value": 100.0, "absolute_frame": 0}, *[{**point, "absolute_frame": point["at"]} for point in points]]}]}
     if item_id is not None:
         report["item_id"] = item_id
     return report
