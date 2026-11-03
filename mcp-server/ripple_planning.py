@@ -3,6 +3,8 @@
 No YMM4 write endpoint is called by this module. The operation list is an
 audit artifact, NOT a command queue: sequential replay is not atomic.
 """
+import unicodedata
+
 MAX_FRAME = 2_147_483_647
 MAX_ITEMS = 10_000
 
@@ -14,10 +16,13 @@ def _frame(value, label, minimum=0):
 
 
 def _item_id(value):
+    # Reject invisible/spoofed identifiers and noncanonical Unicode so two
+    # visually identical host IDs cannot identify different timeline items.
     return (isinstance(value, str) and 1 <= len(value) <= 512
-            and value == value.strip()
-            and not any(ord(c) < 32 or ord(c) == 127 or
-                        0xD800 <= ord(c) <= 0xDFFF for c in value))
+            and value == value.strip() and unicodedata.is_normalized("NFC", value)
+            and not any(unicodedata.category(c) in {"Cc", "Cs", "Cf", "Zl", "Zp"}
+                        or 0xFDD0 <= ord(c) <= 0xFDEF
+                        or (ord(c) & 0xFFFE) == 0xFFFE for c in value))
 
 
 def _revision(value):
@@ -57,10 +62,14 @@ def plan_ripple_delete(snapshot, *, start_frame, end_frame,
         raise ValueError("expected_revisions must be a bounded item_id-to-revision map")
     if any(not _item_id(k) or not _revision(v) for k, v in expected_revisions.items()):
         raise ValueError("expected_revisions must contain valid item IDs and revisions")
-    if (not isinstance(snapshot, dict) or snapshot.get("success") is False
+    if (not isinstance(snapshot, dict)
+            or ("success" in snapshot and snapshot["success"] is not True)
             or "error" in snapshot or "error_code" in snapshot
             or not isinstance(snapshot.get("items"), list)
-            or len(snapshot["items"]) > MAX_ITEMS):
+            or len(snapshot["items"]) > MAX_ITEMS
+            or ("count" in snapshot and
+                (type(snapshot["count"]) is not int
+                 or snapshot["count"] != len(snapshot["items"])))):
         return _conflict("RIPPLE_SNAPSHOT_UNAVAILABLE", "Complete timeline inventory is required")
 
     seen, operations, affected = set(), [], []
@@ -77,7 +86,13 @@ def plan_ripple_delete(snapshot, *, start_frame, end_frame,
             frame = _frame(item.get("frame"), "item frame")
             length = _frame(item.get("length"), "item length", 1)
             layer = _frame(item.get("layer"), "item layer")
-            _frame(frame + length, "item end", 1)
+            item_end = _frame(frame + length, "item end", 1)
+            # YMM4 exposes both naming conventions. Inconsistent optional
+            # end fields can hide a cut-boundary crossing or a stale snapshot.
+            for field in ("end_frame", "endFrame"):
+                if field in item and (type(item[field]) is not int
+                                      or item[field] != item_end):
+                    raise ValueError(f"{field} contradicts item frame and length")
         except ValueError:
             return _conflict("RIPPLE_SNAPSHOT_INVALID", "Invalid timeline geometry", index=index)
         if selected is not None and layer not in selected:
