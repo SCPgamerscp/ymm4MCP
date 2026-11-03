@@ -65,5 +65,25 @@ class RippleHostSnapshotIntegrityTests(unittest.TestCase):
                 expected_revisions={"a\u200bb": "r1"})
 
 
+
+class RippleReadbackStatusTests(unittest.TestCase):
+    def test_bad_before_and_after_status_never_verify_edit(self):
+        from ripple_verification import verify_ripple_result
+        stable = {"item_id": "a", "frame": 0, "length": 10,
+                  "layer": 1, "revision": "r1"}
+        good = {"success": True, "count": 1, "items": [stable]}
+        kwargs = {"start_frame": 10, "end_frame": 20}
+        self.assertTrue(verify_ripple_result(good, good, **kwargs)["passed"])
+        for bad in (False, None, 0, 1, "true", "false"):
+            with self.subTest(status=bad):
+                invalid = {**good, "success": bad}
+                self.assertEqual(
+                    verify_ripple_result(invalid, good, **kwargs)["error_code"],
+                    "RIPPLE_BEFORE_SNAPSHOT_INVALID")
+                self.assertEqual(
+                    verify_ripple_result(good, invalid, **kwargs)["error_code"],
+                    "RIPPLE_AFTER_SNAPSHOT_INVALID")
+
+
 if __name__ == "__main__":
     unittest.main()
