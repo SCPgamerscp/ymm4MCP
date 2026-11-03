@@ -21,7 +21,8 @@ def _canonical(value):
 
 def _inventory(snapshot):
     """Validate completeness, identity, geometry and JSON safety."""
-    if not isinstance(snapshot, dict) or snapshot.get("success") is False or (
+    if not isinstance(snapshot, dict) or (
+            "success" in snapshot and snapshot["success"] is not True) or (
             "error" in snapshot or "error_code" in snapshot):
         return None
     items = snapshot.get("items")
