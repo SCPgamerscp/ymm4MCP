@@ -84,3 +84,13 @@ def test_rejects_soft_hyphen_revision_in_host_readback():
     revision = "rev\u00ad1"
     report = {"success": True, "revision": revision, "animations": []}
     assert not verify_keyframes(report, revision, [], 1.0)
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029"])
+def test_rejects_unicode_line_separators_in_identifiers(separator):
+    # These characters can split logs and make two distinct IDs look alike.
+    assert not valid_identifier("bgm" + separator + "1")
+    assert not valid_identifier("rev" + separator + "1", max_length=256)
+    report = {"success": True, "revision": "rev" + separator + "1",
+              "animations": []}
+    assert not verify_keyframes(report, report["revision"], [], 1.0)
