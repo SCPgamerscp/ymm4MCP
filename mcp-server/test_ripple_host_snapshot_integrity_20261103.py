@@ -85,5 +85,45 @@ class RippleReadbackStatusTests(unittest.TestCase):
                     "RIPPLE_AFTER_SNAPSHOT_INVALID")
 
 
+
+class RippleRevisionIntegrityTests(unittest.TestCase):
+    def test_moved_item_needs_valid_readback_revision(self):
+        from ripple_verification import verify_ripple_result
+        before = {"success": True, "count": 2,
+                  "items": [item("a", 20), item("b", 0)]}
+        kwargs = {"start_frame": 10, "end_frame": 20,
+                  "expected_revisions": {"a": "r1"}}
+        good = {"success": True, "count": 2,
+                "items": [item("a", 10), item("b", 0)]}
+        self.assertTrue(verify_ripple_result(before, good, **kwargs)["passed"])
+        for revision in (None, False, 0, "contains whitespace"):
+            with self.subTest(revision=revision):
+                bad = {"success": True, "count": 2,
+                       "items": [{**item("a", 10), "revision": revision},
+                                 item("b", 0)]}
+                self.assertEqual(
+                    verify_ripple_result(before, bad, **kwargs)["error_code"],
+                    "RIPPLE_AFTER_SNAPSHOT_INVALID")
+        no_revision = {"success": True, "count": 2,
+                       "items": [{k: v for k, v in item("a", 10).items()
+                                  if k != "revision"}, item("b", 0)]}
+        result = verify_ripple_result(before, no_revision, **kwargs)
+        self.assertFalse(result["passed"])
+        self.assertIn("RIPPLE_REVISION_UNAVAILABLE",
+                      [problem["code"] for problem in result["issues"]])
+
+    def test_untouched_item_revision_drift_is_not_certified(self):
+        from ripple_verification import verify_ripple_result
+        before = {"success": True, "count": 2,
+                  "items": [item("a", 20), item("b", 0)]}
+        after = {"success": True, "count": 2,
+                 "items": [item("a", 10), item("b", 0, revision="r2")]}
+        result = verify_ripple_result(before, after, start_frame=10,
+            end_frame=20, expected_revisions={"a": "r1"})
+        self.assertFalse(result["passed"])
+        self.assertIn("revision", [problem.get("field")
+                                   for problem in result["issues"]])
+
+
 if __name__ == "__main__":
     unittest.main()
