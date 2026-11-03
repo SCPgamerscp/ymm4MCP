@@ -139,7 +139,10 @@ def _valid_item_id(value):
     return (isinstance(value, str) and 1 <= len(value) <= 1024 and
             value == value.strip() and
             not any(ord(char) < 32 or 127 <= ord(char) <= 159 or
-                    0xD800 <= ord(char) <= 0xDFFF for char in value))
+                    0xD800 <= ord(char) <= 0xDFFF or
+                    ord(char) in (0x061C, 0x200E, 0x200F) or
+                    0x202A <= ord(char) <= 0x202E or
+                    0x2066 <= ord(char) <= 0x2069 for char in value))
 
 
 def _item_ids(items, indices):
