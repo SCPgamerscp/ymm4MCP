@@ -124,6 +124,10 @@ def plan_script(args):
                 assigned[line["character"]] = next_layer
                 used_layers.add(next_layer)
             layer = assigned[line["character"]]
+        # A tiny positive speed can overflow float division before the duration
+        # range check below. Reject it deterministically as an invalid plan.
+        if speed < len(line["text"]) * fps / MAX_FRAME:
+            raise ValueError("estimated duration exceeds the frame range")
         seconds = max(1.0, len(line["text"]) / speed)
         if not math.isfinite(seconds) or seconds > MAX_FRAME / fps:
             raise ValueError("estimated duration exceeds the frame range")
