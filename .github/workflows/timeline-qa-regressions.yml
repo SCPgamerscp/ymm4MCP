@@ -17,4 +17,4 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r mcp-server/requirements.txt pytest
       - name: Validate stable IDs and script Unicode controls
-        run: python -m pytest -q tests/test_qa_stable_id_validation_20261102.py tests/test_script_unicode_surrogates_20261102.py tests/test_script_character_length_20261102.py tests/test_script_bidi_controls_20261103.py tests/test_script_request_envelope_20261103.py tests/test_script_text_controls_20261103.py tests/test_script_c1_controls_20261103.py tests/test_script_dry_run_contract_20261103.py
+        run: python -m pytest -q tests/test_qa_stable_id_validation_20261102.py tests/test_script_unicode_surrogates_20261102.py tests/test_script_character_length_20261102.py tests/test_script_bidi_controls_20261103.py tests/test_script_request_envelope_20261103.py tests/test_script_text_controls_20261103.py tests/test_script_c1_controls_20261103.py tests/test_script_dry_run_contract_20261103.py tests/test_script_large_speech_rate_20261103.py
