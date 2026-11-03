@@ -12,7 +12,7 @@ def valid_identifier(value, *, max_length=1024):
             value == value.strip() and
             not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or
                     0xD800 <= ord(ch) <= 0xDFFF or
-                    unicodedata.category(ch) == 'Cf' or ord(ch) == 0x034F for ch in value))
+                    unicodedata.category(ch) in ('Cf', 'Zl', 'Zp') or ord(ch) == 0x034F for ch in value))
 
 
 def _finite_input(value, name):
