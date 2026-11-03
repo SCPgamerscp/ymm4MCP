@@ -1643,22 +1643,24 @@ async def _script_append_start(plan: dict, args: dict) -> int | dict:
 
 async def add_script(args: dict, *, expected_snapshot: str | None = None) -> dict:
     """Validate the entire script first; never continue after failed/unknown synthesis."""
+    if "dry_run" in args and not isinstance(args["dry_run"], bool):
+        raise ValueError("dry_run must be boolean")
     use_project_fps = args.get("use_project_fps", False)
     if not isinstance(use_project_fps, bool):
         raise ValueError("use_project_fps must be boolean")
     if use_project_fps and "fps" in args:
         raise ValueError("fps and use_project_fps cannot be combined")
     if use_project_fps:
-        plan_script(args)  # Reject malformed lines before accessing the host.
+        plan_script({**args, "dry_run": True})  # Validate before accessing the host.
         project = await ymm4_get("/project")
         fps = project.get("fps") if isinstance(project, dict) and project.get("success") is True else None
         if isinstance(fps, bool) or not isinstance(fps, int) or not 1 <= fps <= 240:
             return {"success": False, "error_code": "PROJECT_FPS_UNAVAILABLE",
                     "error": "プロジェクトのFPSを確認できません。編集前に設定を確認してください", "details": project}
-        plan = plan_script({**args, "fps": fps})
+        plan = plan_script({**args, "fps": fps, "dry_run": True})
         plan["fps_used"] = fps
     else:
-        plan = plan_script(args)
+        plan = plan_script({**args, "dry_run": True})
     check_characters = args.get("check_characters", False)
     if not isinstance(check_characters, bool):
         raise ValueError("check_characters must be boolean")
@@ -1672,7 +1674,7 @@ async def add_script(args: dict, *, expected_snapshot: str | None = None) -> dic
         planning_args = {**args, "start_frame": start}
         if "fps_used" in plan:
             planning_args["fps"] = plan["fps_used"]
-        plan = plan_script(planning_args)
+        plan = plan_script({**planning_args, "dry_run": True})
         if args.get("use_project_fps"):
             plan["fps_used"] = planning_args["fps"]
         plan["start_frame_used"] = start
