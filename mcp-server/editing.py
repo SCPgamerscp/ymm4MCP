@@ -245,11 +245,20 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         for frame, tail, index in sorted(spans):
             if active_index is not None and frame < active_end:
                 affected = [active_index, index]
-                problems.append({"code": "OVERLAP", "severity": "error", "layer": layer,
-                                 "indices": affected, "item_ids": _item_ids(items, affected),
-                                 "frame_range": [frame, min(active_end, tail)],
-                                 "suggested_fix": {"action": "edit_item", "sub_action": "resolve_overlaps",
-                                                   "layers": [layer]}})
+                problem = {"code": "OVERLAP", "severity": "error", "layer": layer,
+                           "indices": affected, "item_ids": _item_ids(items, affected),
+                           "frame_range": [frame, min(active_end, tail)]}
+                # Do not suggest a layer-wide mutation when any item on that
+                # layer lacks an unambiguous stable identity.
+                layer_indices = [entry[2] for entry in spans]
+                if all(_valid_item_id(items[i].get("item_id")) and
+                       id_counts[items[i]["item_id"]] == 1 for i in layer_indices):
+                    problem["suggested_fix"] = {"action": "edit_item",
+                                                "sub_action": "resolve_overlaps",
+                                                "layers": [layer]}
+                else:
+                    problem["message"] = "Cannot safely resolve overlaps on a layer with ambiguous item IDs"
+                problems.append(problem)
             elif include_gaps and active_index is not None and frame > active_end:
                 problems.append({"code": "GAP", "severity": "warning", "layer": layer,
                                  "indices": [active_index, index],
