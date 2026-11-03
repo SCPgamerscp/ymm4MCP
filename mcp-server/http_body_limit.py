@@ -235,6 +235,11 @@ class RequestBodyLimit:
         # downstream app. Conflicting Content-Length/Transfer-Encoding on GET
         # or DELETE is just as ambiguous as it is on POST.
         if method != "POST":
+            # MCP GET/DELETE are bodyless. Never forward a declared request body
+            # to downstream handlers without applying the POST body budget.
+            if (declared is not None and declared > 0) or has_transfer_encoding:
+                return await JSONResponse({"error": "Request body not allowed for this method"}, status_code=400)(
+                    scope, receive, send)
             if method.upper() == "POST":
                 return await JSONResponse({"error": "Invalid request method"}, status_code=400)(
                     scope, receive, send)
