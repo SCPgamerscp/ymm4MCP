@@ -37,3 +37,20 @@ def test_rejects_invisible_format_characters_in_identifiers(control):
 def test_rejects_invisible_revision_before_readback_acceptance():
     report = {"success": True, "revision": "rev\u200b1", "animations": []}
     assert not verify_keyframes(report, "rev\u200b1", [], 1.0)
+
+
+def test_expected_start_requires_absolute_frame_evidence():
+    report = {"success": True, "revision": "rev1", "item_id": "bgm1",
+              "animations": [{"prop": "Volume", "keyframes": [
+                  {"at": 0, "value": 1.0}, {"at": 10, "value": 0.3}]}]}
+    points = [{"at": 10, "value": 0.3}]
+    assert verify_keyframes(report, "rev1", points, 1.0)
+    assert not verify_keyframes(report, "rev1", points, 1.0,
+                                expected_item_id="bgm1", expected_start_frame=100)
+    for key in report["animations"][0]["keyframes"]:
+        key["absolute_frame"] = 100 + key["at"]
+    assert verify_keyframes(report, "rev1", points, 1.0,
+                            expected_item_id="bgm1", expected_start_frame=100)
+    report["animations"][0]["keyframes"][1]["absolute_frame"] = 111
+    assert not verify_keyframes(report, "rev1", points, 1.0,
+                                expected_item_id="bgm1", expected_start_frame=100)
