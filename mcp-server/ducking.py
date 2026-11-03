@@ -261,4 +261,8 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
     # timeline origin for the entire returned curve.
     if 0 < absolute_frame_count < len(found):
         return False
+    # A caller-supplied start frame must be corroborated by the host echo.
+    # Relative-only keyframes cannot establish the item timeline origin.
+    if expected_start_frame is not None and found and absolute_frame_count != len(found):
+        return False
     return True
