@@ -4,7 +4,7 @@ This does NOT execute edits or prove atomicity. The caller supplies a trusted
 pre-edit /items snapshot and this module compares it with a fresh post-edit one.
 """
 import json
-from ripple_planning import MAX_ITEMS, _frame, _item_id, plan_ripple_delete
+from ripple_planning import MAX_ITEMS, _frame, _item_id, _revision, plan_ripple_delete
 
 MAX_ISSUES = 100
 # A move is allowed to change its position, derived end, and optimistic revision.
@@ -43,6 +43,8 @@ def _inventory(snapshot):
             length = _frame(item.get("length"), "length", 1)
             _frame(frame + length, "end", 1)
             _frame(item.get("layer"), "layer")
+            if "revision" in item and not _revision(item["revision"]):
+                return None
             # The real YMM4 /api/items endpoint exposes camelCase endFrame.
             # Both spellings are derived geometry, never immutable content.
             for end_key in ("end_frame", "endFrame"):
@@ -105,6 +107,15 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
             if type(actual[field]) is not type(expected) or actual[field] != expected:
                 issue("RIPPLE_FIELD_MISMATCH", identity, field=field,
                       expected=expected, actual=actual[field])
+        # An edited item must remain addressable by a valid optimistic revision.
+        # Unaffected items cannot silently gain/lose/change their revisions:
+        # such drift could mean a concurrent editor touched the timeline.
+        if operation:
+            if not _revision(actual.get("revision")):
+                issue("RIPPLE_REVISION_UNAVAILABLE", identity)
+        elif ("revision" in item) != ("revision" in actual) or (
+                item.get("revision") != actual.get("revision")):
+            issue("RIPPLE_CONTENT_CHANGED", identity, field="revision")
         # A derived end frame must follow the move, never remain at its old
         # position. _inventory already validates consistency within each item.
         for end_key in ("end_frame", "endFrame"):
