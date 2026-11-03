@@ -11,7 +11,9 @@ async def apply(args, get, add_script):
         return await add_script(args)
     if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
         raise ValueError("expected_snapshot_hash must be a lowercase SHA-256 hex digest")
-    plan_script(args)  # Reject malformed scripts before calling the host.
+    # Planning requires dry_run=True, but snapshot preflight must also validate
+    # real writes without changing the arguments sent to the host.
+    plan_script({**args, "dry_run": True})  # Side-effect-free input validation.
     try:
         snapshot = await get("/items")
     except Exception as exc:

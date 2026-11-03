@@ -65,17 +65,20 @@ def finite_number(value, name):
 
 
 def plan_script(args):
+    if not isinstance(args, dict):
+        raise ValueError("script plan arguments must be an object")
     lines = args.get("lines", [])
     if not isinstance(lines, list) or not 1 <= len(lines) <= 500:
         raise ValueError("lines must contain 1..500 dialogue entries")
     fps = integer(args.get("fps", 30), "fps", 1, 240)
     speed = args.get("chars_per_sec", 5)
-    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0 < speed <= 1000 or not math.isfinite(speed):
+    if (isinstance(speed, bool) or not isinstance(speed, (int, float)) or
+            not 0 < speed <= 1000):
         raise ValueError("chars_per_sec must be finite and in (0, 1000]")
     frame = integer(args.get("start_frame", 0), "start_frame")
     gap = integer(args.get("gap", 0), "gap")
-    if "dry_run" in args and not isinstance(args["dry_run"], bool):
-        raise ValueError("dry_run must be boolean")
+    if "dry_run" in args and args["dry_run"] is not True:
+        raise ValueError("plan_script is side-effect-free; dry_run must be true")
     used_layers = set()
     for index, line in enumerate(lines):
         if not isinstance(line, dict):
@@ -85,6 +88,26 @@ def plan_script(args):
         for key in ("text", "character"):
             if not isinstance(line.get(key), str) or not line[key].strip():
                 raise ValueError(f"lines[{index}].{key} is required")
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in line[key]):
+                raise ValueError(f"lines[{index}].{key} contains an invalid Unicode surrogate")
+        if line["character"] != line["character"].strip():
+            raise ValueError(f"lines[{index}].character must not have surrounding whitespace")
+        # Bidirectional formatting controls can visually spoof speaker names.
+        if any(ord(char) < 32 or 127 <= ord(char) <= 159 or
+               ord(char) in (0x061C, 0x200E, 0x200F) or
+               0x202A <= ord(char) <= 0x202E or
+               0x2066 <= ord(char) <= 0x2069 for char in line["character"]):
+            raise ValueError(f"lines[{index}].character contains a control character")
+        if len(line["character"]) > 256:
+            raise ValueError(f"lines[{index}].character exceeds 256 characters")
+        # NUL and non-text control bytes cannot be represented safely in host dialogue fields.
+        # Preserve tabs and line breaks used for legitimate multiline subtitles.
+        if any((ord(char) < 32 and ord(char) not in (9, 10, 13)) or
+               127 <= ord(char) <= 159 or
+               ord(char) in (0x061C, 0x200E, 0x200F) or
+               0x202A <= ord(char) <= 0x202E or
+               0x2066 <= ord(char) <= 0x2069 for char in line["text"]):
+            raise ValueError(f"lines[{index}].text contains a control character")
         if len(line["text"]) > 10000:
             raise ValueError(f"lines[{index}].text exceeds 10000 characters")
         if "layer" in line:
@@ -116,9 +139,13 @@ def plan_script(args):
 
 def _valid_item_id(value):
     """Only usable host IDs may be referenced in repair suggestions."""
-    return (isinstance(value, str) and bool(value.strip()) and
-            not any(ord(char) < 32 or ord(char) == 127 or
-                    0xD800 <= ord(char) <= 0xDFFF for char in value))
+    return (isinstance(value, str) and 1 <= len(value) <= 1024 and
+            value == value.strip() and
+            not any(ord(char) < 32 or 127 <= ord(char) <= 159 or
+                    0xD800 <= ord(char) <= 0xDFFF or
+                    ord(char) in (0x061C, 0x200E, 0x200F) or
+                    0x202A <= ord(char) <= 0x202E or
+                    0x2066 <= ord(char) <= 0x2069 for char in value))
 
 
 def _item_ids(items, indices):
@@ -218,11 +245,20 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         for frame, tail, index in sorted(spans):
             if active_index is not None and frame < active_end:
                 affected = [active_index, index]
-                problems.append({"code": "OVERLAP", "severity": "error", "layer": layer,
-                                 "indices": affected, "item_ids": _item_ids(items, affected),
-                                 "frame_range": [frame, min(active_end, tail)],
-                                 "suggested_fix": {"action": "edit_item", "sub_action": "resolve_overlaps",
-                                                   "layers": [layer]}})
+                problem = {"code": "OVERLAP", "severity": "error", "layer": layer,
+                           "indices": affected, "item_ids": _item_ids(items, affected),
+                           "frame_range": [frame, min(active_end, tail)]}
+                # Do not suggest a layer-wide mutation when any item on that
+                # layer lacks an unambiguous stable identity.
+                layer_indices = [entry[2] for entry in spans]
+                if all(_valid_item_id(items[i].get("item_id")) and
+                       id_counts[items[i]["item_id"]] == 1 for i in layer_indices):
+                    problem["suggested_fix"] = {"action": "edit_item",
+                                                "sub_action": "resolve_overlaps",
+                                                "layers": [layer]}
+                else:
+                    problem["message"] = "Cannot safely resolve overlaps on a layer with ambiguous item IDs"
+                problems.append(problem)
             elif include_gaps and active_index is not None and frame > active_end:
                 problems.append({"code": "GAP", "severity": "warning", "layer": layer,
                                  "indices": [active_index, index],
