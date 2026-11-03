@@ -53,12 +53,18 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
             merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
         else:
             merged.append((left, right))
+    # No overlapping voice means no attenuation is needed. In particular,
+    # subnormal volumes must not fail precision checks for a no-op plan.
+    if not merged:
+        return []
     points = {}
     low = base_volume * ratio
     if not math.isfinite(low):
         raise ValueError("ducked volume must be finite")
     if low == 0:
         raise ValueError("duck_ratio underflows to zero volume")
+    if low >= base_volume:
+        raise ValueError("duck_ratio does not reduce volume at this precision")
     for left, right in merged:
         attack = max(start, left - attack_frames)
         if attack < left:
