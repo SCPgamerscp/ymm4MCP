@@ -191,6 +191,10 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                 observed_start = start
         if 0 < absolute_count < len(keys):
             return False
+        # When the caller requires a verified timeline origin, every populated
+        # animation must carry absolute-frame evidence, not just Volume.
+        if expected_start_frame is not None and keys and absolute_count != len(keys):
+            return False
         if observed_start is not None:
             if item_start is not None and observed_start != item_start:
                 return False
