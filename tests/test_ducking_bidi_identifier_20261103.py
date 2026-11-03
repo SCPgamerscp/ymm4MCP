@@ -94,3 +94,25 @@ def test_rejects_unicode_line_separators_in_identifiers(separator):
     report = {"success": True, "revision": "rev" + separator + "1",
               "animations": []}
     assert not verify_keyframes(report, report["revision"], [], 1.0)
+
+
+def test_expected_start_rejects_relative_only_unrelated_animation():
+    """A correct Volume curve cannot authenticate a partial host snapshot."""
+    report = {"success": True, "revision": "r1", "item_id": "bgm1",
+              "animations": [
+                  {"prop": "Volume", "keyframes": [
+                      {"at": 0, "value": 1.0, "absolute_frame": 100},
+                      {"at": 10, "value": 0.3, "absolute_frame": 110}]},
+                  {"prop": "X", "keyframes": [{"at": 2, "value": 4.0}]},
+              ]}
+    points = [{"at": 10, "value": 0.3}]
+    assert verify_keyframes(report, "r1", points, 1.0,
+                            expected_item_id="bgm1")
+    assert not verify_keyframes(report, "r1", points, 1.0,
+                                expected_item_id="bgm1", expected_start_frame=100)
+    report["animations"][1]["keyframes"][0]["absolute_frame"] = 102
+    assert verify_keyframes(report, "r1", points, 1.0,
+                            expected_item_id="bgm1", expected_start_frame=100)
+    report["animations"][1]["keyframes"][0]["absolute_frame"] = 103
+    assert not verify_keyframes(report, "r1", points, 1.0,
+                                expected_item_id="bgm1", expected_start_frame=100)
