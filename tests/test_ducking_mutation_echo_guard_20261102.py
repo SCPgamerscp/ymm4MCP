@@ -1,0 +1,205 @@
+"""Regression tests for malformed host mutation expectations."""
+import pathlib
+import sys
+import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "mcp-server"))
+from ducking import verify_mutation_point, verify_keyframes
+
+
+class MutationEchoGuardTests(unittest.TestCase):
+    def test_malformed_expectations_fail_closed(self):
+        echo = [{"at": 3, "value": 0.3}]
+        for point in (None, [], {}, {"at": 3}, {"value": 0.3},
+                      {"at": True, "value": 0.3},
+                      {"at": 3, "value": True},
+                      {"at": 3, "value": "0.3"},
+                      {"at": -1, "value": 0.3},
+                      {"at": 2_147_483_648, "value": 0.3}):
+            with self.subTest(point=point):
+                self.assertFalse(verify_mutation_point(echo, point))
+
+    def test_valid_echo_and_conflicting_echo(self):
+        point = {"at": 3, "value": 0.3}
+        self.assertTrue(verify_mutation_point([point.copy()], point))
+        self.assertFalse(verify_mutation_point([point.copy(), point.copy()], point))
+        self.assertFalse(verify_mutation_point([{"at": 3, "value": 0.4}], point))
+        # A string echo is not evidence that the host stored a numeric keyframe.
+        self.assertFalse(verify_mutation_point([{"at": 3, "value": "0.3"}], point))
+        self.assertFalse(verify_mutation_point([{"at": 3, "value": True}], point))
+
+
+    def test_mutation_echo_rejects_malformed_unrelated_keyframes(self):
+        expected = {"at": 3, "value": 0.3}
+        for bad in (None, "invalid", {}, {"at": True, "value": 1.0},
+                    {"at": -1, "value": 1.0},
+                    {"at": 2_147_483_648, "value": 1.0},
+                    {"at": "4", "value": 1.0}):
+            with self.subTest(bad=bad):
+                self.assertFalse(verify_mutation_point([expected.copy(), bad], expected))
+        self.assertTrue(verify_mutation_point(
+            [expected.copy(), {"at": 4, "value": 1.0}], expected))
+
+    def test_mutation_echo_rejects_invalid_unrelated_values_and_duplicates(self):
+        expected = {"at": 3, "value": 0.3}
+        for bad in ({"at": 4, "value": True},
+                    {"at": 4, "value": "1.0"},
+                    {"at": 4, "value": float("nan")},
+                    {"at": 4, "value": float("inf")},
+                    {"at": 4, "value": -1.0},
+                    {"at": 4, "value": 0.0}):
+            with self.subTest(bad=bad):
+                self.assertFalse(verify_mutation_point([expected.copy(), bad], expected))
+        self.assertFalse(verify_mutation_point(
+            [expected.copy(), {"at": 4, "value": 1.0}, {"at": 4, "value": 2.0}], expected))
+        self.assertTrue(verify_mutation_point(
+            [expected.copy(), {"at": 4, "value": 1.0}], expected))
+
+    def test_full_curve_rejects_malformed_unrelated_animations(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]}]}
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+        for unrelated in (None, "broken", {}, {"prop": None, "keyframes": []},
+                          {"prop": "", "keyframes": []},
+                          {"prop": "Zoom", "keyframes": None}):
+            with self.subTest(unrelated=unrelated):
+                report["animations"].append(unrelated)
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+                report["animations"].pop()
+        report["animations"].append({"prop": "Zoom", "keyframes": []})
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
+    def test_full_curve_rejects_corrupt_unrelated_animation_curves(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]},
+            {"prop": "Zoom", "keyframes": [{"at": 5, "value": 1.0}]}]}
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+        for corrupt in (
+            [None], [{"at": True, "value": 1.0}],
+            [{"at": -1, "value": 1.0}],
+            [{"at": 2_147_483_648, "value": 1.0}],
+            [{"at": 5, "value": float("nan")}],
+            [{"at": 5, "value": float("inf")}],
+            [{"at": 5, "value": True}],
+            [{"at": 5, "value": "1.0"}],
+            [{"at": 5, "value": 1.0}, {"at": 5, "value": 2.0}],
+        ):
+            with self.subTest(corrupt=corrupt):
+                report["animations"][1]["keyframes"] = corrupt
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        report["animations"][1]["keyframes"] = [{"at": 5, "value": 1.0}]
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
+    def test_full_curve_rejects_host_boolean_values(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": True}]}]}
+        self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+
+    def test_full_curve_rejects_out_of_range_absolute_frame(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 2_147_483_647},
+                {"at": 1, "value": 0.3, "absolute_frame": 2_147_483_648}]}]}
+        self.assertFalse(verify_keyframes(
+            report, "rev1", [{"at": 1, "value": 0.3}], 1.0,
+            expected_start_frame=2_147_483_647))
+        self.assertFalse(verify_keyframes(
+            report, "rev1", [{"at": 1, "value": 0.3}], 1.0,
+            expected_start_frame=2_147_483_648))
+
+    def test_absolute_frame_cannot_precede_relative_offset(self):
+        # An absolute timeline position must include a nonnegative item start.
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 0},
+                {"at": 10, "value": 0.3, "absolute_frame": 9}]}]}
+        points = [{"at": 10, "value": 0.3}]
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        report["animations"][0]["keyframes"][1]["absolute_frame"] = 10
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+
+    def test_absolute_frame_echo_is_bounded_even_without_start_hint(self):
+        for invalid in (-1, 2_147_483_648, True, "0"):
+            report = {"success": True, "revision": "rev1", "animations": [
+                {"prop": "Volume", "keyframes": [
+                    {"at": 0, "value": 1.0, "absolute_frame": invalid}]}]}
+            with self.subTest(absolute_frame=invalid):
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        report["animations"][0]["keyframes"][0]["absolute_frame"] = 0
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
+    def test_absolute_frames_share_one_item_start_without_hint(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 20},
+                {"at": 10, "value": 0.3, "absolute_frame": 31}]}]}
+        points = [{"at": 10, "value": 0.3}]
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        report["animations"][0]["keyframes"][1]["absolute_frame"] = 30
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+
+    def test_partial_absolute_frame_snapshots_fail_closed(self):
+        points = [{"at": 10, "value": 0.3}]
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 20},
+                {"at": 10, "value": 0.3}]}]}
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        report["animations"][0]["keyframes"][1]["absolute_frame"] = 30
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+        del report["animations"][0]["keyframes"][0]["absolute_frame"]
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        del report["animations"][0]["keyframes"][1]["absolute_frame"]
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+
+    def test_duplicate_unrelated_animation_properties_fail_closed(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]},
+            {"prop": "Zoom", "keyframes": []},
+            {"prop": "Zoom", "keyframes": []}]}
+        self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        report["animations"].pop()
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
+    def test_unrelated_animation_absolute_frames_are_coherent(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [{"at": 0, "value": 1.0}]},
+            {"prop": "X", "keyframes": [
+                {"at": 0, "value": -10.0, "absolute_frame": 20},
+                {"at": 5, "value": 10.0, "absolute_frame": 25}]}]}
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+        other = report["animations"][1]["keyframes"]
+        for bad in (-1, True, "25", 2_147_483_648, 26):
+            with self.subTest(absolute_frame=bad):
+                other[1]["absolute_frame"] = bad
+                self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        other[1]["absolute_frame"] = 25
+        del other[1]["absolute_frame"]
+        self.assertFalse(verify_keyframes(report, "rev1", [], 1.0))
+        del other[0]["absolute_frame"]
+        self.assertTrue(verify_keyframes(report, "rev1", [], 1.0))
+
+    def test_cross_property_absolute_origins_must_match(self):
+        report = {"success": True, "revision": "rev1", "animations": [
+            {"prop": "Volume", "keyframes": [
+                {"at": 0, "value": 1.0, "absolute_frame": 20},
+                {"at": 10, "value": 0.3, "absolute_frame": 30}]},
+            {"prop": "X", "keyframes": [
+                {"at": 0, "value": -10.0, "absolute_frame": 21},
+                {"at": 5, "value": 10.0, "absolute_frame": 26}]}]}
+        points = [{"at": 10, "value": 0.3}]
+        # Each curve is internally consistent, but the item cannot start
+        # at both frame 20 and frame 21.
+        self.assertFalse(verify_keyframes(report, "rev1", points, 1.0))
+        self.assertFalse(verify_keyframes(
+            report, "rev1", points, 1.0, expected_start_frame=20))
+        report["animations"][1]["keyframes"][0]["absolute_frame"] = 20
+        report["animations"][1]["keyframes"][1]["absolute_frame"] = 25
+        self.assertTrue(verify_keyframes(report, "rev1", points, 1.0))
+        self.assertTrue(verify_keyframes(
+            report, "rev1", points, 1.0, expected_start_frame=20))
+        self.assertFalse(verify_keyframes(
+            report, "rev1", points, 1.0, expected_start_frame=19))
+
+if __name__ == "__main__":
+    unittest.main()

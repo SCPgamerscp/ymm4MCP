@@ -55,6 +55,8 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
             merged.append((left, right))
     points = {}
     low = base_volume * ratio
+    if not math.isfinite(low):
+        raise ValueError("ducked volume must be finite")
     if low == 0:
         raise ValueError("duck_ratio underflows to zero volume")
     for left, right in merged:
@@ -75,10 +77,35 @@ def plan(bgm: dict, voices: list[dict], base_volume: float, *, ratio: float = .3
 
 def verify_mutation_point(keyframes: list, point: dict) -> bool:
     """Check a host mutation echo before allowing the next write."""
-    if not isinstance(keyframes, list) or len(keyframes) > 2001:
+    if (not isinstance(keyframes, list) or len(keyframes) > 2001 or
+            not isinstance(point, dict) or type(point.get("at")) is not int or not 0 <= point["at"] <= 2_147_483_647 or
+            isinstance(point.get("value"), bool) or
+            not isinstance(point.get("value"), (int, float))):
         return False
-    matches = [key for key in keyframes if isinstance(key, dict) and
-               type(key.get("at")) is int and key["at"] == point["at"]]
+    # An incomplete or malformed host snapshot cannot prove a successful write.
+    if any(not isinstance(key, dict) or type(key.get("at")) is not int or
+           not 0 <= key["at"] <= 2_147_483_647 for key in keyframes):
+        return False
+    # A snapshot with duplicate frames or malformed unrelated values is not a
+    # trustworthy read-back of the host curve, even when the target matches.
+    seen_frames = set()
+    for key in keyframes:
+        at = key["at"]
+        value = key.get("value")
+        if at in seen_frames or isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        try:
+            if finite_number(value, "keyframe.value") <= 0:
+                return False
+        except (ValueError, OverflowError):
+            return False
+        seen_frames.add(at)
+    matches = [key for key in keyframes if key["at"] == point["at"]]
+    # Host echoes must preserve JSON number types; numeric strings are not proof
+    # that the requested keyframe was actually stored as a numeric value.
+    if len(matches) == 1 and (isinstance(matches[0].get("value"), bool) or
+                              not isinstance(matches[0].get("value"), (int, float))):
+        return False
     if len(matches) != 1:
         return False
     try:
@@ -99,7 +126,7 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
              not isinstance(report, dict) or report.get("item_id") != expected_item_id)):
         return False
     if (expected_start_frame is not None and
-            (type(expected_start_frame) is not int or expected_start_frame < 0)):
+            (type(expected_start_frame) is not int or not 0 <= expected_start_frame <= 2_147_483_647)):
         return False
     if (not valid_identifier(revision, max_length=256) or
             not isinstance(report, dict) or report.get("success") is not True or
@@ -107,7 +134,62 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             report.get("revision") != revision or not isinstance(report.get("animations"), list) or
             len(report["animations"]) > 256):
         return False
-    volume = [a for a in report["animations"] if isinstance(a, dict) and a.get("prop") == "Volume"]
+    # An unrelated malformed animation means the host snapshot is incomplete.
+    # Do not accept a matching Volume curve from an untrustworthy response.
+    if any(not isinstance(a, dict) or not isinstance(a.get("prop"), str) or
+           not a["prop"] or not isinstance(a.get("keyframes"), list)
+           for a in report["animations"]):
+        return False
+    # Duplicate property entries make the host snapshot ambiguous, even when
+    # the Volume entry itself appears valid.
+    props = [a["prop"] for a in report["animations"]]
+    if len(set(props)) != len(props):
+        return False
+    # Every animation must have a well-formed curve. A corrupt unrelated
+    # curve means the host read-back is not a trustworthy complete snapshot.
+    # All animations belong to the same timeline item. A consistent origin
+    # within each curve is insufficient if different properties disagree.
+    item_start = None
+    for animation in report["animations"]:
+        keys = animation["keyframes"]
+        if len(keys) > 2001:
+            return False
+        seen_offsets = set()
+        observed_start = None
+        absolute_count = 0
+        for key in keys:
+            if not isinstance(key, dict) or type(key.get("at")) is not int:
+                return False
+            at = key["at"]
+            if not 0 <= at <= 2_147_483_647 or at in seen_offsets:
+                return False
+            seen_offsets.add(at)
+            value = key.get("value")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            try:
+                if not math.isfinite(value):
+                    return False
+            except OverflowError:
+                return False
+            if "absolute_frame" in key:
+                absolute_count += 1
+                absolute = key["absolute_frame"]
+                if type(absolute) is not int or not at <= absolute <= 2_147_483_647:
+                    return False
+                start = absolute - at
+                if observed_start is not None and observed_start != start:
+                    return False
+                observed_start = start
+        if 0 < absolute_count < len(keys):
+            return False
+        if observed_start is not None:
+            if item_start is not None and observed_start != item_start:
+                return False
+            item_start = observed_start
+            if expected_start_frame is not None and observed_start != expected_start_frame:
+                return False
+    volume = [a for a in report["animations"] if a["prop"] == "Volume"]
     found = volume[0].get("keyframes") if len(volume) == 1 else None
     # A non-finite expected value (especially NaN) must never verify as equal:
     # abs(actual - NaN) >= tolerance is False for *every* actual value.
@@ -130,13 +212,21 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
             if expected[at] <= 0:
                 return False
         expected.setdefault(0, base_volume)
+        if (expected_start_frame is not None and
+                any(expected_start_frame + at > 2_147_483_647 for at in expected)):
+            return False
     except (ValueError, OverflowError):
         return False
     if not isinstance(found, list) or len(found) > 2001 or len(found) != len(expected):
         return False
     seen = set()
+    # All absolute positions in a host snapshot must describe the same item
+    # start, even when the caller did not supply an expected start frame.
+    observed_start = None
+    absolute_frame_count = 0
     for key in found:
-        if not isinstance(key, dict) or not isinstance(key.get("value"), (int, float)):
+        if (not isinstance(key, dict) or isinstance(key.get("value"), bool) or
+                not isinstance(key.get("value"), (int, float))):
             return False
         try:
             at = integer(key.get("at"), "keyframe.at")
@@ -146,9 +236,20 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
         if (at in seen or at not in expected or value <= 0 or
                 not math.isclose(value, expected[at], rel_tol=1e-9, abs_tol=0.0)):
             return False
-        if (expected_start_frame is not None and "absolute_frame" in key and
-                (type(key["absolute_frame"]) is not int or
-                 key["absolute_frame"] != expected_start_frame + at)):
-            return False
+        if "absolute_frame" in key:
+            absolute_frame_count += 1
+            absolute = key["absolute_frame"]
+            if (type(absolute) is not int or not at <= absolute <= 2_147_483_647 or
+                    (expected_start_frame is not None and
+                     absolute != expected_start_frame + at)):
+                return False
+            start = absolute - at
+            if observed_start is not None and start != observed_start:
+                return False
+            observed_start = start
         seen.add(at)
+    # Mixed absolute/relative-only snapshots cannot establish a coherent
+    # timeline origin for the entire returned curve.
+    if 0 < absolute_frame_count < len(found):
+        return False
     return True
