@@ -54,3 +54,16 @@ def test_expected_start_requires_absolute_frame_evidence():
     report["animations"][0]["keyframes"][1]["absolute_frame"] = 111
     assert not verify_keyframes(report, "rev1", points, 1.0,
                                 expected_item_id="bgm1", expected_start_frame=100)
+
+
+@pytest.mark.parametrize("control", [
+    "\u034f", "\u180e", "\u2061", "\u2062", "\u2063", "\u2064",
+])
+def test_rejects_additional_invisible_identifier_spoofing(control):
+    assert not valid_identifier("item" + control + "1")
+    assert not valid_identifier("rev" + control + "1", max_length=256)
+
+
+def test_additional_invisible_revision_fails_readback_verification():
+    report = {"success": True, "revision": "rev\u2063x", "animations": []}
+    assert not verify_keyframes(report, "rev\u2063x", [], 1.0)
