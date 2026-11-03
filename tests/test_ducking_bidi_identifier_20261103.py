@@ -25,3 +25,15 @@ def test_preserves_valid_international_identifiers():
 def test_rejects_spoofed_revision_before_readback_acceptance():
     report = {"success": True, "revision": "rev\u202e1", "animations": []}
     assert not verify_keyframes(report, "rev\u202e1", [], 1.0)
+
+@pytest.mark.parametrize("control", [
+    "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff",
+])
+def test_rejects_invisible_format_characters_in_identifiers(control):
+    assert not valid_identifier("item" + control + "1")
+    assert not valid_identifier("rev" + control + "1", max_length=256)
+
+
+def test_rejects_invisible_revision_before_readback_acceptance():
+    report = {"success": True, "revision": "rev\u200b1", "animations": []}
+    assert not verify_keyframes(report, "rev\u200b1", [], 1.0)
