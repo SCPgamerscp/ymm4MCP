@@ -34,6 +34,7 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         silences = []
         peak = 0.0
         clipped = 0
+        channel_peaks = [0.0] * channels
         processed = 0
         while processed < frames:
             raw = wav.readframes(min(4096, frames - processed))
@@ -55,6 +56,7 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                     magnitude = abs(value)
                     frame_peak = max(frame_peak, magnitude)
                     peak = max(peak, magnitude)
+                    channel_peaks[ch] = max(channel_peaks[ch], magnitude)
                     if magnitude >= clip_threshold:
                         clipped += 1
                 at = processed + index
@@ -68,7 +70,11 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
             processed += count
         if silence_start is not None and (frames - silence_start) / rate >= min_silence_seconds:
             silences.append({"start_seconds": silence_start / rate, "end_seconds": frames / rate})
+        silent_channels = [ch for ch, value in enumerate(channel_peaks) if value <= threshold]
         return {"duration_seconds": frames / rate, "sample_rate": rate,
                 "channels": channels, "peak_dbfs": 20 * math.log10(peak) if peak else None,
                 "clipped_samples": clipped, "long_silences": silences,
-                "passed": clipped == 0 and not silences}
+                "channel_peak_dbfs": [20 * math.log10(value) if value else None
+                                      for value in channel_peaks],
+                "silent_channels": silent_channels,
+                "passed": clipped == 0 and not silences and not silent_channels}
