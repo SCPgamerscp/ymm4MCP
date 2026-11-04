@@ -34,6 +34,22 @@ class PromptPathFormatControlTests(unittest.TestCase):
                 "video_path": "C:\\exports\\" + "a" * 250 + ".mp4"}
         self.assertEqual(validate_prompt_arguments(args), args)
 
+    def test_exact_255_utf16_unit_boundary_for_drive_and_unc(self):
+        # The extension counts toward the Windows component limit.
+        valid_names = ("a" * 251 + ".mp4", "🎬" * 125 + "a.mp4")
+        invalid_names = ("a" * 252 + ".mp4", "🎬" * 126 + "a.mp4")
+        for root in ("C:\\exports\\", "\\\\server\\share\\"):
+            for name in valid_names:
+                with self.subTest(root=root, valid=True, name=name[:12]):
+                    args = {"theme": "動画制作", "video_path": root + name}
+                    self.assertEqual(validate_prompt_arguments(args), args)
+            for name in invalid_names:
+                with self.subTest(root=root, valid=False, name=name[:12]):
+                    with self.assertRaises(ValueError):
+                        validate_prompt_arguments({
+                            "theme": "動画制作", "video_path": root + name
+                        })
+
     def test_decomposed_windows_output_paths_are_rejected(self):
         for path in ("C:\\exports\\cafe\u0301.mp4",
                      "\\\\server\\share\\re\u0301sume.mp4"):
