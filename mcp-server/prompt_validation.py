@@ -14,7 +14,7 @@ MAX_DURATION_SECONDS = 86_400
 _BIDI_CONTROLS = {0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F),
                   *range(0x2066, 0x206A)}
 # Windows console input/output aliases are reserved even with file extensions.
-_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"}
 _WINDOWS_DEVICES.update(f"{prefix}{digit}" for prefix in ("COM", "LPT")
                         for digit in "123456789¹²³")
 
