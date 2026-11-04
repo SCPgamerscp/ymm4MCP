@@ -8,7 +8,7 @@ from asset_qa import report
 def snapshot(item_id):
     return {
         "success": True,
-        "complete": True,
+        "complete": False,
         "checked_count": 0,
         "missing": [],
         "unchecked": [],
