@@ -64,6 +64,17 @@ class PromptPathFormatControlTests(unittest.TestCase):
                 args = {"theme": "動画制作", "video_path": path}
                 self.assertEqual(validate_prompt_arguments(args), args)
 
+    def test_windows_console_aliases_are_rejected(self):
+        # CONIN$ and CONOUT$ are reserved Windows console device aliases,
+        # including when an extension is appended.
+        for root in ("C:\\exports\\", "\\\\server\\share\\"):
+            for name in ("CONIN$", "CONOUT$", "conin$.mp4", "ConOut$.mp4"):
+                with self.subTest(root=root, name=name):
+                    with self.assertRaises(ValueError):
+                        validate_prompt_arguments({
+                            "theme": "動画制作", "video_path": root + name
+                        })
+
     def test_theme_can_still_contain_format_characters(self):
         args = {"theme": "A\u200dB"}
         self.assertEqual(validate_prompt_arguments(args), args)
