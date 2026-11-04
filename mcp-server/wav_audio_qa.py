@@ -27,6 +27,8 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                                          wav.getframerate(), wav.getnframes())
         if channels < 1 or channels > 32 or width not in (1, 2, 3, 4) or rate < 1:
             raise ValueError("unsupported PCM WAV format")
+        if frames == 0:
+            raise ValueError("WAV has no audio frames")
         if frames * channels * width > max_bytes:
             raise ValueError("declared PCM payload exceeds maximum input size")
         threshold = 10 ** (silence_db / 20)
