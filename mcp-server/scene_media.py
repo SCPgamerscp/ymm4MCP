@@ -22,7 +22,7 @@ def _safe_identifier(value, limit):
             and value == value.strip() and unicodedata.is_normalized("NFC", value)
             and not any((category := unicodedata.category(char)) in {"Cc", "Cs", "Zl", "Zp"}
                         or _is_noncharacter(char)
-                        or (category == "Cf" and char not in ("\u200c", "\u200d"))
+                        or category == "Cf"
                         for char in value))
 
 
