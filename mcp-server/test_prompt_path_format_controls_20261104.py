@@ -25,13 +25,13 @@ class PromptPathFormatControlTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_prompt_arguments({
                         "theme": "動画制作",
-                        "video_path": "C:\\\\exports\\\\" + name + ".mp4",
+                        "video_path": "C:\\exports\\" + name + ".mp4",
                     })
 
     def test_windows_component_boundary_is_accepted(self):
         # 251 ASCII units + four for the extension = 255.
         args = {"theme": "動画制作",
-                "video_path": "C:\\\\exports\\\\" + "a" * 251 + ".mp4"}
+                "video_path": "C:\\exports\\" + "a" * 251 + ".mp4"}
         self.assertEqual(validate_prompt_arguments(args), args)
 
     def test_theme_can_still_contain_format_characters(self):
