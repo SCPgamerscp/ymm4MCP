@@ -23,7 +23,7 @@ _BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u20
 def _unsafe_controls(value: str) -> bool:
     return any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
                or 0xd800 <= ord(char) <= 0xdfff
-               or (unicodedata.category(char) == "Cf" and char not in "\u200c\u200d")
+               or unicodedata.category(char) == "Cf"
                or char in _BIDI_CONTROLS for char in value)
 
 
@@ -58,6 +58,7 @@ def _valid_item_id(value: object) -> bool:
     # Whitespace-padded IDs are ambiguous aliases, not distinct timeline items.
     return (isinstance(value, str) and 0 < len(value) <= MAX_ITEM_ID_LENGTH
             and value.strip() == value
+            and unicodedata.normalize("NFC", value) == value
             and not _unsafe_controls(value))
 
 
