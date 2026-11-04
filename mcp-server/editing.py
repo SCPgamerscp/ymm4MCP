@@ -157,8 +157,8 @@ def _item_ids(items, indices):
 def validate_timeline(items, expected=None, duration=None, include_gaps=True, subtitle_layers=None,
                       subtitle_timing_tolerance_frames=0):
     """Produce machine-readable structural QA without changing the timeline."""
-    if not isinstance(items, list):
-        raise ValueError("items must be an array")
+    if not isinstance(items, list) or len(items) > 10000:
+        raise ValueError("items must be an array of at most 10000 entries")
     if duration is not None:
         integer(duration, "duration", 1)
     if not isinstance(include_gaps, bool):
