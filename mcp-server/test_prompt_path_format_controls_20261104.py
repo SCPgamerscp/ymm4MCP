@@ -34,6 +34,20 @@ class PromptPathFormatControlTests(unittest.TestCase):
                 "video_path": "C:\\exports\\" + "a" * 250 + ".mp4"}
         self.assertEqual(validate_prompt_arguments(args), args)
 
+    def test_decomposed_windows_output_paths_are_rejected(self):
+        for path in ("C:\\exports\\cafe\u0301.mp4",
+                     "\\\\server\\share\\re\u0301sume.mp4"):
+            with self.subTest(path=path):
+                with self.assertRaises(ValueError):
+                    validate_prompt_arguments({"theme": "動画制作", "video_path": path})
+
+    def test_precomposed_unicode_output_paths_remain_valid(self):
+        for path in ("C:\\exports\\café.mp4",
+                     "\\\\server\\share\\résumé.mp4"):
+            with self.subTest(path=path):
+                args = {"theme": "動画制作", "video_path": path}
+                self.assertEqual(validate_prompt_arguments(args), args)
+
     def test_theme_can_still_contain_format_characters(self):
         args = {"theme": "A\u200dB"}
         self.assertEqual(validate_prompt_arguments(args), args)
