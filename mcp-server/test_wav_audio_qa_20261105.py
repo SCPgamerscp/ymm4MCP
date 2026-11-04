@@ -37,6 +37,21 @@ class AudioQaTests(unittest.TestCase):
         write_wav(self.path, [0, 10000] * 20, channels=2)
         self.assertEqual(inspect_wav(self.path)["long_silences"], [])
 
+    def test_silent_left_channel_fails_stereo_qa(self):
+        write_wav(self.path, [0, 10000] * 20, channels=2)
+        result = inspect_wav(self.path)
+        self.assertEqual(result["silent_channels"], [0])
+        self.assertIsNone(result["channel_peak_dbfs"][0])
+        self.assertIsNotNone(result["channel_peak_dbfs"][1])
+        self.assertFalse(result["passed"])
+
+    def test_active_stereo_channels_pass(self):
+        write_wav(self.path, [10000, -12000] * 20, channels=2)
+        result = inspect_wav(self.path)
+        self.assertEqual(result["silent_channels"], [])
+        self.assertEqual(len(result["channel_peak_dbfs"]), 2)
+        self.assertTrue(result["passed"])
+
     def test_rejects_oversized_input_and_bad_thresholds(self):
         write_wav(self.path, [0] * 10)
         with self.assertRaises(ValueError):
