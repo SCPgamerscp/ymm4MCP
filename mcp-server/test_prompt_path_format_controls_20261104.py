@@ -12,11 +12,11 @@ class PromptPathFormatControlTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_prompt_arguments({
                         "theme": "動画制作",
-                        "video_path": "C:\\\\exports\\\\clip" + char + ".mp4",
+                        "video_path": "C:\\exports\\clip" + char + ".mp4",
                     })
 
     def test_normal_japanese_and_emoji_filename_remains_valid(self):
-        args = {"theme": "動画制作", "video_path": "C:\\\\exports\\\\動画🎬.mp4"}
+        args = {"theme": "動画制作", "video_path": "C:\\exports\\動画🎬.mp4"}
         self.assertEqual(validate_prompt_arguments(args), args)
 
     def test_theme_can_still_contain_format_characters(self):
