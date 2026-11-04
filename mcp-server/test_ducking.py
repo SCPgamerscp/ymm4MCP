@@ -84,7 +84,8 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_apply_uses_revision_chain_and_verifies(self):
         planned = ducking.plan(ITEMS["items"][0], ITEMS["items"][1:], 100)
         verified = {"success": True, "item_id": "bgm:1", "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
-            {"at": 0, "value": 100}, *planned]}]}
+            {"at": 0, "value": 100, "absolute_frame": 0},
+            *[{**point, "absolute_frame": point["at"]} for point in planned]]}]}
         gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, verified]
         posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]

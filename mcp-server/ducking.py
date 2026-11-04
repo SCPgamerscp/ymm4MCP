@@ -1,6 +1,7 @@
 """Plan bounded Volume keyframes around the current voice spans."""
 
 import math
+import unicodedata
 
 from editing import finite_number, integer
 
@@ -10,7 +11,8 @@ def valid_identifier(value, *, max_length=1024):
     return (isinstance(value, str) and 1 <= len(value) <= max_length and
             value == value.strip() and
             not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or
-                    0xD800 <= ord(ch) <= 0xDFFF for ch in value))
+                    0xD800 <= ord(ch) <= 0xDFFF or
+                    unicodedata.category(ch) in ('Cf', 'Zl', 'Zp') or ord(ch) == 0x034F for ch in value))
 
 
 def _finite_input(value, name):
@@ -189,6 +191,10 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
                 observed_start = start
         if 0 < absolute_count < len(keys):
             return False
+        # When the caller requires a verified timeline origin, every populated
+        # animation must carry absolute-frame evidence, not just Volume.
+        if expected_start_frame is not None and keys and absolute_count != len(keys):
+            return False
         if observed_start is not None:
             if item_start is not None and observed_start != item_start:
                 return False
@@ -257,5 +263,9 @@ def verify_keyframes(report: dict, revision: str, points: list[dict], base_volum
     # Mixed absolute/relative-only snapshots cannot establish a coherent
     # timeline origin for the entire returned curve.
     if 0 < absolute_frame_count < len(found):
+        return False
+    # A caller-supplied start frame must be corroborated by the host echo.
+    # Relative-only keyframes cannot establish the item timeline origin.
+    if expected_start_frame is not None and found and absolute_frame_count != len(found):
         return False
     return True
