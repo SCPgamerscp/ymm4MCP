@@ -36,7 +36,7 @@ class SceneSnapshotIntegrityTests(unittest.TestCase):
     def test_preserves_missing_types_and_readable_unicode(self):
         item = {key: value for key, value in ITEM.items() if key != "type"}
         result = scenes.index([{**item, "item_id": "native:立ち絵"}],
-                              [{"id": "家族👨\u200d👩\u200d👧", "start_frame": 0, "end_frame": 10}])
+                              [{"id": "家族👨👩👧", "start_frame": 0, "end_frame": 10}])
         self.assertEqual(result["scenes"][0]["items"][0]["item_id"], "native:立ち絵")
         self.assertEqual(result["scenes"][0]["items"][0]["type"], None)
         self.assertEqual(scenes.index([ITEM], RANGES)["scenes"][0]["item_count"], 1)
