@@ -25,7 +25,7 @@ def _invalid_unicode(char: str, *, path: bool) -> bool:
     if (0xD800 <= code <= 0xDFFF or 0xFDD0 <= code <= 0xFDEF
             or (code & 0xFFFE) == 0xFFFE):
         return True
-    if path and (unicodedata.category(char) == "Cc" or code in _BIDI_CONTROLS):
+    if path and (unicodedata.category(char) in {"Cc", "Cf"} or code in _BIDI_CONTROLS):
         return True
     return False
 
