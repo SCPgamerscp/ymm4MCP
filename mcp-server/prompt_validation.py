@@ -88,7 +88,11 @@ def validate_prompt_arguments(arguments: object) -> dict:
                 len(path) > MAX_VIDEO_PATH_CHARS or
                 any(_invalid_unicode(c, path=True) for c in path)):
             raise ValueError("video_path は制御文字を含まない空でない文字列で指定してください")
-        # Canonicalize identity at the boundary: visually identical decomposed\n        # names must not silently target a different Windows file.\n        if unicodedata.normalize("NFC", path) != path:\n            raise ValueError("video_path はNFC正規化された文字列で指定してください")\n        if not _windows_media_file(path):
+        # Canonicalize identity at the boundary: visually identical decomposed
+        # names must not silently target a different Windows file.
+        if unicodedata.normalize("NFC", path) != path:
+            raise ValueError("video_path はNFC正規化された文字列で指定してください")
+        if not _windows_media_file(path):
             raise ValueError("video_path はWindowsの絶対パスで指定してください")
 
     if "duration_seconds" in args:
