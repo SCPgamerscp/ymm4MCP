@@ -13,7 +13,8 @@ MAX_DURATION_SECONDS = 86_400
 # different filename in logs or in a human approval prompt.
 _BIDI_CONTROLS = {0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F),
                   *range(0x2066, 0x206A)}
-_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL"}
+# Windows console input/output aliases are reserved even with file extensions.
+_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"}
 _WINDOWS_DEVICES.update(f"{prefix}{digit}" for prefix in ("COM", "LPT")
                         for digit in "123456789¹²³")
 
@@ -25,7 +26,7 @@ def _invalid_unicode(char: str, *, path: bool) -> bool:
     if (0xD800 <= code <= 0xDFFF or 0xFDD0 <= code <= 0xFDEF
             or (code & 0xFFFE) == 0xFFFE):
         return True
-    if path and (unicodedata.category(char) == "Cc" or code in _BIDI_CONTROLS):
+    if path and (unicodedata.category(char) in {"Cc", "Cf"} or code in _BIDI_CONTROLS):
         return True
     return False
 
@@ -34,6 +35,10 @@ def _valid_windows_component(part: str) -> bool:
     if (not part or part in {".", ".."} or part.endswith((" ", "."))
             or any(char in '<>:"|?*' or _invalid_unicode(char, path=True)
                    for char in part)):
+        return False
+    # Windows filesystems typically limit each filename component to 255 UTF-16
+    # code units. Python len() counts astral characters as one, not two.
+    if len(part.encode("utf-16-le")) // 2 > 255:
         return False
     return part.split(".", 1)[0].rstrip(" ").upper() not in _WINDOWS_DEVICES
 
@@ -84,6 +89,10 @@ def validate_prompt_arguments(arguments: object) -> dict:
                 len(path) > MAX_VIDEO_PATH_CHARS or
                 any(_invalid_unicode(c, path=True) for c in path)):
             raise ValueError("video_path は制御文字を含まない空でない文字列で指定してください")
+        # Canonicalize identity at the boundary: visually identical decomposed
+        # names must not silently target a different Windows file.
+        if unicodedata.normalize("NFC", path) != path:
+            raise ValueError("video_path はNFC正規化された文字列で指定してください")
         if not _windows_media_file(path):
             raise ValueError("video_path はWindowsの絶対パスで指定してください")
 
