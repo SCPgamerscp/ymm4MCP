@@ -110,9 +110,11 @@ class SceneTypeCanonicalIntegrityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "item type"):
                     with_coverage(legacy(kind="VideoItem" + char))
 
-    def test_emoji_joiner_in_identifier_still_allowed(self):
-        data = source(item_id="emoji-\U0001f469\u200d\U0001f4bb")
-        self.assertEqual(with_coverage(data)["scenes"][0]["visual_covered_frames"], 20)
+    def test_emoji_joiner_in_identifier_rejected(self):
+        with self.assertRaisesRegex(ValueError, "item_id"):
+            source(item_id="emoji-\U0001f469\u200d\U0001f4bb")
+        with self.assertRaisesRegex(ValueError, "item IDs"):
+            with_coverage(legacy(item_id="emoji-\U0001f469\u200d\U0001f4bb"))
 
     def test_namespaced_known_type_still_provides_visual_coverage(self):
         data = source(kind="YMM4.Items+VideoItem")
