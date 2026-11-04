@@ -47,9 +47,12 @@ class AssetQaIdentityHardeningTests(unittest.TestCase):
             with self.subTest(path=repr(path)), self.assertRaises(ValueError):
                 asset_qa.report(snapshot(missing=[source(path)]))
 
-    def test_allows_joined_emoji_and_unicode_identities(self):
-        result = asset_qa.report(snapshot(missing=[source("/media/👩\u200d💻.mp4", "動画👩\u200d💻")]))
-        self.assertEqual(result["issues"][0]["item_ids"], ["動画👩\u200d💻"])
+    def test_rejects_joiner_aliases_in_asset_paths_and_ids(self):
+        # Invisible joiners must not create distinct asset evidence identities.
+        with self.assertRaises(ValueError):
+            asset_qa.report(snapshot(missing=[source("/media/👩\u200d💻.mp4", "native:1")]))
+        with self.assertRaises(ValueError):
+            asset_qa.report(snapshot(missing=[source("/media/clip.mp4", "動画👩\u200d💻")]))
 
     def test_rejects_oversized_item_id_but_accepts_boundary(self):
         with self.assertRaises(ValueError):
