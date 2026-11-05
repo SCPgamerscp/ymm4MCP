@@ -9,7 +9,8 @@ import wave
 
 
 def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
-                clip_threshold=0.999, max_bytes=256_000_000):
+                clip_threshold=0.999, max_bytes=256_000_000,
+                max_stereo_imbalance_db=None):
     """Return deterministic clipping/silence findings without loading the whole file."""
     if not isinstance(path, (str, os.PathLike)):
         raise ValueError("path must be a filesystem path")
@@ -20,6 +21,11 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         raise ValueError("thresholds must be finite numbers")
     if not -120 <= silence_db < 0 or min_silence_seconds <= 0 or not 0 < clip_threshold <= 1:
         raise ValueError("invalid thresholds")
+    if max_stereo_imbalance_db is not None and (
+            type(max_stereo_imbalance_db) not in (int, float)
+            or not math.isfinite(max_stereo_imbalance_db)
+            or not 0 <= max_stereo_imbalance_db <= 120):
+        raise ValueError("max_stereo_imbalance_db must be finite and in [0, 120]")
     if os.stat(path).st_size > max_bytes:
         raise ValueError("WAV exceeds maximum input size")
     with wave.open(path, "rb") as wav:
@@ -77,6 +83,30 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         silent_channels = [ch for ch, value in enumerate(channel_peaks) if value <= threshold]
         channel_rms = [math.sqrt(total / frames) for total in channel_sum_squares]
         rms = math.sqrt(sum(channel_sum_squares) / (frames * channels))
+        # A stereo mix with one silent channel must never appear balanced.
+        # Use RMS rather than sample peak to detect sustained channel imbalance.
+        stereo_imbalance_db = None
+        if channels == 2:
+            if channel_rms[0] == 0 and channel_rms[1] == 0:
+                stereo_imbalance_db = 0.0
+            elif min(channel_rms) == 0:
+                stereo_imbalance_db = None  # Infinite imbalance, JSON-safe.
+            else:
+                stereo_imbalance_db = 20 * math.log10(max(channel_rms) / min(channel_rms))
+        imbalance_failed = (channels == 2 and max_stereo_imbalance_db is not None
+                            and (stereo_imbalance_db is None
+                                 or stereo_imbalance_db > max_stereo_imbalance_db))
+        issues = []
+        if clipped:
+            issues.append({"code": "AUDIO_CLIPPING", "clipped_samples": clipped})
+        for interval in silences:
+            issues.append({"code": "AUDIO_LONG_SILENCE", **interval})
+        if silent_channels:
+            issues.append({"code": "AUDIO_SILENT_CHANNEL", "channels": silent_channels})
+        if imbalance_failed:
+            issues.append({"code": "AUDIO_STEREO_IMBALANCE",
+                           "imbalance_db": stereo_imbalance_db,
+                           "max_allowed_db": max_stereo_imbalance_db})
         return {"duration_seconds": frames / rate, "sample_rate": rate,
                 "channels": channels, "peak_dbfs": 20 * math.log10(peak) if peak else None,
                 "clipped_samples": clipped, "clipped_sample_fraction": clipped / (frames * channels),
@@ -87,4 +117,6 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                 "channel_peak_dbfs": [20 * math.log10(value) if value else None
                                       for value in channel_peaks],
                 "silent_channels": silent_channels,
-                "passed": clipped == 0 and not silences and not silent_channels}
+                "stereo_imbalance_db": stereo_imbalance_db,
+                "issues": issues,
+                "passed": not issues}
