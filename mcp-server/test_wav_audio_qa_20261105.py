@@ -1,4 +1,5 @@
 """Regression tests for bounded WAV audio inspection."""
+import math
 import os
 import tempfile
 import unittest
@@ -51,6 +52,21 @@ class AudioQaTests(unittest.TestCase):
         self.assertEqual(result["silent_channels"], [])
         self.assertEqual(len(result["channel_peak_dbfs"]), 2)
         self.assertTrue(result["passed"])
+
+    def test_rms_reports_constant_mono_amplitude(self):
+        write_wav(self.path, [10000] * 30)
+        result = inspect_wav(self.path)
+        expected = 20 * math.log10(10000 / 32768)
+        self.assertAlmostEqual(result["rms_dbfs"], expected)
+        self.assertAlmostEqual(result["channel_rms_dbfs"][0], expected)
+        self.assertTrue(result["passed"])
+
+    def test_rms_exposes_silent_stereo_channel(self):
+        write_wav(self.path, [0, 10000] * 20, channels=2)
+        result = inspect_wav(self.path)
+        self.assertEqual(result["channel_rms_dbfs"][0], None)
+        self.assertAlmostEqual(result["channel_rms_dbfs"][1], 20 * math.log10(10000 / 32768))
+        self.assertAlmostEqual(result["rms_dbfs"], 20 * math.log10(10000 / 32768 / math.sqrt(2)))
 
     def test_rejects_oversized_input_and_bad_thresholds(self):
         write_wav(self.path, [0] * 10)
