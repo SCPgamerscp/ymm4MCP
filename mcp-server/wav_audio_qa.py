@@ -33,7 +33,7 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         raise ValueError("max_dc_offset_dbfs must be finite and in [-120, 0]")
     if os.stat(path).st_size > max_bytes:
         raise ValueError("WAV exceeds maximum input size")
-    with wave.open(path, "rb") as wav:
+    # wave.open on Python 3.12 treats pathlib.Path as a file object; pass a string.\n    with wave.open(os.fspath(path), "rb") as wav:
         channels, width, rate, frames = (wav.getnchannels(), wav.getsampwidth(),
                                          wav.getframerate(), wav.getnframes())
         if channels < 1 or channels > 32 or width not in (1, 2, 3, 4) or rate < 1:
