@@ -79,7 +79,8 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         rms = math.sqrt(sum(channel_sum_squares) / (frames * channels))
         return {"duration_seconds": frames / rate, "sample_rate": rate,
                 "channels": channels, "peak_dbfs": 20 * math.log10(peak) if peak else None,
-                "clipped_samples": clipped, "long_silences": silences,
+                "clipped_samples": clipped, "clipped_sample_fraction": clipped / (frames * channels),
+                "long_silences": silences,
                 "rms_dbfs": 20 * math.log10(rms) if rms else None,
                 "channel_rms_dbfs": [20 * math.log10(value) if value else None
                                     for value in channel_rms],
