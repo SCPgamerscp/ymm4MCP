@@ -10,7 +10,7 @@ import wave
 
 def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                 clip_threshold=0.999, max_bytes=256_000_000,
-                max_stereo_imbalance_db=None):
+                max_stereo_imbalance_db=None, max_dc_offset_dbfs=None):
     """Return deterministic clipping/silence findings without loading the whole file."""
     if not isinstance(path, (str, os.PathLike)):
         raise ValueError("path must be a filesystem path")
@@ -26,6 +26,11 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
             or not math.isfinite(max_stereo_imbalance_db)
             or not 0 <= max_stereo_imbalance_db <= 120):
         raise ValueError("max_stereo_imbalance_db must be finite and in [0, 120]")
+    if max_dc_offset_dbfs is not None and (
+            type(max_dc_offset_dbfs) not in (int, float)
+            or not math.isfinite(max_dc_offset_dbfs)
+            or not -120 <= max_dc_offset_dbfs <= 0):
+        raise ValueError("max_dc_offset_dbfs must be finite and in [-120, 0]")
     if os.stat(path).st_size > max_bytes:
         raise ValueError("WAV exceeds maximum input size")
     with wave.open(path, "rb") as wav:
@@ -44,6 +49,7 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         clipped = 0
         channel_peaks = [0.0] * channels
         channel_sum_squares = [0.0] * channels
+        channel_sums = [0.0] * channels
         processed = 0
         while processed < frames:
             raw = wav.readframes(min(4096, frames - processed))
@@ -67,6 +73,7 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                     peak = max(peak, magnitude)
                     channel_peaks[ch] = max(channel_peaks[ch], magnitude)
                     channel_sum_squares[ch] += value * value
+                    channel_sums[ch] += value
                     if magnitude >= clip_threshold:
                         clipped += 1
                 at = processed + index
@@ -96,7 +103,19 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
         imbalance_failed = (channels == 2 and max_stereo_imbalance_db is not None
                             and (stereo_imbalance_db is None
                                  or stereo_imbalance_db > max_stereo_imbalance_db))
+        # DC offset is a non-zero mean waveform, not ordinary RMS loudness.
+        channel_dc_offsets = [abs(total / frames) for total in channel_sums]
+        dc_offset_dbfs = [20 * math.log10(value) if value else None
+                          for value in channel_dc_offsets]
+        dc_failed_channels = ([i for i, value in enumerate(channel_dc_offsets)
+                               if value > 0 and
+                               20 * math.log10(value) > max_dc_offset_dbfs]
+                              if max_dc_offset_dbfs is not None else [])
         issues = []
+        if dc_failed_channels:
+            issues.append({"code": "AUDIO_DC_OFFSET",
+                           "channels": dc_failed_channels,
+                           "max_allowed_dbfs": max_dc_offset_dbfs})
         if clipped:
             issues.append({"code": "AUDIO_CLIPPING", "clipped_samples": clipped})
         for interval in silences:
@@ -117,6 +136,7 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                 "channel_peak_dbfs": [20 * math.log10(value) if value else None
                                       for value in channel_peaks],
                 "silent_channels": silent_channels,
+                "channel_dc_offset_dbfs": dc_offset_dbfs,
                 "stereo_imbalance_db": stereo_imbalance_db,
                 "issues": issues,
                 "passed": not issues}
