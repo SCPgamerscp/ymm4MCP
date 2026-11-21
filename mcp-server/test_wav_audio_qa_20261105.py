@@ -1,6 +1,7 @@
 """Regression tests for bounded WAV audio inspection."""
 import math
 import os
+import struct
 import tempfile
 import unittest
 import wave
@@ -97,6 +98,25 @@ class AudioQaTests(unittest.TestCase):
             stream.truncate(os.path.getsize(self.path) - 10)
         with self.assertRaises((ValueError, EOFError)):
             inspect_wav(self.path)
+
+    def test_rejects_partial_pcm_frame_at_end_of_data(self):
+        for tail in (b"", b"\x01"):
+            with self.subTest(tail=tail):
+                write_wav(self.path, [1000] * 4, channels=2)
+                with open(self.path, "rb+") as stream:
+                    stream.seek(4)
+                    stream.write(struct.pack("<I", 46))  # 36 header bytes, 9 data bytes, 1 pad byte.
+                    stream.seek(40)
+                    stream.write(struct.pack("<I", 9))
+                    stream.seek(0, os.SEEK_END)
+                    if tail:
+                        stream.write(tail + b"\x00")
+                with self.assertRaises(ValueError):
+                    inspect_wav(self.path)
+
+    def test_accepts_complete_odd_byte_pcm_data(self):
+        write_wav(self.path, [50, 60, 70], width=1)
+        self.assertEqual(inspect_wav(self.path)["duration_seconds"], 0.3)
 
 
 if __name__ == "__main__":

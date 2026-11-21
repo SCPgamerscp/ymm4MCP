@@ -31,10 +31,16 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
             or not math.isfinite(max_dc_offset_dbfs)
             or not -120 <= max_dc_offset_dbfs <= 0):
         raise ValueError("max_dc_offset_dbfs must be finite and in [-120, 0]")
-    if os.stat(path).st_size > max_bytes:
-        raise ValueError("WAV exceeds maximum input size")
-    # Pass a string so pathlib.Path is not mistaken for an open file object.
-    with wave.open(os.fspath(path), "rb") as wav:
+    with open(path, "rb") as stream:
+        file_size = os.fstat(stream.fileno()).st_size
+        if file_size > max_bytes:
+            raise ValueError("WAV exceeds maximum input size")
+        header = stream.read(12)
+        if (len(header) == 12 and header[:4] == b"RIFF"
+                and struct.unpack_from("<I", header, 4)[0] + 8 > file_size):
+            raise ValueError("truncated RIFF chunk")
+        stream.seek(0)
+        wav = wave.open(stream, "rb")
         channels, width, rate, frames = (wav.getnchannels(), wav.getsampwidth(),
                                          wav.getframerate(), wav.getnframes())
         if channels < 1 or channels > 32 or width not in (1, 2, 3, 4) or rate < 1:
@@ -89,6 +95,9 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                         silences.append({"start_seconds": silence_start / rate, "end_seconds": at / rate})
                     silence_start = None
             processed += count
+        # wave rounds the data chunk's byte count down to whole PCM frames.
+        if wav.readframes(1):
+            raise ValueError("truncated PCM frame")
         if silence_start is not None and (frames - silence_start) / rate >= min_silence_seconds:
             silences.append({"start_seconds": silence_start / rate, "end_seconds": frames / rate})
         silent_channels = [ch for ch, value in enumerate(channel_peaks) if value <= threshold]
