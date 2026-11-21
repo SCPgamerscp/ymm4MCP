@@ -72,6 +72,20 @@ class RippleDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(result["issues"][0]["code"], "RIPPLE_FIELD_MISMATCH")
 
+    async def test_verifying_removal_of_last_item_requires_a_readable_inventory(self):
+        before = {"count": 1, "items": [
+            {"item_id": "cut", "frame": 10, "length": 10, "layer": 1, "revision": "r1"}]}
+        args = {"action": "verify_ripple_delete", "before_snapshot": before,
+                "start_frame": 10, "end_frame": 20, "expected_revisions": {"cut": "r1"}}
+        outcomes = ({"success": False, "error_code": "ITEMS_UNAVAILABLE"},
+                    {"count": 0, "items": []})
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=outcomes)):
+            unavailable = await server.dispatch(args)
+            empty = await server.dispatch(args)
+        self.assertFalse(unavailable["passed"])
+        self.assertEqual(unavailable["error_code"], "RIPPLE_AFTER_SNAPSHOT_INVALID")
+        self.assertTrue(empty["passed"])
+
     async def test_verify_ripple_delete_requires_before_snapshot(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
             with self.assertRaises(ValueError):
