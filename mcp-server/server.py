@@ -1623,25 +1623,21 @@ async def dispatch(args: dict) -> Any:
             raise ValueError(f"Unknown action: {action}")
 
 
-async def _script_append_start(plan: dict, args: dict) -> int | dict:
-    snapshot = await ymm4_get("/items")
-    if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
-            not isinstance(snapshot.get("items"), list):
-        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+def _script_append_start(plan: dict, args: dict, items: list) -> int | dict:
     frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
     layers = {line["layer"] for line in plan["details"]}
     try:
-        for item in snapshot["items"]:
+        for item in items:
             if not isinstance(item, dict):
                 raise ValueError("invalid item")
-            if item.get("layer") in layers:
+            if integer(item.get("layer"), "item layer") in layers:
                 end = integer(integer(item.get("frame"), "item frame") +
                               integer(item.get("length"), "item length", 1), "item end")
                 frame = max(frame, end + gap)
         return integer(frame, "append frame")
-    except ValueError:
-        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    except ValueError as exc:
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "error": str(exc)}
 
 
 async def add_script(args: dict, *, expected_snapshot: str | None = None) -> dict:
@@ -1671,7 +1667,10 @@ async def add_script(args: dict, *, expected_snapshot: str | None = None) -> dic
     if not isinstance(append, bool):
         raise ValueError("append_after_existing must be boolean")
     if append and args.get("dry_run", False):
-        start = await _script_append_start(plan, args)
+        items, failure = await script_guard.read_snapshot(ymm4_get, expected_snapshot)
+        if failure is not None:
+            return failure
+        start = _script_append_start(plan, args, items)
         if isinstance(start, dict):
             return start
         planning_args = {**args, "start_frame": start}
@@ -1695,25 +1694,16 @@ async def add_script(args: dict, *, expected_snapshot: str | None = None) -> dic
         raise ValueError(f"キャラ名は一覧から一意の完全一致名を指定してください: {unknown[0]}")
     frame = args.get("start_frame", 0)
     gap = args.get("gap", 0)
-    if append:
-        start = await _script_append_start(plan, args)
-        if isinstance(start, dict):
-            return start
-        frame = start
+    if append or expected_snapshot is not None:
+        items, failure = await script_guard.read_snapshot(ymm4_get, expected_snapshot)
+        if failure is not None:
+            return failure
+        if append:
+            start = _script_append_start(plan, args, items)
+            if isinstance(start, dict):
+                return start
+            frame = start
     start_frame_used = frame
-    if expected_snapshot is not None and not args.get("dry_run", False):
-        try:
-            snapshot = await ymm4_get("/items")
-        except httpx.HTTPError as exc:
-            snapshot = {"error": str(exc)}
-        if not isinstance(snapshot, dict) or snapshot.get("success") is False or \
-                not isinstance(snapshot.get("items"), list):
-            return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
-        actual = editplan.snapshot_hash(snapshot["items"])
-        if actual != expected_snapshot:
-            return {"success": False, "error_code": "SNAPSHOT_CONFLICT",
-                    "expected_snapshot_hash": expected_snapshot, "actual_snapshot_hash": actual,
-                    "added": 0}
     results = []
     for index, line in enumerate(plan["details"]):
         requested_frame = frame
