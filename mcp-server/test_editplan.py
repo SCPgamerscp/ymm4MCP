@@ -505,6 +505,7 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             ({"items": [], "count": 1, "timeline_id": ROLLBACK_TIMELINE_ID}, 2, [], True),
             ({"items": [], "count": 0, "timeline_id": "timeline:" + "b" * 32}, 2, [], True),
             ({"items": [], "count": 0}, 2, [], True),
+            ({"success": False, "error_code": "ITEMS_UNAVAILABLE"}, 2, [], True),
             ({"items": [], "count": 0, "error_code": "ITEMS_UNAVAILABLE"}, 2, [], True),
             (httpx.ConnectError("readback disconnected"), 2, [], True),
         ):
