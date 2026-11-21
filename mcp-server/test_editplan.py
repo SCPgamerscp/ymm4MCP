@@ -742,6 +742,22 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             posted.assert_not_awaited()
         self.assertEqual(result["error_code"], "BINDINGS_UNAVAILABLE")
 
+    async def test_partial_edit_reports_unconfirmed_binding_save(self):
+        for saved in (None, {}, {"success": 1}, {"success": True, "error": "disk error"},
+                      ValueError("invalid JSON")):
+            with self.subTest(saved=saved):
+                get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], [
+                    {"success": True, "item_id": "native:bg", "revision": "r1", "frame": 0, "length": 300},
+                    {"success": False, "error": "voice generation failed"},
+                    saved,
+                ])
+                with get, posted:
+                    result = await server.dispatch({"action": "apply_edit", "atomic_scenes": False, **sample_plan()})
+                self.assertEqual(result["error_code"], "EDIT_PARTIAL_FAILURE")
+                self.assertEqual(result["added"], 1)
+                self.assertEqual(result["warning"], "BINDINGS_NOT_SAVED")
+                self.assertEqual(result["binding_error"]["error_code"], "BINDINGS_NOT_SAVED")
+
     async def test_invalid_initial_items_stop_before_post(self):
         async def get(path):
             if path == "/characters":

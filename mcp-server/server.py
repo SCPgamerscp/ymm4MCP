@@ -1807,11 +1807,14 @@ async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | Non
             "plan_hash": editplan.plan_hash(plan),
             "items": bindings,
         })
-        if isinstance(saved, dict) and saved.get("success") is False:
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"error_code": "BINDINGS_NOT_SAVED", "error": str(exc)}
+    if isinstance(saved, dict):
+        if saved.get("success") is True and "error" not in saved and "error_code" not in saved:
+            return None
+        if saved.get("success") is False:
             return saved
-    except httpx.HTTPError:
-        return {"error_code": "BINDINGS_NOT_SAVED"}
-    return None
+    return {"error_code": "BINDINGS_NOT_SAVED", "response": saved}
 
 
 async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_index, failed_scene,
@@ -2097,22 +2100,13 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 "outcome_unknown": True, "rolled_back": False, "atomic_scenes": atomic,
                 "committed_scenes": committed, "scenes": scene_reports}
 
-    if plan.get("idempotency_key"):
-        try:
-            saved = await ymm4_post("/edits/bindings", {
-                "idempotency_key": plan["idempotency_key"],
-                "plan_hash": editplan.plan_hash(plan),
-                "items": bindings,
-            })
-        except httpx.HTTPError as exc:
-            saved = {"error": str(exc)}
-        if not isinstance(saved, dict) or saved.get("success") is not True:
-            code = saved.get("error_code") if isinstance(saved, dict) else None
-            return {"success": False, "error_code": code or "BINDINGS_NOT_SAVED",
-                    "error": "EditPlanは適用されましたが、再適用情報を保存できませんでした",
-                    "added": added, "details": details, "binding_error": saved,
-                    "rolled_back": False, "atomic_scenes": atomic,
-                    "committed_scenes": committed, "scenes": scene_reports}
+    binding_error = await _persist_edit_bindings(plan, bindings)
+    if binding_error is not None:
+        return {"success": False, "error_code": binding_error.get("error_code") or "BINDINGS_NOT_SAVED",
+                "error": "EditPlanは適用されましたが、再適用情報を保存できませんでした",
+                "added": added, "details": details, "binding_error": binding_error,
+                "rolled_back": False, "atomic_scenes": atomic,
+                "committed_scenes": committed, "scenes": scene_reports}
     result = {
         "success": True, "replayed": False, "dry_run": False, "added": added,
         "kept": sum(d["op"] == "keep" for d in details), "details": details,
