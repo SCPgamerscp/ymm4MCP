@@ -32,7 +32,7 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
-from item_verification import validate_expected_items, verify_items
+from item_verification import read_item_inventory, validate_expected_items, verify_items
 from ripple_planning import plan_ripple_delete
 from ripple_verification import verify_ripple_result
 from ripple_evidence import RippleEvidenceStore, project_identity
@@ -1786,16 +1786,32 @@ async def _delete_item_ids(item_ids: list[str]) -> dict:
         return {"success": True, "removed": 0, "item_ids": []}
     try:
         res = await ymm4_post("/items/delete", {"item_ids": ids})
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError):
         return {"success": False, "error_code": "ROLLBACK_REQUEST_FAILED",
                 "error": "ロールバック削除の通信に失敗しました。itemsで確認してください。",
                 "outcome_unknown": True, "item_ids": ids}
     if not isinstance(res, dict) or res.get("success") is not True:
         return {"success": False, "error_code": "ROLLBACK_FAILED",
                 "error": "失敗シーンの追加分を削除できませんでした",
-                "failure": res, "item_ids": ids}
+                "failure": res, "item_ids": ids,
+                "outcome_unknown": isinstance(res, dict) and res.get("outcome_unknown") is True}
+    try:
+        inventory, error = read_item_inventory(await ymm4_get("/items"),
+                                               max_items=quality_guard.MAX_SNAPSHOT_ITEMS)
+    except (httpx.HTTPError, ValueError):
+        error = {"error_code": "ITEMS_UNAVAILABLE"}
+    if error:
+        return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
+                "error": "削除後のタイムラインを確認できませんでした",
+                "verification": error, "outcome_unknown": True, "item_ids": ids}
+    remaining = [item_id for item_id in ids if item_id in inventory]
+    if remaining:
+        return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
+                "error": "失敗シーンの追加アイテムが削除後も残っています",
+                "item_ids": ids, "remaining_item_ids": remaining}
     return {"success": True, "removed": res.get("removed", len(ids)),
-            "item_ids": res.get("item_ids", ids), "missing": res.get("missing") or []}
+            "item_ids": res.get("item_ids", ids), "missing": res.get("missing") or [],
+            "verified": True}
 
 
 async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | None:
@@ -1820,31 +1836,34 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
                                outcome_unknown=False):
     rollback = None
     rolled_back = False
-    remaining_added = added
+    removed_ids = set()
     remaining_details = list(details)
     if atomic and scene_added_ids and not outcome_unknown:
         rollback = await _delete_item_ids(scene_added_ids)
         rolled_back = rollback.get("success") is True
+        outcome_unknown = rollback.get("outcome_unknown") is True
         if rolled_back:
-            remaining_added = max(0, added - len(scene_added_ids))
-        elif scene_details:
-            remaining_details = remaining_details + scene_details
-    elif scene_details:
-        remaining_details = remaining_details + scene_details
+            removed_ids.update(scene_added_ids)
+        elif "remaining_item_ids" in rollback:
+            removed_ids = set(scene_added_ids).difference(rollback["remaining_item_ids"])
+    if not rolled_back and scene_details:
+        remaining_details.extend(row for row in scene_details
+                                 if not isinstance(row["item_id"], str) or row["item_id"] not in removed_ids)
     persist = list(bindings)
-    if not rolled_back and scene_bindings:
-        persist.extend(scene_bindings)
+    if not rolled_back and scene_bindings and not (rollback and outcome_unknown):
+        persist.extend(row for row in scene_bindings
+                       if not isinstance(row["item_id"], str) or row["item_id"] not in removed_ids)
     binding_error = await _persist_edit_bindings(plan, persist)
     scenes = list(scenes)
     scenes.append({
         "id": failed_scene, "status": "rolled_back" if rolled_back else "partial",
-        "added": 0 if rolled_back else len(scene_added_ids),
+        "added": len(scene_added_ids) - len(removed_ids),
         "failed_id": failed_id,
     })
     result = {
         "success": False, "error_code": error_code, "error": error,
         "failed_id": failed_id, "failed_index": failed_index, "failed_scene": failed_scene,
-        "added": remaining_added, "details": remaining_details, "committed_scenes": committed,
+        "added": max(0, added - len(removed_ids)), "details": remaining_details, "committed_scenes": committed,
         "scenes": scenes, "rolled_back": rolled_back, "atomic_scenes": atomic,
         "plan_hash": editplan.plan_hash(plan), "idempotency_key": plan.get("idempotency_key"),
         "item_count": plan["item_count"],

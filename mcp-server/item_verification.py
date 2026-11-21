@@ -53,6 +53,29 @@ def validate_expected_items(expected):
     return expected
 
 
+def read_item_inventory(snapshot, *, max_items=MAX_SNAPSHOT):
+    """Index a complete /api/items snapshot, or return its validation failure."""
+    if (not isinstance(snapshot, dict) or
+            ("success" in snapshot and snapshot["success"] is not True) or
+            "error" in snapshot or "error_code" in snapshot):
+        return None, {"success": False, "passed": False, "error_code": "ITEMS_UNAVAILABLE"}
+    items = snapshot.get("items")
+    count = snapshot.get("count")
+    if (not isinstance(items, list) or len(items) > max_items or
+            isinstance(count, bool) or not isinstance(count, int) or count != len(items)):
+        return None, {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
+    ids = []
+    for item in items:
+        if not isinstance(item, dict) or not _valid_id(item.get("item_id")):
+            return None, {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
+        ids.append(item["item_id"])
+    duplicates = [item_id for item_id, n in Counter(ids).items() if n > 1]
+    if duplicates:
+        return None, {"success": False, "passed": False, "error_code": "ITEM_ID_AMBIGUOUS",
+                "duplicate_item_ids": duplicates[:20]}
+    return {item["item_id"]: item for item in items}, None
+
+
 def verify_items(snapshot, expected):
     """Compare one complete /api/items snapshot with explicit stable-ID expectations.
 
@@ -60,24 +83,9 @@ def verify_items(snapshot, expected):
     requested field matched. A missing/ambiguous item is never treated as a pass.
     """
     validate_expected_items(expected)
-    if (not isinstance(snapshot, dict) or snapshot.get("success") is False or
-            "error" in snapshot or "error_code" in snapshot):
-        return {"success": False, "passed": False, "error_code": "ITEMS_UNAVAILABLE"}
-    items = snapshot.get("items")
-    count = snapshot.get("count")
-    if (not isinstance(items, list) or len(items) > MAX_SNAPSHOT or
-            isinstance(count, bool) or not isinstance(count, int) or count != len(items)):
-        return {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
-    ids = []
-    for item in items:
-        if not isinstance(item, dict) or not _valid_id(item.get("item_id")):
-            return {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
-        ids.append(item["item_id"])
-    duplicates = [item_id for item_id, n in Counter(ids).items() if n > 1]
-    if duplicates:
-        return {"success": False, "passed": False, "error_code": "ITEM_ID_AMBIGUOUS",
-                "duplicate_item_ids": duplicates[:20]}
-    by_id = {item["item_id"]: item for item in items}
+    by_id, error = read_item_inventory(snapshot)
+    if error:
+        return error
     issues = []
     verified = 0
     for wanted in expected:
@@ -103,5 +111,5 @@ def verify_items(snapshot, expected):
             verified += 1
     return {"success": True, "passed": not issues, "verified": not issues,
             "checked_count": len(expected), "matched_count": verified,
-            "snapshot_count": count, "issues": issues,
+            "snapshot_count": len(by_id), "issues": issues,
             "scope": "Current /api/items snapshot; not a save/reopen or visual verification"}

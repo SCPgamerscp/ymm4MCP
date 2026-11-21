@@ -336,7 +336,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             if path == "/characters":
                 return {"success": True, "characters": characters}
             if path == "/items":
-                return {"success": True, "items": items() if callable(items) else items}
+                current = items() if callable(items) else items
+                return {"success": True, "items": current, "count": len(current)}
             if path == "/edits/state":
                 return {"success": True, "bindings": []}
             if path.startswith("/media/info?path="):
@@ -485,6 +486,41 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["outcome_unknown"])
         self.assertFalse(result["rolled_back"])
         self.assertNotIn("/items/delete", calls)
+
+    async def test_failed_scene_requires_readback_after_delete(self):
+        args = {"plan": {"scenes": [{"id": "intro", "items": [
+            {"id": "a", "type": "text", "text": "a", "length": 10},
+            {"id": "b", "type": "text", "text": "b", "length": 10},
+            {"id": "c", "type": "text", "text": "c", "length": 10},
+        ]}]}, "idempotency_key": "rollback-readback"}
+        a = {"item_id": "native:a", "revision": "r1", "frame": 0, "length": 10}
+        b = {"item_id": "native:b", "revision": "r1", "frame": 10, "length": 10}
+        for readback, expected_added, expected_ids, unknown in (
+            ({"items": [b], "count": 1}, 1, ["native:b"], False),
+            ({"items": [], "count": 1}, 2, [], True),
+            ({"items": [], "count": 0, "error_code": "ITEMS_UNAVAILABLE"}, 2, [], True),
+            (httpx.ConnectError("readback disconnected"), 2, [], True),
+        ):
+            with self.subTest(readback=readback):
+                get = AsyncMock(side_effect=[
+                    {"characters": []}, {"items": [], "count": 0},
+                    {"bindings": []}, readback,
+                ])
+                post = AsyncMock(side_effect=[
+                    {"success": True, **a}, {"success": True, **b}, {"success": False},
+                    {"success": True, "removed": 2, "item_ids": ["native:a", "native:b"]},
+                    {"success": True},
+                ])
+                with patch.object(server, "ymm4_get", get), patch.object(server, "ymm4_post", post):
+                    result = await server.dispatch({"action": "apply_edit", **args})
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result["added"], expected_added)
+                self.assertEqual(result.get("outcome_unknown", False), unknown)
+                self.assertEqual(result["rollback"]["error_code"], "ROLLBACK_VERIFY_FAILED")
+                binding_posts = [call.args[1] for call in post.await_args_list
+                                 if call.args[0] == "/edits/bindings"]
+                self.assertEqual([item["item_id"] for body in binding_posts
+                                  for item in body["items"]], expected_ids)
 
     async def test_atomic_scenes_false_keeps_partial_adds(self):
         async def post(path, body=None, timeout=10.0):
