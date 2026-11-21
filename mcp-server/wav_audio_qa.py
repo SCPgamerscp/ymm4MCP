@@ -43,6 +43,9 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
             raise ValueError("WAV has no audio frames")
         if frames * channels * width > max_bytes:
             raise ValueError("declared PCM payload exceeds maximum input size")
+        full_scale = 1 << (8 * width - 1)
+        # Signed PCM has one fewer positive code than negative codes.
+        positive_rail = (full_scale - 1) / full_scale
         threshold = 10 ** (silence_db / 20)
         silence_start = None
         silences = []
@@ -66,16 +69,16 @@ def inspect_wav(path, *, silence_db=-50.0, min_silence_seconds=1.0,
                     pos = (index * channels + ch) * width
                     sample = raw[pos:pos + width]
                     if width == 1:
-                        value = (sample[0] - 128) / 128.0
+                        value = (sample[0] - full_scale) / full_scale
                     else:
-                        value = int.from_bytes(sample, "little", signed=True) / float(1 << (8 * width - 1))
+                        value = int.from_bytes(sample, "little", signed=True) / full_scale
                     magnitude = abs(value)
                     frame_peak = max(frame_peak, magnitude)
                     peak = max(peak, magnitude)
                     channel_peaks[ch] = max(channel_peaks[ch], magnitude)
                     channel_sum_squares[ch] += value * value
                     channel_sums[ch] += value
-                    if magnitude >= clip_threshold:
+                    if magnitude >= clip_threshold or value == positive_rail:
                         clipped += 1
                 at = processed + index
                 if frame_peak <= threshold:

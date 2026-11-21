@@ -13,8 +13,11 @@ def write_wav(path, samples, rate=10, channels=1, width=2):
         output.setnchannels(channels)
         output.setsampwidth(width)
         output.setframerate(rate)
-        output.writeframes(b"".join(int(v).to_bytes(width, "little", signed=True)
-                                    for v in samples))
+        if width == 1:  # 8-bit PCM uses unsigned storage.
+            output.writeframes(bytes(v + 128 for v in samples))
+        else:
+            output.writeframes(b"".join(int(v).to_bytes(width, "little", signed=True)
+                                        for v in samples))
 
 
 class AudioQaTests(unittest.TestCase):
@@ -33,6 +36,19 @@ class AudioQaTests(unittest.TestCase):
     def test_clean_audio_passes(self):
         write_wav(self.path, [10000] * 30)
         self.assertTrue(inspect_wav(self.path)["passed"])
+
+    def test_pcm_rails_clip_in_both_directions(self):
+        for width in (1, 2, 3, 4):
+            with self.subTest(width=width):
+                scale = 1 << (8 * width - 1)
+                write_wav(self.path, [scale - 1, scale - 2, -scale, -scale + 1], width=width)
+                result = inspect_wav(self.path, clip_threshold=1.0)
+                self.assertEqual(result["clipped_samples"], 2)
+                self.assertEqual(result["clipped_sample_fraction"], 0.5)
+
+    def test_default_threshold_detects_unsigned_8_bit_clipping(self):
+        write_wav(self.path, [127, 126], width=1)
+        self.assertEqual(inspect_wav(self.path)["clipped_samples"], 1)
 
     def test_stereo_requires_all_channels_quiet(self):
         write_wav(self.path, [0, 10000] * 20, channels=2)
