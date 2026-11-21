@@ -1527,8 +1527,11 @@ async def dispatch(args: dict) -> Any:
 
         case "validate" | "qa_gate":
             snapshot = await ymm4_get("/items")
-            if snapshot.get("success") is False or "error" in snapshot:
-                return snapshot
+            inventory_error = quality_guard.timeline_inventory_error(snapshot)
+            if inventory_error is not None:
+                if isinstance(snapshot, dict) and snapshot.get("success") is False:
+                    return {**snapshot, "passed": False}
+                return {**inventory_error, "passed": False}
             qa = validate_timeline(snapshot.get("items"), args.get("expected"), args.get("duration"),
                                    args.get("include_gaps", True), args.get("subtitle_layers"),
                                    args.get("subtitle_timing_tolerance_frames", 0))

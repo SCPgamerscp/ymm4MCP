@@ -7,6 +7,25 @@ import server
 
 
 class CompositeQaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_structural_qa_rejects_mismatched_or_invalid_item_count(self):
+        for action in ("validate", "qa_gate"):
+            for count in (2, -1, True, 0.0, "0", None):
+                with self.subTest(action=action, count=count), patch.object(
+                        server, "ymm4_get", AsyncMock(return_value={"items": [], "count": count})):
+                    result = await server.dispatch({"action": action})
+                self.assertFalse(result["passed"])
+                self.assertEqual(result["error_code"], "ITEMS_INVENTORY_INCOMPLETE")
+                self.assertNotIn("qa", result)
+
+    async def test_composite_qa_rejects_incomplete_readback(self):
+        replies = [{"items": [], "count": 0}, {"success": True, "passed": True, "issues": []},
+                   {"items": [], "count": 1}]
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=replies)):
+            result = await server.dispatch({"action": "qa_gate", "export_check": {"path": "C:/done.mp4"}})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_code"], "QA_ITEMS_INVENTORY_INCOMPLETE")
+        self.assertNotIn("qa", result)
+
     async def test_export_qa_failure_blocks_final_gate(self):
         async def get(path):
             if path == "/items":

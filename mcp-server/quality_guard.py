@@ -59,6 +59,22 @@ def _validate_observable_fields(items):
                     raise ValueError(f"items[{index}].{field} must be safe text")
 
 
+def timeline_inventory_error(snapshot):
+    if (not isinstance(snapshot, dict) or
+            ("success" in snapshot and snapshot["success"] is not True) or
+            "error" in snapshot or "error_code" in snapshot or
+            not isinstance(snapshot.get("items"), list)):
+        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    if "count" in snapshot:
+        count = snapshot["count"]
+        observed = len(snapshot["items"])
+        if type(count) is not int or count != observed:
+            return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
+                    "error": "Timeline count does not match the item inventory",
+                    "reported_count": count, "observed_count": observed}
+    return None
+
+
 async def verify_snapshot(get, items):
     # The caller's reference snapshot can be malformed too. Fail closed
     # instead of raising before we have a chance to return a QA failure.
@@ -69,11 +85,9 @@ async def verify_snapshot(get, items):
         return {"success": False, "error_code": "SNAPSHOT_VERIFY_UNKNOWN", "error": str(exc)}
     try:
         current = await get("/items")
-        if (not isinstance(current, dict) or
-                ("success" in current and current["success"] is not True) or
-                "error" in current or "error_code" in current or
-                not isinstance(current.get("items"), list)):
-            return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": current}
+        inventory_error = timeline_inventory_error(current)
+        if inventory_error is not None:
+            return inventory_error
         _validate_observable_fields(current["items"])
         actual = editplan.snapshot_hash(current["items"])
     except Exception as exc:
