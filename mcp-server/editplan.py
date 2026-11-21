@@ -356,10 +356,28 @@ def pick_binding(bindings, key):
         records = bindings
     if not key:
         return None
-    for record in records:
-        if isinstance(record, dict) and record.get("idempotency_key") == key:
-            return record
-    return None
+    matching = [record for record in records if isinstance(record, dict) and record.get("idempotency_key") == key]
+    if not matching:
+        return None
+    if len(matching) != 1:
+        raise ValueError("EditPlan bindings contain duplicate idempotency keys")
+    record = matching[0]
+    items = record.get("items")
+    if not isinstance(items, list):
+        raise ValueError("EditPlan binding item list is unavailable")
+    logical_ids, native_ids = set(), set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("EditPlan binding item is invalid")
+        logical_id, native_id = item.get("id"), item.get("item_id")
+        if not isinstance(logical_id, str) or not logical_id.strip() or \
+                not isinstance(native_id, str) or not native_id.strip():
+            raise ValueError("EditPlan binding item identifiers are unavailable")
+        if logical_id in logical_ids or native_id in native_ids:
+            raise ValueError("EditPlan binding item identifiers are ambiguous")
+        logical_ids.add(logical_id)
+        native_ids.add(native_id)
+    return record
 
 
 def binding_conflict(plan, current_items, record):
