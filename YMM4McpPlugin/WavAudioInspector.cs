@@ -16,6 +16,8 @@ namespace YMM4McpPlugin
 
     internal static class WavAudioInspector
     {
+        private const double MinContinuousClipSeconds = 0.005;
+
         public static AudioQaReport Inspect(string path, double minSilenceSeconds = 2)
         {
             if (!double.IsFinite(minSilenceSeconds) || minSilenceSeconds is < 0.1 or > 60)
@@ -99,12 +101,15 @@ namespace YMM4McpPlugin
 
                 long frames = dataSize / align;
                 long minSilenceFrames = (long)Math.Ceiling(minSilenceSeconds * rate);
+                long minClipFrames = Math.Max(2, (long)Math.Ceiling(MinContinuousClipSeconds * rate));
                 var issues = new List<AudioQaIssue>();
                 double[] sumSquares = new double[channels];
                 double[] sumSamples = new double[channels];
                 double[] peaksByChannel = new double[channels];
+                long[] clipRuns = new long[channels];
                 double crossSamples = 0;
                 long clipped = 0, silentStart = -1;
+                long longestClipLength = 0, longestClipEnd = 0;
                 double peak = 0;
                 file.Position = dataStart;
                 var buffer = new byte[8192];
@@ -115,6 +120,7 @@ namespace YMM4McpPlugin
                     file.ReadExactly(buffer.AsSpan(0, count * align));
                     for (int i = 0; i < count; i++)
                     {
+                        long frame = current + i;
                         bool silent = true;
                         double firstChannel = 0;
                         for (int ch = 0; ch < channels; ch++)
@@ -142,14 +148,23 @@ namespace YMM4McpPlugin
                             peaksByChannel[ch] = Math.Max(peaksByChannel[ch], amplitude);
                             // The positive PCM8 endpoint is 127/128, below the common threshold.
                             if (amplitude >= 32760.0 / 32768 || (bits == 8 && buffer[offset] == byte.MaxValue))
+                            {
                                 clipped++;
+                                long runLength = ++clipRuns[ch];
+                                if (runLength > longestClipLength)
+                                {
+                                    longestClipLength = runLength;
+                                    longestClipEnd = frame + 1;
+                                }
+                            }
+                            else
+                                clipRuns[ch] = 0;
                             if (amplitude > 104.0 / 32768) silent = false; // about -50 dBFS
                             sumSquares[ch] += normalized * normalized;
                             sumSamples[ch] += normalized;
                             if (ch == 0) firstChannel = normalized;
                             else crossSamples += firstChannel * normalized;
                         }
-                        long frame = current + i;
                         if (silent && silentStart < 0) silentStart = frame;
                         if (!silent && silentStart >= 0)
                         {
@@ -165,8 +180,13 @@ namespace YMM4McpPlugin
                 if (peak <= 104.0 / 32768 && !issues.Any(i => i.Code == "LONG_SILENCE"))
                     issues.Add(new("AUDIO_SILENT", "error", 0, (double)frames / rate,
                         "音声全体が無音または極めて小さい音量です"));
-                if (clipped > frames * channels * 0.001)
-                    issues.Add(new("AUDIO_CLIPPING", "error", null, null, "フルスケール付近のサンプルが継続しています"));
+                if (longestClipLength >= minClipFrames)
+                    issues.Add(new("AUDIO_CLIPPING", "error",
+                        (double)(longestClipEnd - longestClipLength) / rate, (double)longestClipEnd / rate,
+                        "フルスケール付近のサンプルが続いた最長区間です"));
+                else if (clipped > frames * channels * 0.001)
+                    issues.Add(new("AUDIO_CLIPPING", "error", null, null,
+                        "ファイル全体でフルスケール付近のサンプルが0.1%を超えています"));
                 var rmsByChannel = sumSquares.Select(sum => Math.Sqrt(sum / frames)).ToArray();
                 var means = sumSamples.Select(sum => sum / frames).ToArray();
                 for (int ch = 0; ch < channels; ch++)

@@ -105,7 +105,8 @@ try
     var qa = WavAudioInspector.Inspect(path, 1.5);
     Check(qa.Success && !qa.Passed && qa.DurationSeconds == 3, "valid PCM detection failed");
     Check(qa.Issues.Any(i => i.Code == "LONG_SILENCE" && i.EndSeconds == 2), "silence missing");
-    Check(qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING"), "clipping missing");
+    Check(qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING" && i.StartSeconds == 2 && i.EndSeconds == 3),
+        "clipping interval reaching EOF is missing");
     Check(qa.Issues.Any(i => i.Code == "CHANNEL_IMBALANCE"), "channel imbalance missing");
     Check(qa.ChannelLevels.Length == 2
         && qa.ChannelLevels[0].Channel == 1 && qa.ChannelLevels[0].Peak == 32767.0 / 32768
@@ -121,6 +122,34 @@ try
     }
     File.WriteAllBytes(path, Wave(clean));
     Check(WavAudioInspector.Inspect(path).Passed, "clean stereo should pass");
+
+    // The longest run spans two read buffers and is below the whole-file
+    // clipped-sample threshold. The right channel is unaffected.
+    const int clipStart = 2035, clipLength = 40, testRate = 8000;
+    var mostlyClean = new short[testRate * 10 * 2];
+    for (int frame = 0; frame < mostlyClean.Length / 2; frame++)
+    {
+        short value = (short)(frame % 2 == 0 ? 8192 : -8192);
+        mostlyClean[frame * 2] = value;
+        mostlyClean[frame * 2 + 1] = value;
+    }
+    var localClip = (short[])mostlyClean.Clone();
+    for (int frame = clipStart; frame < clipStart + clipLength; frame++)
+        localClip[frame * 2] = short.MaxValue;
+    File.WriteAllBytes(path, Wave(localClip));
+    var localQa = WavAudioInspector.Inspect(path);
+    Check(localQa.Success && !localQa.Passed && localQa.Issues.Any(i =>
+        i.Code == "AUDIO_CLIPPING" && i.StartSeconds == (double)clipStart / testRate
+        && i.EndSeconds == (double)(clipStart + clipLength) / testRate),
+        "local clipping must report its exact interval across buffers");
+
+    // Alternating which channel reaches full scale is not a continuous
+    // clipping run on either channel.
+    for (int frame = clipStart; frame < clipStart + clipLength; frame++)
+        mostlyClean[frame * 2 + frame % 2] = short.MaxValue;
+    File.WriteAllBytes(path, Wave(mostlyClean));
+    Check(WavAudioInspector.Inspect(path).Passed,
+        "alternating channels must not count as a continuous clipping run");
     File.WriteAllBytes(path, Wave(new short[8000 * 2]));
     var shortSilence = WavAudioInspector.Inspect(path, 2);
     Check(shortSilence.Success && !shortSilence.Passed &&
