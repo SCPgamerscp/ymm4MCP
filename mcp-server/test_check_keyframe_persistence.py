@@ -20,6 +20,8 @@ class FakeYmm4:
         self.saved = False
         self.persistent = True
         self.item_id = "native:test"
+        self.length = 100
+        self.item_revision = "r1"
         self.frames = {"Zoom": [{"at": 0, "value": 1.0}, {"at": 24, "value": 1.25}],
                        "X": [{"at": 0, "value": 0.0}, {"at": 24, "value": 80.0}],
                        "Opacity": [{"at": 0, "value": 100.0}]}
@@ -35,7 +37,7 @@ class FakeYmm4:
         if request.url.path == "/api/items":
             return httpx.Response(200, json={"items": [{"item_id": self.item_id,
                 "identity_persistent": self.persistent,
-                "length": 100, "type": "ImageItem"}]})
+                "length": self.length, "revision": self.item_revision, "type": "ImageItem"}]})
         if request.url.path == "/api/items/keyframes":
             prop = request.url.params.get("prop")
             props = [prop] if prop else list(self.frames)
@@ -57,8 +59,8 @@ class KeyframePersistenceTests(unittest.TestCase):
         self.client = httpx.Client(transport=httpx.MockTransport(self.fake), trust_env=False)
         self.addCleanup(self.client.close)
 
-    def capture(self):
-        capture(self.client, BASE, HEADERS, "native:test", 24,
+    def capture(self, at=24):
+        capture(self.client, BASE, HEADERS, "native:test", at,
                 {"Zoom": 1.25, "X": 80.0}, self.snapshot)
 
     def save(self):
@@ -82,6 +84,28 @@ class KeyframePersistenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "already exists"):
             self.capture()
 
+    def test_last_frame_is_resolved_and_verified_after_reopen(self):
+        self.fake.length = 25
+        self.capture(at=None)
+        data = json.loads(self.snapshot.read_text())
+        self.assertTrue(data["last_frame"])
+        self.assertEqual(data["at"], 24)
+        self.save()
+        verify(self.client, BASE, HEADERS, self.snapshot)
+        self.fake.length += 1
+        for prop in ("Zoom", "X"):
+            self.fake.frames[prop].append({**self.fake.frames[prop][-1], "at": 25})
+        with self.assertRaisesRegex(ProbeError, "last frame differs"):
+            verify(self.client, BASE, HEADERS, self.snapshot)
+
+    def test_explicit_frame_snapshot_from_older_probe_still_verifies(self):
+        self.capture()
+        data = json.loads(self.snapshot.read_text())
+        data.pop("last_frame", None)
+        self.snapshot.write_text(json.dumps(data))
+        self.save()
+        verify(self.client, BASE, HEADERS, self.snapshot)
+
     def test_capture_requires_unsaved_edit(self):
         self.fake.saved = True
         with self.assertRaisesRegex(ProbeError, "isSaved must be false"):
@@ -98,6 +122,12 @@ class KeyframePersistenceTests(unittest.TestCase):
         self.fake.frames["X"][1]["value"] = 90.0
         with self.assertRaisesRegex(ProbeError, "expected 80"):
             self.capture()
+
+    def test_capture_rejects_image_revision_mismatch(self):
+        self.fake.item_revision = "r2"
+        with self.assertRaisesRegex(ProbeError, "Image revision changed"):
+            self.capture()
+        self.assertFalse(self.snapshot.exists())
 
     def test_verify_rejects_unsaved_or_not_written_project(self):
         self.capture()
@@ -122,6 +152,22 @@ class KeyframePersistenceTests(unittest.TestCase):
         self.fake.saved = True
         with self.assertRaisesRegex(ProbeError, "Project path changed"):
             verify(self.client, BASE, HEADERS, self.snapshot)
+
+    def test_verify_rechecks_project_after_reading_matching_animations(self):
+        self.capture()
+        self.save()
+        other = Path(self.tmp.name) / "different.ymmp"
+        other.write_bytes(b"different")
+
+        def switch_project(request):
+            response = self.fake(request)
+            if request.url.params.get("prop") == "X":
+                self.fake.path = other
+            return response
+
+        with httpx.Client(transport=httpx.MockTransport(switch_project), trust_env=False) as client:
+            with self.assertRaisesRegex(ProbeError, "Project changed during"):
+                verify(client, BASE, HEADERS, self.snapshot)
 
     def test_verify_rejects_tampered_snapshot_schema(self):
         self.capture()

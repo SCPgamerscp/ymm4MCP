@@ -93,8 +93,9 @@ def snapshot_all_animations(client: httpx.Client, base: str,
 
 
 def validate_test_item(client: httpx.Client, base: str,
-                       headers: dict[str, str], item_id: str, at: int | None) -> tuple[int, str | None]:
-    """Fail before writing if the selected image or relative frame is unsafe."""
+                       headers: dict[str, str], item_id: str, at: int | None,
+                       *, require_persistent: bool = False) -> tuple[int, str | None]:
+    """Resolve the relative frame and item revision from one inventory."""
     try:
         response = client.get(base + "/items", headers=headers)
         response.raise_for_status()
@@ -108,6 +109,8 @@ def validate_test_item(client: httpx.Client, base: str,
     if len(matches) != 1:
         raise ProbeError("Target item must exist exactly once; refusing edit")
     item = matches[0]
+    if require_persistent and item.get("identity_persistent") is not True:
+        raise ProbeError("Test item must have a unique persistent ID across project reloads")
     if "image" not in str(item.get("type", "")).lower():
         raise ProbeError("Target item is not an image; refusing edit")
     length = item.get("length")
