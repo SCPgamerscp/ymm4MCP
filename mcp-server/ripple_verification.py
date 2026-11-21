@@ -107,12 +107,15 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
             if type(actual[field]) is not type(expected) or actual[field] != expected:
                 issue("RIPPLE_FIELD_MISMATCH", identity, field=field,
                       expected=expected, actual=actual[field])
-        # An edited item must remain addressable by a valid optimistic revision.
+        # The host includes the frame in the revision, so a move must change it.
         # Unaffected items cannot silently gain/lose/change their revisions:
         # such drift could mean a concurrent editor touched the timeline.
         if operation:
-            if not _revision(actual.get("revision")):
+            revision = actual.get("revision")
+            if not _revision(revision):
                 issue("RIPPLE_REVISION_UNAVAILABLE", identity)
+            elif revision == operation["expected_revision"]:
+                issue("RIPPLE_REVISION_UNCHANGED", identity)
         elif ("revision" in item) != ("revision" in actual) or (
                 item.get("revision") != actual.get("revision")):
             issue("RIPPLE_CONTENT_CHANGED", identity, field="revision")

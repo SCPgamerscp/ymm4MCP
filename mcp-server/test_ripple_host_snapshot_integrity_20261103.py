@@ -94,7 +94,7 @@ class RippleRevisionIntegrityTests(unittest.TestCase):
         kwargs = {"start_frame": 10, "end_frame": 20,
                   "expected_revisions": {"a": "r1"}}
         good = {"success": True, "count": 2,
-                "items": [item("a", 10), item("b", 0)]}
+                "items": [item("a", 10, revision="r2"), item("b", 0)]}
         self.assertTrue(verify_ripple_result(before, good, **kwargs)["passed"])
         for revision in (None, False, 0, "contains whitespace"):
             with self.subTest(revision=revision):
@@ -117,7 +117,7 @@ class RippleRevisionIntegrityTests(unittest.TestCase):
         before = {"success": True, "count": 2,
                   "items": [item("a", 20), item("b", 0)]}
         after = {"success": True, "count": 2,
-                 "items": [item("a", 10), item("b", 0, revision="r2")]}
+                 "items": [item("a", 10, revision="r2"), item("b", 0, revision="r2")]}
         result = verify_ripple_result(before, after, start_frame=10,
             end_frame=20, expected_revisions={"a": "r1"})
         self.assertFalse(result["passed"])

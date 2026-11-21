@@ -57,8 +57,9 @@ hardcoded set of text/source fields. Missing/added fields and type changes
 are reported as `RIPPLE_CONTENT_CHANGED`. The only excluded comparison
 fields are `frame` (checked against the plan), `end_frame` **or the
 actual YMM4 host spelling `endFrame`** (if present, must equal
-`frame + length` and retain field presence), and `revision` (which may
-advance after a legitimate edit).
+`frame + length` and retain field presence), and `revision`. A moved item
+must have a new revision because its frame is part of the revision hash.
+An unchanged revision is reported as `RIPPLE_REVISION_UNCHANGED`.
 
 Inventories with inconsistent `count`, duplicate IDs, impossible
 `end_frame`, non-finite JSON values or invalid Unicode are rejected.
