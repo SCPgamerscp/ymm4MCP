@@ -533,6 +533,41 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([item["item_id"] for body in binding_posts
                                   for item in body["items"]], expected_ids)
 
+    async def test_uncertain_add_after_prior_success_keeps_scene_for_inspection(self):
+        for failure, expected_code, saves_bindings in (
+            ({"success": False, "error_code": "ADD_OUTCOME_UNKNOWN", "outcome_unknown": True},
+             "EDIT_PARTIAL_FAILURE", True),
+            ({"success": False, "error_code": "TIMELINE_CHANGED", "outcome_unknown": True},
+             "EDIT_PARTIAL_FAILURE", False),
+            (None, "EDIT_PARTIAL_FAILURE", True),
+            (ValueError("invalid JSON"), "EDIT_REQUEST_FAILED", True),
+        ):
+            with self.subTest(failure=failure):
+                async def post(path, body=None, timeout=10.0):
+                    if path == "/items/video":
+                        return {"success": True, "item_id": "native:bg", "revision": "r1",
+                                "frame": 0, "length": 300}
+                    if path == "/items/voice":
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return {"success": True}
+
+                get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
+                with get, posted as mock_post:
+                    result = await server.dispatch({"action": "apply_edit", **sample_plan()})
+                self.assertEqual(result["error_code"], expected_code)
+                self.assertTrue(result["outcome_unknown"])
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result["added"], 1)
+                self.assertEqual(result["details"][0]["item_id"], "native:bg")
+                calls = ["/items/video", "/items/voice"]
+                if saves_bindings:
+                    calls.append("/edits/bindings")
+                else:
+                    self.assertEqual(result["binding_error"]["error_code"], "TIMELINE_CHANGED")
+                self.assertEqual([entry.args[0] for entry in mock_post.await_args_list], calls)
+
     async def test_rollback_skips_delete_without_original_timeline(self):
         with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
             result = await server._delete_item_ids(["native:a"], None)

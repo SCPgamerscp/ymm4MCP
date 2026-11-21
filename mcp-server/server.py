@@ -1846,7 +1846,7 @@ async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | Non
 async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_index, failed_scene,
                                added, details, bindings, committed, scenes, scene_added_ids,
                                atomic, timeline_id, scene_details=None, scene_bindings=None, extra=None,
-                               outcome_unknown=False):
+                               outcome_unknown=False, timeline_changed=False):
     rollback = None
     rolled_back = False
     removed_ids = set()
@@ -1855,6 +1855,7 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
         rollback = await _delete_item_ids(scene_added_ids, timeline_id)
         rolled_back = rollback.get("success") is True
         outcome_unknown = rollback.get("outcome_unknown") is True
+        timeline_changed = rollback.get("verification", {}).get("error_code") == "ROLLBACK_TIMELINE_CHANGED"
         if rolled_back:
             removed_ids.update(scene_added_ids)
         elif "remaining_item_ids" in rollback:
@@ -1866,7 +1867,10 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
     if not rolled_back and scene_bindings and not (rollback and outcome_unknown):
         persist.extend(row for row in scene_bindings
                        if not isinstance(row["item_id"], str) or row["item_id"] not in removed_ids)
-    binding_error = await _persist_edit_bindings(plan, persist)
+    if timeline_changed:
+        binding_error = {"error_code": "TIMELINE_CHANGED"} if persist and plan.get("idempotency_key") else None
+    else:
+        binding_error = await _persist_edit_bindings(plan, persist)
     scenes = list(scenes)
     scenes.append({
         "id": failed_scene, "status": "rolled_back" if rolled_back else "partial",
@@ -2064,22 +2068,26 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 payload["frame"] = cursor.get(scene_id, payload.get("frame", 0))
             try:
                 res = await ymm4_post(f"/items/{op['kind']}", payload, timeout=120.0)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError):
                 return await _partial_edit_result(
                     plan, error_code="EDIT_REQUEST_FAILED",
-                    error="通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
+                    error="追加結果を取得できませんでした。追加された可能性があるためitemsで確認してください。自動再試行なし。",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=bindings, committed=committed,
                     scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                     scene_details=scene_details, scene_bindings=scene_bindings, outcome_unknown=True)
             if not isinstance(res, dict) or res.get("success") is not True:
+                timeline_changed = isinstance(res, dict) and res.get("error_code") == "TIMELINE_CHANGED"
+                outcome_unknown = (timeline_changed or not isinstance(res, dict) or res.get("success") is not False
+                                   or res.get("outcome_unknown", False) is not False)
                 return await _partial_edit_result(
                     plan, error_code="EDIT_PARTIAL_FAILURE",
                     error="EditPlanの適用に失敗したため停止しました",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=bindings, committed=committed,
                     scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
-                    scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res})
+                    scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res},
+                    outcome_unknown=outcome_unknown, timeline_changed=timeline_changed)
             added += 1
             scene_added += 1
             item_id = res.get("item_id")
