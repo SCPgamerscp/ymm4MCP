@@ -608,6 +608,27 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["outcome_unknown"])
         self.assertEqual(result["verification"], refused)
 
+    async def test_failed_scene_saves_bindings_only_if_delete_failure_is_known(self):
+        for unknown in (True, False):
+            with self.subTest(unknown=unknown):
+                added = {"success": True, "item_id": "native:bg", "revision": "r1",
+                         "frame": 0, "length": 300}
+                refusal = {"success": False, "error": "delete failed", "outcome_unknown": unknown}
+                get, posted = self._patches([], [{"name": "ゆっくり霊夢"}],
+                                            [added, {"success": False}, refusal, {"success": True}])
+                with get, posted as post:
+                    result = await server.dispatch({"action": "apply_edit", **sample_plan()})
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result.get("outcome_unknown", False), unknown)
+                self.assertEqual(result["rollback"]["failure"], refusal)
+                self.assertIn(call("/items/delete", {"item_ids": ["native:bg"],
+                                                     "expected_timeline_id": ROLLBACK_TIMELINE_ID}),
+                              post.await_args_list)
+                binding_posts = [entry.args[1] for entry in post.await_args_list
+                                 if entry.args[0] == "/edits/bindings"]
+                binding_ids = [item["item_id"] for body in binding_posts for item in body["items"]]
+                self.assertEqual(binding_ids, [] if unknown else ["native:bg"])
+
     async def test_atomic_scenes_false_keeps_partial_adds(self):
         async def post(path, body=None, timeout=10.0):
             del timeout

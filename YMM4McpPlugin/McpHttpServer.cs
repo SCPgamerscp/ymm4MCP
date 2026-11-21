@@ -1002,6 +1002,7 @@ namespace YMM4McpPlugin
             var deleteMethod = timelineObj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                 .FirstOrDefault(m => m.Name == "DeleteItems" && m.GetParameters().Length == 1);
             if (deleteMethod == null) return (false, (object)new { success = false, error = "DeleteItems未発見" });
+            bool writeAttempted = false;
             try
             {
                 var iItemType = toRemove[0].GetType().GetInterfaces().FirstOrDefault(i => i.Name == "IItem");
@@ -1013,6 +1014,7 @@ namespace YMM4McpPlugin
                 }
                 else { arr = toRemove.ToArray(); }
                 var removedIds = toRemove.Select(item => GetItemIdentity(item).id).ToArray();
+                writeAttempted = true;
                 deleteMethod.Invoke(timelineObj, new object[] { arr });
                 ForgetEditBindings(removedIds);
                 return (true, (object)new { success = true, removed = toRemove.Count, item_ids = removedIds,
@@ -1020,7 +1022,8 @@ namespace YMM4McpPlugin
             }
             catch (Exception ex)
             {
-                return (false, (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message });
+                return (false, (object)new { success = false, error = ex.InnerException?.Message ?? ex.Message,
+                    outcome_unknown = writeAttempted });
             }
         }
 
