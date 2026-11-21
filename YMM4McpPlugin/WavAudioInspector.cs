@@ -9,9 +9,10 @@ namespace YMM4McpPlugin
 {
     internal sealed record AudioQaIssue(string Code, string Severity, double? StartSeconds,
         double? EndSeconds, string Message);
+    internal sealed record AudioQaChannelLevel(int Channel, double Peak, double Rms);
     internal sealed record AudioQaReport(bool Success, bool Passed, string? ErrorCode, string? Error,
         int? SampleRate, int? Channels, double? DurationSeconds, double? Peak,
-        double? Rms, AudioQaIssue[] Issues);
+        double? Rms, AudioQaIssue[] Issues, AudioQaChannelLevel[] ChannelLevels);
 
     internal static class WavAudioInspector
     {
@@ -85,11 +86,11 @@ namespace YMM4McpPlugin
                 // not a valid end-of-chunks marker.
                 if (file.Position != end)
                     return Fail("AUDIO_FILE_INVALID", "WAV のチャンクヘッダーが不完全です");
-                bool pcm = format == 1 && bits is 16 or 24 or 32;
+                bool pcm = format == 1 && bits is 8 or 16 or 24 or 32;
                 bool ieeeFloat = format == 3 && bits == 32;
                 if ((!pcm && !ieeeFloat) || channels is < 1 or > 2 || rate is < 1 or > 384000 ||
                     align != channels * (bits / 8))
-                    return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 16/24/32-bit / IEEE float 32-bit mono/stereo WAV のみ検査できます");
+                    return Fail("AUDIO_FORMAT_UNSUPPORTED", "PCM 8/16/24/32-bit / IEEE float 32-bit mono/stereo WAV のみ検査できます");
                 // A malformed byte rate can make downstream duration and QA results unreliable.
                 if (byteRate != (long)rate * align)
                     return Fail("AUDIO_FILE_INVALID", "WAV の byte rate と sample rate/block align が一致しません");
@@ -101,6 +102,7 @@ namespace YMM4McpPlugin
                 var issues = new List<AudioQaIssue>();
                 double[] sumSquares = new double[channels];
                 double[] sumSamples = new double[channels];
+                double[] peaksByChannel = new double[channels];
                 double crossSamples = 0;
                 long clipped = 0, silentStart = -1;
                 double peak = 0;
@@ -122,6 +124,7 @@ namespace YMM4McpPlugin
                             if (pcm)
                                 normalized = bits switch
                                 {
+                                    8 => (buffer[offset] - 128) / 128.0,
                                     16 => BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(offset, 2)) / 32768.0,
                                     24 => (buffer[offset] | buffer[offset + 1] << 8 |
                                         (sbyte)buffer[offset + 2] << 16) / 8388608.0,
@@ -136,7 +139,10 @@ namespace YMM4McpPlugin
                             }
                             double amplitude = Math.Abs(normalized);
                             peak = Math.Max(peak, amplitude);
-                            if (amplitude >= 32760.0 / 32768) clipped++;
+                            peaksByChannel[ch] = Math.Max(peaksByChannel[ch], amplitude);
+                            // The positive PCM8 endpoint is 127/128, below the common threshold.
+                            if (amplitude >= 32760.0 / 32768 || (bits == 8 && buffer[offset] == byte.MaxValue))
+                                clipped++;
                             if (amplitude > 104.0 / 32768) silent = false; // about -50 dBFS
                             sumSquares[ch] += normalized * normalized;
                             sumSamples[ch] += normalized;
@@ -180,9 +186,11 @@ namespace YMM4McpPlugin
                         issues.Add(new("CHANNEL_PHASE_INVERSION", "warning", null, null,
                             "左右チャンネルがほぼ逆位相です"));
                 }
+                var levels = peaksByChannel.Select((value, channel) =>
+                    new AudioQaChannelLevel(channel + 1, value, rmsByChannel[channel])).ToArray();
                 return new(true, !issues.Any(i => i.Severity == "error"), null, null, rate, channels,
                     (double)frames / rate, peak,
-                    Math.Sqrt(sumSquares.Sum() / (frames * channels)), issues.ToArray());
+                    Math.Sqrt(sumSquares.Sum() / (frames * channels)), issues.ToArray(), levels);
             }
             catch (Exception ex) when (ex is IOException or OverflowException or ArgumentException)
             {
@@ -198,7 +206,8 @@ namespace YMM4McpPlugin
         }
 
         private static AudioQaReport Fail(string code, string message)
-            => new(false, false, code, message, null, null, null, null, null, Array.Empty<AudioQaIssue>());
+            => new(false, false, code, message, null, null, null, null, null,
+                Array.Empty<AudioQaIssue>(), Array.Empty<AudioQaChannelLevel>());
         private static byte[] Read(Stream stream, int count)
         {
             var bytes = new byte[count];

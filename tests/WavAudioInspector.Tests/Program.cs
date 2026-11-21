@@ -68,7 +68,8 @@ static byte[] FloatWave(float[] samples, bool extensible = false, int channels =
 static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate = 8000)
 {
     int sampleBytes = bits / 8, fmtSize = extensible ? 40 : 16, offset = 20 + fmtSize;
-    var bytes = new byte[offset + 8 + samples.Length * sampleBytes];
+    int dataSize = samples.Length * sampleBytes;
+    var bytes = new byte[offset + 8 + dataSize + (dataSize & 1)];
     Encoding.ASCII.GetBytes("RIFF").CopyTo(bytes, 0);
     BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), (uint)(bytes.Length - 8));
     Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(bytes, 8);
@@ -86,10 +87,12 @@ static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate
         new Guid("00000001-0000-0010-8000-00aa00389b71").TryWriteBytes(bytes.AsSpan(44, 16));
     }
     Encoding.ASCII.GetBytes("data").CopyTo(bytes, offset);
-    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4, 4), (uint)(samples.Length * sampleBytes));
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4, 4), (uint)dataSize);
     for (int i = 0; i < samples.Length; i++)
         for (int b = 0; b < sampleBytes; b++)
-            bytes[offset + 8 + i * sampleBytes + b] = (byte)(samples[i] >> (b * 8));
+            bytes[offset + 8 + i * sampleBytes + b] = bits == 8
+                ? (byte)(samples[i] + 128)
+                : (byte)(samples[i] >> (b * 8));
     return bytes;
 }
 
@@ -104,6 +107,11 @@ try
     Check(qa.Issues.Any(i => i.Code == "LONG_SILENCE" && i.EndSeconds == 2), "silence missing");
     Check(qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING"), "clipping missing");
     Check(qa.Issues.Any(i => i.Code == "CHANNEL_IMBALANCE"), "channel imbalance missing");
+    Check(qa.ChannelLevels.Length == 2
+        && qa.ChannelLevels[0].Channel == 1 && qa.ChannelLevels[0].Peak == 32767.0 / 32768
+        && Math.Abs(qa.ChannelLevels[0].Rms - (32767.0 / 32768) / Math.Sqrt(3)) < 1e-9
+        && qa.ChannelLevels[1] == new AudioQaChannelLevel(2, 0, 0),
+        "stereo peak and RMS measurements must include the silent channel");
 
     var clean = new short[8000 * 2];
     for (int frame = 0; frame < 8000; frame++)
@@ -210,16 +218,26 @@ try
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
         "truncated trailing RIFF chunk header accepted");
 
-    foreach (int bits in new[] { 24, 32 })
+    foreach (int bits in new[] { 8, 24, 32 })
         foreach (bool extensible in new[] { false, true })
         {
-            int halfScale = bits == 24 ? 4194304 : 1073741824;
+            int halfScale = 1 << (bits - 2);
             var pcmSamples = Enumerable.Range(0, 8000).Select(i => i % 2 == 0 ? halfScale : -halfScale).ToArray();
             File.WriteAllBytes(path, PcmWave(pcmSamples, bits, extensible));
             var pcmQa = WavAudioInspector.Inspect(path);
             Check(pcmQa.Passed && pcmQa.Peak == 0.5 && pcmQa.Rms == 0.5,
                 $"PCM {bits}-bit extensible={extensible} QA failed");
+            Check(pcmQa.ChannelLevels.SequenceEqual(new[] { new AudioQaChannelLevel(1, 0.5, 0.5) }),
+                $"PCM {bits}-bit mono channel levels incorrect");
         }
+    foreach (int rail in new[] { -128, 127 })
+    {
+        File.WriteAllBytes(path, PcmWave(new[] { rail, 0, 0 }, 8));
+        var pcm8Qa = WavAudioInspector.Inspect(path);
+        Check(pcm8Qa.Success && pcm8Qa.DurationSeconds == 3.0 / 8000
+            && pcm8Qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING"),
+            "PCM8 must detect both clipping endpoints without including RIFF padding as audio");
+    }
     var floatSamples = new float[8000 * 2];
     Array.Fill(floatSamples, 0.25f);
     foreach (bool extensible in new[] { false, true })
