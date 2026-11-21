@@ -99,13 +99,12 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
     configs = [path for path in candidates if path.is_file()]
     if not configs:
         raise InstallationError("No initialized Claude Desktop configuration was found")
-    configured_bases = set()
+    configured_ports = set()
     snapshots = {}
     profile_envs = []
     # Validate every initialized profile, including Microsoft Store installs.
     for path in configs:
         config, raw = _read_claude_config(path)
-        snapshots[path] = (config, raw)
         if not isinstance(config, dict) or not isinstance(config.get("mcpServers"), dict):
             raise InstallationError("Claude Desktop mcpServers is missing or malformed")
         entry = config["mcpServers"].get("ymm4")
@@ -120,12 +119,13 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
                     for key, value in env.items())):
             raise InstallationError("Claude Desktop ymm4 env is malformed")
         profile_envs.append(env.copy())
+        port = None
         if "YMM4_API_BASE" in env:
             value = env["YMM4_API_BASE"]
             if not isinstance(value, str):
                 raise InstallationError("Claude Desktop YMM4_API_BASE is invalid")
-            parsed = urlsplit(value)
             try:
+                parsed = urlsplit(value)
                 port = parsed.port
             except ValueError as exc:
                 raise InstallationError("Claude Desktop YMM4_API_BASE port is invalid") from exc
@@ -134,8 +134,9 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
                     parsed.path.rstrip("/") != "/api" or parsed.query or parsed.fragment or
                     parsed.username or parsed.password):
                 raise InstallationError("Claude Desktop YMM4_API_BASE must be a loopback API URL")
-            configured_bases.add(value)
-    if len(configured_bases) > 1:
+            configured_ports.add(port)
+        snapshots[path] = (raw, port)
+    if len(configured_ports) > 1:
         raise InstallationError("Claude Desktop profiles disagree on the configured port")
     # An MCP stdio handshake only proves the child starts. It does not prove
     # that each Claude profile can authenticate to the YMM4 HTTP endpoint.
@@ -171,7 +172,7 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
         # settings edit must not turn an old validation into a success for a
         # different configuration. Re-read once, compare exact bytes, and use
         # the already validated snapshot for the final port comparison.
-        config, original = snapshots[path]
+        original, configured_port = snapshots[path]
         try:
             with path.open("rb") as stream:
                 current = stream.read(MAX_CLAUDE_CONFIG_BYTES + 1)
@@ -179,8 +180,7 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
             raise InstallationError("Claude Desktop configuration changed during acceptance check") from exc
         if current != original:
             raise InstallationError("Claude Desktop configuration changed during acceptance check")
-        base = config["mcpServers"]["ymm4"].get("env", {}).get("YMM4_API_BASE")
-        if base is not None and urlsplit(base).port != status["port"]:
+        if configured_port is not None and configured_port != status["port"]:
             raise InstallationError("Claude Desktop port differs from the running YMM4 plugin")
     return {"success": True, "persistent_install": True,
             "claude_profiles_checked": len(configs),

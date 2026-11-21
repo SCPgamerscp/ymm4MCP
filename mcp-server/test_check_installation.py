@@ -150,6 +150,13 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.inspect()
         self.status.assert_not_called()
 
+    def test_profiles_with_loopback_aliases_agree_on_port(self):
+        self.write_config(self.classic, env={"YMM4_API_BASE": "http://localhost:8765/api"})
+        self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api/"})
+        self.assertEqual(self.inspect()["port"], 8765)
+        self.assertEqual(self.status.call_count, 2)
+        self.assertEqual(self.mcp.call_count, 2)
+
     def test_port_mismatch_fails(self):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:9000/api"})
         with self.assertRaisesRegex(InstallationError, "port differs"):
