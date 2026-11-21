@@ -51,7 +51,8 @@ class FakeYmm4:
             if request.url.path == "/api/items":
                 return httpx.Response(200, json={"items": [
                     {"item_id": "native:test/with spaces",
-                     "length": self.item_length, "type": self.item_type}
+                     "length": self.item_length, "type": self.item_type,
+                     "revision": f"r{self.revision}"}
                     for _ in range(self.item_count)]})
             prop = request.url.params.get("prop")
             if prop is None:
@@ -149,13 +150,49 @@ class FakeYmm4:
                                           "revision": f"r{self.revision}"})
 
 
-def probe(fake):
+def probe(fake, at=24):
     with httpx.Client(transport=httpx.MockTransport(fake), trust_env=False) as client:
-        run_probe(client, BASE, HEADERS, "native:test/with spaces", 24,
+        run_probe(client, BASE, HEADERS, "native:test/with spaces", at,
                   {"Zoom": 1.25, "X": 80.0})
 
 
 class LiveProbeProtocolTests(unittest.TestCase):
+    def test_last_frame_uses_live_item_length_for_every_write(self):
+        fake = FakeYmm4()
+        fake.item_length = 73
+        probe(fake, at=None)
+        self.assertEqual([p["at"] for p in fake.posts], [72] * 6)
+        self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
+        self.assertEqual([f["at"] for f in fake.frames["X"]], [0])
+
+    def test_last_frame_refuses_existing_frame_and_one_frame_item(self):
+        for length, existing in ((1, False), (73, True)):
+            with self.subTest(length=length):
+                fake = FakeYmm4()
+                fake.item_length = length
+                if existing:
+                    fake.frames["X"].append({"at": length - 1, "value": 2.0})
+                with self.assertRaises(ProbeError):
+                    probe(fake, at=None)
+                self.assertEqual(fake.posts, [])
+
+    def test_last_frame_refuses_resize_after_preflight(self):
+        fake = FakeYmm4()
+        item_reads = 0
+
+        def resized(request):
+            nonlocal item_reads
+            if request.url.path == "/api/items":
+                item_reads += 1
+                if item_reads == 2:
+                    fake.item_length += 10
+                    fake.revision += 1
+            return fake(request)
+
+        with self.assertRaisesRegex(ProbeError, "item length or revision changed"):
+            probe(resized, at=None)
+        self.assertEqual(fake.posts, [])
+
     def test_success_sets_reads_and_removes_both_properties(self):
         fake = FakeYmm4()
         probe(fake)

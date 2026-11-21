@@ -93,7 +93,7 @@ def snapshot_all_animations(client: httpx.Client, base: str,
 
 
 def validate_test_item(client: httpx.Client, base: str,
-                       headers: dict[str, str], item_id: str, at: int) -> None:
+                       headers: dict[str, str], item_id: str, at: int | None) -> tuple[int, str | None]:
     """Fail before writing if the selected image or relative frame is unsafe."""
     try:
         response = client.get(base + "/items", headers=headers)
@@ -111,8 +111,13 @@ def validate_test_item(client: httpx.Client, base: str,
     if "image" not in str(item.get("type", "")).lower():
         raise ProbeError("Target item is not an image; refusing edit")
     length = item.get("length")
-    if type(length) is not int or length <= at:
+    if type(length) is not int or not 1 <= length <= 2_147_483_647:
         raise ProbeError(f"Frame {at} is outside the target item length; refusing edit")
+    frame = length - 1 if at is None else at
+    if type(frame) is not int or not 0 < frame < length:
+        raise ProbeError(f"Frame {frame} is outside the target item length; refusing edit")
+    revision = item.get("revision")
+    return frame, revision if isinstance(revision, str) else None
 
 
 
@@ -141,11 +146,14 @@ def _unacknowledged_insert_is_isolated(current: dict[str, list[dict]],
 
 
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
-              item_id: str, at: int, values: dict[str, float]) -> None:
-    validate_test_item(client, base, headers, item_id, at)
+              item_id: str, at: int | None, values: dict[str, float]) -> None:
+    last_frame = at is None
+    at, item_revision = validate_test_item(client, base, headers, item_id, at)
     # Capture every property before writing: YMM4 may share one KeyFrames
     # collection among Zoom, X and other animation properties.
     baseline, baseline_revision = snapshot_all_animations(client, base, headers, item_id)
+    if last_frame and item_revision != baseline_revision:
+        raise ProbeError("Item length could not be verified against the animation revision; refusing edit")
     for prop in values:
         if prop not in baseline:
             raise ProbeError(f"{prop}: Animation or keyframes unavailable")
@@ -174,6 +182,10 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                 client, base, headers, item_id)
             if current != baseline:
                 raise ProbeError(f"{prop}: animation inventory changed; refusing edit")
+            if last_frame:
+                current_at, item_revision = validate_test_item(client, base, headers, item_id, None)
+                if current_at != at or item_revision != current_revision:
+                    raise ProbeError(f"{prop}: item length or revision changed; refusing last-frame edit")
             _, revision = keyframes(client, base, headers, item_id, prop)
             if revision != current_revision:
                 raise ProbeError(f"{prop}: item changed before write; refusing edit")
@@ -287,16 +299,18 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--item-id", required=True, help="ID of an image in a disposable project")
-    parser.add_argument("--at", type=int, required=True, help="unused relative frame, > 0 and < item length")
+    frames = parser.add_mutually_exclusive_group(required=True)
+    frames.add_argument("--at", type=int, help="unused relative frame, > 0 and < item length")
+    frames.add_argument("--last-frame", action="store_true", help="use the target image's current length minus one")
     parser.add_argument("--zoom", type=float, required=True, help="safe test Zoom value for this YMM4 build")
     parser.add_argument("--x", type=float, required=True, help="safe test X position for this YMM4 build")
     parser.add_argument("--confirm-test-project", action="store_true",
                         help="I have backed up and opened a disposable test project")
     args = parser.parse_args(argv)
     if (not args.confirm_test_project or not args.item_id.strip()
-            or not 0 < args.at <= 2_147_483_647
+            or (not args.last_frame and not 0 < args.at <= 2_147_483_647)
             or not math.isfinite(args.zoom) or not math.isfinite(args.x)):
-        parser.error("requires --confirm-test-project, valid item-id, at>0, and finite values")
+        parser.error("requires --confirm-test-project, a valid item ID, a positive frame, and finite values")
     try:
         base, headers = connection_settings()
         # Never send the local auth token to an HTTP(S) proxy.
