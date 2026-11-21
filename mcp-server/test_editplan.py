@@ -1,10 +1,13 @@
 """Declarative EditPlan validation, diff, idempotency, and MCP dispatch. No YMM4 required."""
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import httpx
 import editplan
 import server
+
+
+ROLLBACK_TIMELINE_ID = "timeline:" + "a" * 32
 
 
 def sample_plan(**overrides):
@@ -337,7 +340,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 return {"success": True, "characters": characters}
             if path == "/items":
                 current = items() if callable(items) else items
-                return {"success": True, "items": current, "count": len(current)}
+                return {"success": True, "items": current, "count": len(current),
+                        "timeline_id": ROLLBACK_TIMELINE_ID}
             if path == "/edits/state":
                 return {"success": True, "bindings": []}
             if path.startswith("/media/info?path="):
@@ -467,7 +471,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["added"], 0)
         self.assertEqual(result["failed_scene"], "intro")
         self.assertEqual(result["committed_scenes"], [])
-        self.assertEqual(calls[-1], ("/items/delete", {"item_ids": ["native:bg"]}))
+        self.assertEqual(calls[-1], ("/items/delete", {"item_ids": ["native:bg"],
+                                                       "expected_timeline_id": ROLLBACK_TIMELINE_ID}))
 
     async def test_unknown_add_outcome_does_not_delete(self):
         calls = []
@@ -496,14 +501,16 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         a = {"item_id": "native:a", "revision": "r1", "frame": 0, "length": 10}
         b = {"item_id": "native:b", "revision": "r1", "frame": 10, "length": 10}
         for readback, expected_added, expected_ids, unknown in (
-            ({"items": [b], "count": 1}, 1, ["native:b"], False),
-            ({"items": [], "count": 1}, 2, [], True),
+            ({"items": [b], "count": 1, "timeline_id": ROLLBACK_TIMELINE_ID}, 1, ["native:b"], False),
+            ({"items": [], "count": 1, "timeline_id": ROLLBACK_TIMELINE_ID}, 2, [], True),
+            ({"items": [], "count": 0, "timeline_id": "timeline:" + "b" * 32}, 2, [], True),
+            ({"items": [], "count": 0}, 2, [], True),
             ({"items": [], "count": 0, "error_code": "ITEMS_UNAVAILABLE"}, 2, [], True),
             (httpx.ConnectError("readback disconnected"), 2, [], True),
         ):
             with self.subTest(readback=readback):
                 get = AsyncMock(side_effect=[
-                    {"characters": []}, {"items": [], "count": 0},
+                    {"characters": []}, {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID},
                     {"bindings": []}, readback,
                 ])
                 post = AsyncMock(side_effect=[
@@ -517,10 +524,29 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["added"], expected_added)
                 self.assertEqual(result.get("outcome_unknown", False), unknown)
                 self.assertEqual(result["rollback"]["error_code"], "ROLLBACK_VERIFY_FAILED")
+                self.assertIn(call("/items/delete", {"item_ids": ["native:a", "native:b"],
+                                                     "expected_timeline_id": ROLLBACK_TIMELINE_ID}),
+                              post.await_args_list)
                 binding_posts = [call.args[1] for call in post.await_args_list
                                  if call.args[0] == "/edits/bindings"]
                 self.assertEqual([item["item_id"] for body in binding_posts
                                   for item in body["items"]], expected_ids)
+
+    async def test_rollback_skips_delete_without_original_timeline(self):
+        with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server._delete_item_ids(["native:a"], None)
+        post.assert_not_awaited()
+        self.assertTrue(result["outcome_unknown"])
+        self.assertEqual(result["verification"]["error_code"], "ROLLBACK_TIMELINE_UNAVAILABLE")
+
+    async def test_rollback_stops_when_delete_reports_a_timeline_switch(self):
+        refused = {"success": False, "error_code": "ROLLBACK_TIMELINE_CHANGED"}
+        with patch.object(server, "ymm4_post", AsyncMock(return_value=refused)), \
+             patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
+            result = await server._delete_item_ids(["native:a"], ROLLBACK_TIMELINE_ID)
+        get.assert_not_awaited()
+        self.assertTrue(result["outcome_unknown"])
+        self.assertEqual(result["verification"], refused)
 
     async def test_atomic_scenes_false_keeps_partial_adds(self):
         async def post(path, body=None, timeout=10.0):
@@ -577,7 +603,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["added"], 1)
         self.assertEqual(result["details"][0]["item_id"], "native:intro")
         deletes = [body for path, body in calls if path == "/items/delete"]
-        self.assertEqual(deletes, [{"item_ids": ["native:body"]}])
+        self.assertEqual(deletes, [{"item_ids": ["native:body"],
+                                   "expected_timeline_id": ROLLBACK_TIMELINE_ID}])
         bindings = [body for path, body in calls if path == "/edits/bindings"]
         self.assertEqual(bindings[0]["items"][0]["item_id"], "native:intro")
 

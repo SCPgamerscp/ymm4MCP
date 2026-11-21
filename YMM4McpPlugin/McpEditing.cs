@@ -19,6 +19,15 @@ namespace YMM4McpPlugin
         private readonly SemaphoreSlim _editGate = new(1, 1);
         private static readonly ConditionalWeakTable<object, RuntimeItemIdentity> RuntimeItemIdentities = new();
         private static readonly ConditionalWeakTable<object, RuntimeItemRevision> RuntimeItemRevisions = new();
+        private static readonly ConditionalWeakTable<object, string> RuntimeTimelineIds = new();
+
+        private static object? GetTimelineModel(object timelineViewModel)
+            => timelineViewModel.GetType().GetField("timeline", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.GetValue(timelineViewModel);
+
+        private static string? GetRollbackTimelineId(object? timelineModel)
+            => timelineModel == null ? null : RuntimeTimelineIds.GetValue(timelineModel,
+                static _ => "timeline:" + Guid.NewGuid().ToString("N"));
 
         private sealed class RuntimeItemIdentity
         {

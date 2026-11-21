@@ -337,6 +337,7 @@ namespace YMM4McpPlugin
                 if (vm == null) return (object)new { error = "MainViewModel取得失敗", items = Array.Empty<object>() };
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
                 if (tvm == null) return (object)new { error = "TimelineVM取得失敗", items = Array.Empty<object>() };
+                var timelineModel = GetTimelineModel(tvm);
                 var rawItems = GetPropEnum(tvm, "Items");
                 var items = new List<object>();
                 if (rawItems != null)
@@ -360,7 +361,11 @@ namespace YMM4McpPlugin
                         });
                     }
                 }
-                return (object)new { items, count = items.Count };
+                // An unavailable collection cannot attest to its timeline or to item absence.
+                var timelineId = rawItems != null && ReferenceEquals(timelineModel, GetTimelineModel(tvm))
+                    ? GetRollbackTimelineId(timelineModel) : null;
+                return (object)new { items, count = items.Count,
+                    timeline_id = timelineId };
             });
         }
 
@@ -924,6 +929,14 @@ namespace YMM4McpPlugin
             int targetLayer = TimelineInputValidation.AtLeast(GetInt(b, "layer", -1), -1, "layer");
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
+            string? expectedTimelineId = null;
+            if (b.ContainsKey("expected_timeline_id"))
+            {
+                expectedTimelineId = GetStr(b, "expected_timeline_id", "");
+                if (!expectedTimelineId.StartsWith("timeline:", StringComparison.Ordinal) ||
+                    !Guid.TryParseExact(expectedTimelineId[9..], "N", out _))
+                    throw new ArgumentException("expected_timeline_id must be a live timeline identifier");
+            }
             var requestedIds = new List<string>();
             if (itemId.Length > 0) requestedIds.Add(itemId);
             if (b.TryGetValue("item_ids", out var idsEl) && idsEl.ValueKind == JsonValueKind.Array)
@@ -939,12 +952,18 @@ namespace YMM4McpPlugin
             }
             if (expectedRevision.Length > 0 && requestedIds.Count != 1)
                 return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id を1件指定してください");
+            if (expectedTimelineId != null && requestedIds.Count == 0)
+                throw new ArgumentException("expected_timeline_id requires item IDs");
 
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
-                var rawItems = GetPropEnum(tvm, "Items"); if (rawItems == null) return (object)new { success = false, error = "Items失敗" };
+                object? expectedTimeline = expectedTimelineId == null ? null : GetTimelineModel(tvm);
+                if (expectedTimelineId != null && GetRollbackTimelineId(expectedTimeline) != expectedTimelineId)
+                    return Failure("ROLLBACK_TIMELINE_CHANGED", "ロールバック対象のタイムラインが切り替わりました", true);
+                var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return Failure("ITEMS_UNAVAILABLE", "タイムライン項目を取得できません");
 
                 var toRemove = new List<object>();
                 var missing = new List<string>();
@@ -977,15 +996,17 @@ namespace YMM4McpPlugin
                 }
                 if (toRemove.Count == 0)
                     return (object)new { success = true, removed = 0, item_ids = Array.Empty<string>(), missing = missing.ToArray(), note = "対象アイテムなし" };
-                var deleted = TryRemoveTimelineItems(tvm, toRemove, missing);
+                var deleted = TryRemoveTimelineItems(tvm, toRemove, missing, expectedTimeline);
                 return deleted.payload;
             });
         }
 
-        private (bool ok, object payload) TryRemoveTimelineItems(object tvm, List<object> toRemove, IReadOnlyList<string>? missing = null)
+        private (bool ok, object payload) TryRemoveTimelineItems(object tvm, List<object> toRemove,
+            IReadOnlyList<string>? missing = null, object? expectedTimeline = null)
         {
-            var timelineField = tvm.GetType().GetField("timeline", BindingFlags.NonPublic | BindingFlags.Instance);
-            var timelineObj = timelineField?.GetValue(tvm);
+            var timelineObj = GetTimelineModel(tvm);
+            if (expectedTimeline != null && !ReferenceEquals(timelineObj, expectedTimeline))
+                return (false, Failure("ROLLBACK_TIMELINE_CHANGED", "ロールバック対象のタイムラインが切り替わりました", true));
             if (timelineObj == null) return (false, (object)new { success = false, error = "timelineフィールド取得失敗" });
 
             var deleteMethod = timelineObj.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)

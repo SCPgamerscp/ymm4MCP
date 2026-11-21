@@ -1780,30 +1780,43 @@ async def _load_edit_binding(key: str | None) -> dict | None:
     return editplan.pick_binding(state.get("bindings"), key)
 
 
-async def _delete_item_ids(item_ids: list[str]) -> dict:
+def _rollback_unverified(item_ids, verification):
+    return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
+            "error": "ロールバック対象と同じタイムラインで削除結果を確認できませんでした",
+            "verification": verification, "outcome_unknown": True, "item_ids": item_ids}
+
+
+async def _delete_item_ids(item_ids: list[str], timeline_id: str | None) -> dict:
     ids = [item_id for item_id in item_ids if isinstance(item_id, str) and item_id]
     if not ids:
         return {"success": True, "removed": 0, "item_ids": []}
+    if not isinstance(timeline_id, str) or re.fullmatch(r"timeline:[0-9a-f]{32}", timeline_id) is None:
+        return _rollback_unverified(ids, {"error_code": "ROLLBACK_TIMELINE_UNAVAILABLE"})
     try:
-        res = await ymm4_post("/items/delete", {"item_ids": ids})
+        res = await ymm4_post("/items/delete", {"item_ids": ids, "expected_timeline_id": timeline_id})
     except (httpx.HTTPError, ValueError):
         return {"success": False, "error_code": "ROLLBACK_REQUEST_FAILED",
                 "error": "ロールバック削除の通信に失敗しました。itemsで確認してください。",
                 "outcome_unknown": True, "item_ids": ids}
+    if isinstance(res, dict) and res.get("error_code") in ("ROLLBACK_TIMELINE_CHANGED", "ITEMS_UNAVAILABLE"):
+        return _rollback_unverified(ids, res)
     if not isinstance(res, dict) or res.get("success") is not True:
         return {"success": False, "error_code": "ROLLBACK_FAILED",
                 "error": "失敗シーンの追加分を削除できませんでした",
                 "failure": res, "item_ids": ids,
                 "outcome_unknown": isinstance(res, dict) and res.get("outcome_unknown") is True}
     try:
-        inventory, error = read_item_inventory(await ymm4_get("/items"),
+        snapshot = await ymm4_get("/items")
+        inventory, error = read_item_inventory(snapshot,
                                                max_items=quality_guard.MAX_SNAPSHOT_ITEMS)
     except (httpx.HTTPError, ValueError):
         error = {"error_code": "ITEMS_UNAVAILABLE"}
     if error:
-        return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
-                "error": "削除後のタイムラインを確認できませんでした",
-                "verification": error, "outcome_unknown": True, "item_ids": ids}
+        return _rollback_unverified(ids, error)
+    observed_id = snapshot.get("timeline_id")
+    if observed_id != timeline_id:
+        return _rollback_unverified(ids, {"error_code": "ROLLBACK_TIMELINE_CHANGED" if observed_id
+                                          else "ROLLBACK_TIMELINE_UNAVAILABLE"})
     remaining = [item_id for item_id in ids if item_id in inventory]
     if remaining:
         return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
@@ -1832,14 +1845,14 @@ async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | Non
 
 async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_index, failed_scene,
                                added, details, bindings, committed, scenes, scene_added_ids,
-                               atomic, scene_details=None, scene_bindings=None, extra=None,
+                               atomic, timeline_id, scene_details=None, scene_bindings=None, extra=None,
                                outcome_unknown=False):
     rollback = None
     rolled_back = False
     removed_ids = set()
     remaining_details = list(details)
     if atomic and scene_added_ids and not outcome_unknown:
-        rollback = await _delete_item_ids(scene_added_ids)
+        rollback = await _delete_item_ids(scene_added_ids, timeline_id)
         rolled_back = rollback.get("success") is True
         outcome_unknown = rollback.get("outcome_unknown") is True
         if rolled_back:
@@ -1916,6 +1929,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if not isinstance(items, list):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
                 "error": "タイムラインの状態を取得できません。編集せず停止しました"}
+    timeline_id = snapshot.get("timeline_id")
     current_snapshot_hash = editplan.snapshot_hash(items)
     if expected_snapshot is not None and expected_snapshot != current_snapshot_hash:
         return {"success": False, "error_code": "SNAPSHOT_HASH_MISMATCH",
@@ -2056,7 +2070,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                     error="通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=bindings, committed=committed,
-                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                     scene_details=scene_details, scene_bindings=scene_bindings, outcome_unknown=True)
             if not isinstance(res, dict) or res.get("success") is not True:
                 return await _partial_edit_result(
@@ -2064,7 +2078,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                     error="EditPlanの適用に失敗したため停止しました",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=bindings, committed=committed,
-                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                     scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res})
             added += 1
             scene_added += 1
@@ -2086,7 +2100,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                         error="追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
                         failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                         added=added, details=details, bindings=bindings, committed=committed,
-                        scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                        scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                         scene_details=scene_details, scene_bindings=scene_bindings)
                 cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
         bindings.extend(scene_bindings)
