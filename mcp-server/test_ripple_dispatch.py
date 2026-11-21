@@ -6,6 +6,19 @@ import server
 
 
 class RippleDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_caller_snapshot_with_a_different_timeline_id_does_not_pass(self):
+        before = {"count": 1, "items": [
+            {"item_id": "after", "frame": 20, "length": 10, "layer": 1, "revision": "r1"}],
+            "timeline_id": "timeline:" + "a" * 32}
+        after = {"count": 1, "items": [{**before["items"][0], "frame": 10, "revision": "r2"}],
+                 "timeline_id": "timeline:" + "b" * 32}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=after)):
+            result = await server.dispatch({
+                "action": "verify_ripple_delete", "before_snapshot": before,
+                "start_frame": 10, "end_frame": 20, "expected_revisions": {"after": "r1"}})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_code"], "RIPPLE_TIMELINE_CHANGED")
+
     async def test_dispatch_only_reads_live_items(self):
         snapshot = {"success": True, "items": [
             {"item_id": "native:cut", "frame": 10, "length": 10,

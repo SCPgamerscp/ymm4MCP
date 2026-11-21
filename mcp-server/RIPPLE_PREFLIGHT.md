@@ -132,6 +132,15 @@ may differ only by case). Drive-relative paths, Windows root-relative paths,
 bare UNC shares, and device-namespace paths cannot be used as evidence
 identities. This is still a path-based check, not an immutable project ID.
 
+Hosts that supply `timeline_id` in `/api/items` also allow verification of
+the active timeline within the project. Capture reports
+`timeline_identity_captured`, and verification reports
+`timeline_identity_checked` after comparing the two IDs. A changed ID
+returns `RIPPLE_TIMELINE_CHANGED`. An invalid or missing ID on either side
+of a comparison with identity data returns `RIPPLE_TIMELINE_UNAVAILABLE`.
+When both snapshots omit the field, the legacy item comparison still runs
+and reports `timeline_identity_checked=false`.
+
 This is **not** a project-instance lock. Reopening the same path, switching
 away and back between individual reads, or changing the underlying file
 without changing its path cannot be ruled out by these HTTP calls. Host-side
