@@ -360,7 +360,7 @@ namespace YMM4McpPlugin
                     });
                 }
                 var timelineId = ReferenceEquals(timelineModel, GetTimelineModel(tvm))
-                    ? GetRollbackTimelineId(timelineModel) : null;
+                    ? GetTimelineId(timelineModel) : null;
                 return (object)new { items, count = items.Count,
                     timeline_id = timelineId };
             });
@@ -926,14 +926,7 @@ namespace YMM4McpPlugin
             int targetLayer = TimelineInputValidation.AtLeast(GetInt(b, "layer", -1), -1, "layer");
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
-            string? expectedTimelineId = null;
-            if (b.ContainsKey("expected_timeline_id"))
-            {
-                expectedTimelineId = GetStr(b, "expected_timeline_id", "");
-                if (!expectedTimelineId.StartsWith("timeline:", StringComparison.Ordinal) ||
-                    !Guid.TryParseExact(expectedTimelineId[9..], "N", out _))
-                    throw new ArgumentException("expected_timeline_id must be a live timeline identifier");
-            }
+            string? expectedTimelineId = GetExpectedTimelineId(b);
             var requestedIds = new List<string>();
             if (itemId.Length > 0) requestedIds.Add(itemId);
             if (b.TryGetValue("item_ids", out var idsEl) && idsEl.ValueKind == JsonValueKind.Array)
@@ -957,7 +950,7 @@ namespace YMM4McpPlugin
                 var vm = GetMainViewModel(); if (vm == null) return (object)new { success = false, error = "VM失敗" };
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel"); if (tvm == null) return (object)new { success = false, error = "TVM失敗" };
                 object? expectedTimeline = expectedTimelineId == null ? null : GetTimelineModel(tvm);
-                if (expectedTimelineId != null && GetRollbackTimelineId(expectedTimeline) != expectedTimelineId)
+                if (expectedTimelineId != null && GetTimelineId(expectedTimeline) != expectedTimelineId)
                     return Failure("ROLLBACK_TIMELINE_CHANGED", "ロールバック対象のタイムラインが切り替わりました", true);
                 var rawItems = GetPropEnum(tvm, "Items");
                 if (rawItems == null) return Failure("ITEMS_UNAVAILABLE", "タイムライン項目を取得できません");

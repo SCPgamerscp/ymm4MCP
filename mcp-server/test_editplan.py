@@ -386,6 +386,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["added"], 3)
         self.assertEqual([path for path, _ in created], ["/items/video", "/items/voice", "/items/text"])
         self.assertEqual(created[1][1]["character"], "ゆっくり霊夢")
+        self.assertEqual([body.get("expected_timeline_id") for _, body in created],
+                         [ROLLBACK_TIMELINE_ID] * 3)
 
         record = {
             "idempotency_key": "episode-1",
@@ -447,6 +449,28 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await server.dispatch({"action": "apply_edit", **sample_plan()})
             posted.assert_not_awaited()
+
+    async def test_apply_does_not_write_when_host_cannot_identify_timeline(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+            {"characters": []}, {"items": [], "count": 0, "timeline_id": None},
+        ])), patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+        post.assert_not_awaited()
+        self.assertEqual(result["error_code"], "TIMELINE_UNAVAILABLE")
+
+    async def test_readback_from_a_different_timeline_does_not_save_bindings(self):
+        item = {"item_id": "native:caption", "revision": "r1", "frame": 0,
+                "layer": 1, "length": 10, "type": "TextItem", "text": "hello"}
+        get = AsyncMock(side_effect=[
+            {"characters": []}, {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID},
+            {"bindings": []}, {"items": [item], "count": 1, "timeline_id": "timeline:" + "b" * 32},
+        ])
+        with patch.object(server, "ymm4_get", get), patch.object(
+                server, "ymm4_post", AsyncMock(return_value={"success": True, **item})) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+        self.assertEqual([entry.args[0] for entry in post.await_args_list], ["/items/text"])
+        self.assertEqual(result["error_code"], "EDIT_VERIFY_FAILED")
+        self.assertTrue(result["outcome_unknown"])
 
     async def test_partial_failure_rolls_back_the_failed_scene(self):
         calls = []

@@ -1780,6 +1780,10 @@ async def _load_edit_binding(key: str | None) -> dict | None:
     return editplan.pick_binding(state.get("bindings"), key)
 
 
+def _valid_timeline_id(value):
+    return isinstance(value, str) and re.fullmatch(r"timeline:[0-9a-f]{32}", value) is not None
+
+
 def _rollback_unverified(item_ids, verification):
     return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
             "error": "ロールバック対象と同じタイムラインで削除結果を確認できませんでした",
@@ -1790,7 +1794,7 @@ async def _delete_item_ids(item_ids: list[str], timeline_id: str | None) -> dict
     ids = [item_id for item_id in item_ids if isinstance(item_id, str) and item_id]
     if not ids:
         return {"success": True, "removed": 0, "item_ids": []}
-    if not isinstance(timeline_id, str) or re.fullmatch(r"timeline:[0-9a-f]{32}", timeline_id) is None:
+    if not _valid_timeline_id(timeline_id):
         return _rollback_unverified(ids, {"error_code": "ROLLBACK_TIMELINE_UNAVAILABLE"})
     try:
         res = await ymm4_post("/items/delete", {"item_ids": ids, "expected_timeline_id": timeline_id})
@@ -1934,6 +1938,9 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
                 "error": "タイムラインの状態を取得できません。編集せず停止しました"}
     timeline_id = snapshot.get("timeline_id")
+    if not dry_run and "timeline_id" in snapshot and not _valid_timeline_id(timeline_id):
+        return {"success": False, "error_code": "TIMELINE_UNAVAILABLE",
+                "error": "編集対象のタイムラインを識別できなかったため停止しました", "rolled_back": False}
     current_snapshot_hash = editplan.snapshot_hash(items)
     if expected_snapshot is not None and expected_snapshot != current_snapshot_hash:
         return {"success": False, "error_code": "SNAPSHOT_HASH_MISMATCH",
@@ -2066,6 +2073,8 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
             payload = dict(op["payload"])
             if op.get("frame_source") == "sequential":
                 payload["frame"] = cursor.get(scene_id, payload.get("frame", 0))
+            if timeline_id is not None:
+                payload["expected_timeline_id"] = timeline_id
             try:
                 res = await ymm4_post(f"/items/{op['kind']}", payload, timeout=120.0)
             except (httpx.HTTPError, ValueError):
@@ -2121,10 +2130,11 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
 
     try:
         verified_snapshot = await ymm4_get("/items")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         verified_snapshot = {"error": str(exc)}
     if (not isinstance(verified_snapshot, dict) or verified_snapshot.get("success") is False
-            or "error" in verified_snapshot or not isinstance(verified_snapshot.get("items"), list)):
+            or "error" in verified_snapshot or not isinstance(verified_snapshot.get("items"), list)
+            or (timeline_id is not None and verified_snapshot.get("timeline_id") != timeline_id)):
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
                 "error": "適用後のタイムラインを確認できません。itemsを確認してから再実行してください",
                 "added": added, "details": details, "outcome_unknown": True, "rolled_back": False,
