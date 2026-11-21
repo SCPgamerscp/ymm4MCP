@@ -1,5 +1,6 @@
 """Read-only installation acceptance tests; no real YMM4 required."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -36,9 +37,9 @@ class InstallationAcceptanceTests(unittest.TestCase):
             entry["env"] = env
         path.write_text(json.dumps({"mcpServers": {"ymm4": entry}}), encoding="utf-8")
 
-    def inspect(self):
+    def inspect(self, **options):
         return inspect_installation(self.local, self.appdata,
-                                    status_check=self.status, mcp_probe=self.mcp)
+                                    status_check=self.status, mcp_probe=self.mcp, **options)
 
     def test_real_install_and_authenticated_status(self):
         self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
@@ -132,6 +133,22 @@ class InstallationAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(InstallationError, "persistent server"):
             self.inspect()
 
+    def test_relative_profile_paths_do_not_depend_on_probe_working_directory(self):
+        previous = Path.cwd()
+        try:
+            os.chdir(self.server)
+            for field, value, error in (
+                ("command", str(self.python.relative_to(self.server)), "persistent Python"),
+                ("args", ["server.py"], "persistent server"),
+            ):
+                with self.subTest(field=field):
+                    self.write_config(self.classic, **{field: value})
+                    with self.assertRaisesRegex(InstallationError, error):
+                        self.inspect()
+        finally:
+            os.chdir(previous)
+        self.status.assert_not_called()
+
     def test_configured_port_is_used_for_live_probe_and_restored(self):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
         with patch.dict("os.environ", {"YMM4_API_BASE": "http://127.0.0.1:9999/api"}):
@@ -161,6 +178,51 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:9000/api"})
         with self.assertRaisesRegex(InstallationError, "port differs"):
             self.inspect()
+
+    def test_expected_port_rejects_stale_configuration_or_live_status(self):
+        self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
+        with self.assertRaisesRegex(InstallationError, "configured port differs"):
+            self.inspect(expected_port=8766)
+        self.status.assert_not_called()
+        self.write_config(self.classic)
+        with self.assertRaisesRegex(InstallationError, "Running YMM4 port differs"):
+            self.inspect(expected_port=8766)
+        self.status.assert_called_once()
+        self.mcp.assert_not_called()
+
+    def test_expected_port_bounds_fail_before_probing(self):
+        for port in (True, 1023, 65536, "8766"):
+            with self.subTest(port=port), self.assertRaisesRegex(InstallationError, "1024..65535"):
+                self.inspect(expected_port=port)
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
+
+    def test_expected_port_requires_default_descriptor_even_with_profile_overrides(self):
+        self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:8766/api",
+                                            "YMM4_API_TOKEN": "profile-token"})
+        descriptor = self.local / "YMM4MCP" / "connection.json"
+        with patch.dict(os.environ, {"YMM4_CONNECTION_FILE": "unrelated.json",
+                                     "YMM4_API_BASE": "http://127.0.0.1:9999/api",
+                                     "YMM4_API_TOKEN": "terminal-token"}):
+            for descriptor_port in (8765, 8766):
+                with self.subTest(descriptor_port=descriptor_port):
+                    def authenticate():
+                        if os.environ.get("YMM4_CONNECTION_FILE") == str(descriptor):
+                            self.assertNotIn("YMM4_API_BASE", os.environ)
+                            self.assertNotIn("YMM4_API_TOKEN", os.environ)
+                            return {"status": "running", "port": descriptor_port}
+                        self.assertEqual(os.environ["YMM4_API_TOKEN"], "profile-token")
+                        return {"status": "running", "port": 8766}
+
+                    self.status.reset_mock()
+                    self.status.side_effect = authenticate
+                    if descriptor_port == 8765:
+                        with self.assertRaisesRegex(InstallationError, "descriptor differs"):
+                            self.inspect(expected_port=8766)
+                    else:
+                        self.assertEqual(self.inspect(expected_port=8766)["port"], 8766)
+                    self.assertEqual(self.status.call_count, 2)
+                    self.assertEqual(os.environ["YMM4_CONNECTION_FILE"], "unrelated.json")
 
     def test_external_api_url_rejected_before_network(self):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://example.org:8765/api"})

@@ -13,6 +13,16 @@
 
 **未検証事項:** この検証は実機のYMM4を自動操作せず、`.ymme` のダブルクリック操作そのもの、正式Releaseのasset公開、Claude Desktop内での実際のMCPツール実行は証明しません。これらの実機確認と関連PRのマージが完了するまでIssue #22はOpenのままにします。
 
+## ポート変更後の確認
+
+YMM4の画面でポートを変更し、MCPサーバーを再起動します。Claude Desktopでポートを明示設定している場合は、新しいポートに合わせてください。変更先が8766の場合はPowerShellで以下を実行します。
+
+```powershell
+& "$env:LOCALAPPDATA\YMM4MCP\mcp-server\check_installation.cmd" --expected-port 8766
+```
+
+`--expected-port` を指定すると、初期化済みのClaudeプロファイルがすべて変更先のポートで認証できることを確認します。ユーザー既定の `connection.json` からも認証し、Claude側に個別設定がある場合でも、プラグインが更新した接続先を検査します。
+
 ## MCP stdio の実接続検査
 
 `check_installation.cmd` は認証付きHTTP statusに加え、インストール先のPythonを**実際に子プロセス起動**して、各Claude Desktopプロファイルの環境変数でMCP `initialize` と `tools/list` を実行します。`ymm4_interact`・`ymm4_preview`・`ymm4_analyze_video` の3ツールが見えなければ失敗します。危険な `ymm4_advanced` は設定で明示的に有効化した場合だけ公開されるため必須にしません。**編集ツールの呼び出しは行いません**。成功時の `mcp_stdio: ready` と `mcp_profiles_checked` はClaudeのプロセス起動・MCPハンドシェイクの確認であり、Claude DesktopのGUIから実際に利用できることの保証ではありません。失敗時にAPIキー・トークン・プロファイル環境変数を出力しません。

@@ -5,6 +5,7 @@ an authenticated YMM4 status response. Does not install, edit, or log tokens.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ def _unique_pairs(pairs):
 
 
 def _same_path(actual, expected):
-    if not isinstance(actual, str) or not actual.strip():
+    if not isinstance(actual, str) or not Path(actual).is_absolute():
         return False
     return os.path.normcase(os.path.abspath(actual)) == os.path.normcase(os.path.abspath(expected))
 
@@ -87,8 +88,11 @@ def _authenticated_status_for_profile(status_check, profile_env):
 
 
 def inspect_installation(local_appdata: Path, appdata: Path, *,
+                         expected_port: int | None = None,
                          status_check=check_connection, mcp_probe=check_stdio):
     """Verify real installed paths and authenticated status without mutation."""
+    if expected_port is not None and (type(expected_port) is not int or not 1024 <= expected_port <= 65535):
+        raise InstallationError("Expected YMM4 port must be an integer in 1024..65535")
     root = local_appdata / "YMM4MCP" / "mcp-server"
     python = root / ".venv" / "Scripts" / "python.exe"
     server = root / "server.py"
@@ -138,6 +142,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
         snapshots[path] = (raw, port)
     if len(configured_ports) > 1:
         raise InstallationError("Claude Desktop profiles disagree on the configured port")
+    if expected_port is not None and configured_ports - {expected_port}:
+        raise InstallationError("Claude Desktop configured port differs from the expected port")
     # An MCP stdio handshake only proves the child starts. It does not prove
     # that each Claude profile can authenticate to the YMM4 HTTP endpoint.
     # Check every profile with its own token, descriptor and base URL, rather
@@ -151,6 +157,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
             raise InstallationError("Authenticated YMM4 status check failed")
         if status is not None and current["port"] != status["port"]:
             raise InstallationError("Claude Desktop profiles disagree on the running port")
+        if expected_port is not None and current["port"] != expected_port:
+            raise InstallationError("Running YMM4 port differs from the expected port")
         status = current
     # A healthy HTTP endpoint alone does not prove Claude can start the
     # installed MCP server. Perform a real stdio initialize + tools/list for
@@ -167,6 +175,13 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
                 or report["tool_count"] < 3):
             raise InstallationError("Installed MCP server tool discovery failed")
         mcp_tool_counts.append(report["tool_count"])
+    if expected_port is not None:
+        # Explicit profile overrides could otherwise hide a stale plugin descriptor.
+        descriptor = root.parent / "connection.json"
+        current = _authenticated_status_for_profile(status_check, {"YMM4_CONNECTION_FILE": str(descriptor)})
+        if not isinstance(current, dict) or current.get("status") != "running" or \
+                type(current.get("port")) is not int or current["port"] != expected_port:
+            raise InstallationError("Default YMM4 connection descriptor differs from the expected port")
     for path in configs:
         # The status and MCP probes can take seconds. A concurrent installer or Claude
         # settings edit must not turn an old validation into a success for a
@@ -190,7 +205,13 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
             "version": status.get("version")}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expected-port", type=int,
+                        help="verify that profiles and the default plugin connection use this port")
+    args = parser.parse_args(argv)
+    if args.expected_port is not None and not 1024 <= args.expected_port <= 65535:
+        parser.error("--expected-port must be in 1024..65535")
     if sys.platform != "win32":
         print("FAIL: This installer acceptance probe requires Windows", file=sys.stderr)
         return 1
@@ -199,7 +220,10 @@ def main() -> int:
         return 1
     try:
         result = inspect_installation(Path(os.environ["LOCALAPPDATA"]),
-                                      Path(os.environ["APPDATA"]))
+                                      Path(os.environ["APPDATA"]), expected_port=args.expected_port)
+    except InstallationError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         # Never include a config value, HTTP header, or token in the output.
         print(f"FAIL: {type(exc).__name__}; inspect installer and YMM4 status", file=sys.stderr)
