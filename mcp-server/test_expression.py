@@ -58,6 +58,20 @@ class ExpressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("verified", result)
             post.assert_awaited_once()
 
+    async def test_native_tachie_face_can_preview_and_apply_an_expression(self):
+        for native_type in ("TachieFaceItem", "YukkuriMovieMaker.Project.Items.TachieFaceItem"):
+            items = {"items": [{**ITEMS["items"][0], "type": native_type}]}
+            with self.subTest(native_type=native_type), \
+                 patch.object(server, "ymm4_get", AsyncMock(return_value=items)), \
+                 patch.object(server, "ymm4_post", AsyncMock(return_value=VERIFIED)) as post:
+                preview = await server.dispatch(ARGS)
+                self.assertTrue(preview["dry_run"])
+                post.assert_not_awaited()
+                result = await server.dispatch({**ARGS, "dry_run": False,
+                                                "expected_revision": preview["revision"]})
+                self.assertTrue(result["verified"])
+                post.assert_awaited_once()
+
     async def test_preflight_rejection_on_older_plugin_is_reported_as_failed(self):
         reply = {"success": False, "changed": False, "error_code": "FACE_PARAM_INVALID",
                  "results": ["require_face_path_readback=NOTFOUND"]}

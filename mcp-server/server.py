@@ -868,7 +868,8 @@ async def set_expression(args: dict) -> dict:
         return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
                 "reported_count": snapshot["count"], "observed_count": len(snapshot["items"])}
     matches = [item for item in snapshot["items"] if isinstance(item, dict) and item.get("item_id") == item_id]
-    if len(matches) != 1 or not scene_media.is_known_item_type(matches[0].get("type"), ("faceitem",)):
+    if len(matches) != 1 or not scene_media.is_known_item_type(
+            matches[0].get("type"), ("faceitem", "tachiefaceitem")):
         return {"success": False, "error_code": "FACE_ITEM_NOT_FOUND", "item_id": item_id}
     revision = matches[0].get("revision")
     if not ducking.valid_identifier(revision, max_length=256):
