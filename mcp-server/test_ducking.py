@@ -208,6 +208,46 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["applied"]), 1)
         self.assertEqual(result["backup_path"], "C:/backup/cp.ymmp")
 
+    async def test_voice_conflict_at_host_stops_writes_and_preserves_backup(self):
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS]
+        expected = {"all_voices": True, "items": [{"item_id": "voice:1", "frame": 20, "length": 10}]}
+        for completed in (0, 1):
+            for code in ("BGM_DUCKING_VOICE_CONFLICT", "BGM_DUCKING_GUARD_UNAVAILABLE"):
+                conflict = {"success": False, "error_code": code, "outcome_unknown": False}
+                posts = [backup, *([{"success": True, "revision": "r2"}] * completed), conflict]
+                with self.subTest(completed=completed, code=code), \
+                     patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+                     patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post:
+                    result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                                    "dry_run": False})
+                self.assertEqual(result["error_code"], code)
+                self.assertFalse(result["outcome_unknown"])
+                self.assertEqual(result["backup_path"], backup["backup_path"])
+                self.assertEqual(len(result["applied"]), completed)
+                mutations = [c.args[1] for c in post.await_args_list[1:]]
+                self.assertEqual(len(mutations), completed + 1)
+                for i, payload in enumerate(mutations):
+                    self.assertEqual(payload["action"], "set_ducking")
+                    self.assertEqual(payload["expected_ducking_voices"], expected)
+                    self.assertEqual(payload.get("expected_base_volume"), 100.0 if i == 0 else None)
+
+    async def test_native_guard_sends_only_explicit_voice_selection(self):
+        items = {"items": [*ITEMS["items"],
+                           {"item_id": "voice:2", "type": "VoiceItem", "frame": 40, "length": 10}]}
+        gets = [items, KEYS, {"success": True, "isSaved": True}, items, KEYS]
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
+        conflict = {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
+                    "outcome_unknown": False}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+             patch.object(server, "ymm4_post", AsyncMock(side_effect=[backup, conflict])) as post:
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "voice_item_ids": ["voice:2"], "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_CONFLICT")
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(post.await_args.args[1]["expected_ducking_voices"], {
+            "all_voices": False, "items": [{"item_id": "voice:2", "frame": 40, "length": 10}]})
+
     async def test_verification_failure_preserves_backup_path(self):
         posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]

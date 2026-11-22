@@ -826,11 +826,17 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
                 "expected_base_volume": baseline, "actual_base_volume": current_baseline,
                 "backup_path": backup, "applied": []}
+    voice_timing = {"all_voices": selected is None, "items": [
+        {field: voice[field] for field in ("item_id", "frame", "length")} for voice in voices]}
     applied = []
     seen_revisions = {revision}
     for point in points:
+        # Old hosts reject this action instead of silently ignoring the guard.
         payload = {"item_id": item_id, "expected_revision": revision,
-                   "prop": "Volume", "action": "set", **point}
+                   "prop": "Volume", "action": "set_ducking",
+                   "expected_ducking_voices": voice_timing, **point}
+        if not applied:
+            payload["expected_base_volume"] = baseline
         try:
             changed = await ymm4_post("/items/keyframe", payload)
         except Exception as exc:
@@ -841,6 +847,11 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
+        if (isinstance(changed, dict) and changed.get("success") is False and
+                changed.get("outcome_unknown") is False and
+                changed.get("error_code") in ("BGM_DUCKING_VOICE_CONFLICT",
+                    "BGM_DUCKING_VOLUME_CONFLICT", "BGM_DUCKING_GUARD_UNAVAILABLE")):
+            return {**changed, "applied": applied, "backup_path": backup}
         # A rejected/ill-formed response does not prove that the host made no
         # change. Never retry or apply another point without a fresh snapshot.
         if (not isinstance(changed, dict) or changed.get("success") is not True or

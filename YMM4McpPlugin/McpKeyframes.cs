@@ -119,6 +119,23 @@ namespace YMM4McpPlugin
             string prop = GetStr(body, "prop", "");
             if (string.IsNullOrWhiteSpace(prop)) throw new ArgumentException("prop is required");
             string action = GetStr(body, "action", "set").ToLowerInvariant();
+            DuckingVoiceGuard? voiceGuard = null;
+            double? expectedBaseVolume = null;
+            if (action == "set_ducking")
+            {
+                if (prop != "Volume" || itemId.Length == 0 || string.IsNullOrWhiteSpace(expectedRevision) ||
+                    !body.TryGetValue("expected_ducking_voices", out var voices))
+                    throw new ArgumentException("set_ducking requires Volume, item_id, expected_revision and expected_ducking_voices");
+                voiceGuard = DuckingVoiceGuard.Parse(voices);
+                if (body.TryGetValue("expected_base_volume", out var baseline))
+                {
+                    if (baseline.ValueKind != JsonValueKind.Number || !baseline.TryGetDouble(out double volume) ||
+                        !double.IsFinite(volume) || volume <= 0)
+                        throw new ArgumentException("expected_base_volume must be a positive finite number");
+                    expectedBaseVolume = volume;
+                }
+                action = "set";
+            }
             if (action is not ("set" or "remove" or "clear"))
                 throw new ArgumentException("action must be set, remove, or clear");
             int relativeFrame = body.ContainsKey("at") ? NonNegative(body, "at")
@@ -175,6 +192,24 @@ namespace YMM4McpPlugin
                         framesBefore, valuesBefore))
                     return Failure("KEYFRAME_READBACK_INVALID",
                         "変更前のFrames/Valuesの順序または対応関係が不正です。編集せず中止しました");
+                // Compare the planning inputs and mutate in this one
+                // dispatcher callback. Other UI edits cannot interleave.
+                if (voiceGuard != null)
+                {
+                    try
+                    {
+                        if (!voiceGuard.Matches(ReadDuckingVoiceTiming(voiceGuard)))
+                            return Failure("BGM_DUCKING_VOICE_CONFLICT", "発話の位置、長さ、または対象が変更されています");
+                        if (expectedBaseVolume.HasValue && !DuckingVoiceGuard.MatchesBaseVolume(
+                                expectedBaseVolume.Value, framesBefore, valuesBefore,
+                                valuesBefore.Count == 0 ? TryGetDefaultValue(anim) : null))
+                            return Failure("BGM_DUCKING_VOLUME_CONFLICT", "基準音量またはVolumeキーフレームが変更されています");
+                    }
+                    catch (Exception)
+                    {
+                        return Failure("BGM_DUCKING_GUARD_UNAVAILABLE", "編集直前の発話または音量を確認できませんでした");
+                    }
+                }
                 if (action == "set" && !KeyframeHostBinding.CanSetAt(item, anim, relativeFrame))
                     return Failure("KEYFRAME_BINDING_UNAVAILABLE",
                         "Animationをアイテムの共有KeyFramesに接続できませんでした。未接続のキーを追加しないため処理を中止しました");
@@ -267,6 +302,29 @@ namespace YMM4McpPlugin
                     keyframes = resultKeyframes
                 };
             });
+        }
+
+        private static IEnumerable<(string id, int? frame, int? length)> ReadDuckingVoiceTiming(
+            DuckingVoiceGuard guard)
+        {
+            var vm = GetMainViewModel();
+            var timeline = vm == null ? null : GetPropObj(vm, "ActiveTimelineViewModel");
+            var entries = timeline == null ? null : GetPropEnum(timeline, "Items");
+            if (entries == null) throw new InvalidOperationException("Active timeline items are unavailable");
+
+            int count = 0;
+            foreach (var entry in entries)
+            {
+                if (entry == null || ++count > 10000)
+                    throw new InvalidOperationException("Active timeline inventory is invalid");
+                var item = GetPropObj(entry, "Item") ?? entry;
+                if (!string.Equals(item.GetType().Name, "VoiceItem", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                string id = GetItemIdentity(item).id;
+                if (guard.Tracks(id))
+                    yield return (id, (GetPropObj(item, "Frame") ?? GetPropObj(entry, "Frame")) as int?,
+                        (GetPropObj(item, "Length") ?? GetPropObj(entry, "Length")) as int?);
+            }
         }
 
         private (object? item, int frame, int layer, object? error) LocateTimelineItem(string itemId, int frame, int layer)
