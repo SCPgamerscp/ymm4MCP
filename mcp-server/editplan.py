@@ -252,7 +252,8 @@ def snapshot_hash(items):
     """Fingerprint the observable timeline state regardless of item ordering."""
     if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
         raise ValueError("items must be an array of objects")
-    fields = ("item_id", "revision", "frame", "layer", "length", "type", "text", "source_path")
+    fields = ("item_id", "revision", "frame", "layer", "length",
+              "type", "text", "source_path", "character")
     seen_ids = set()
     encoded_rows = []
     for item in items:
@@ -523,6 +524,30 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
                         "revision": current.get("revision"), "reason": "binding"})
             continue
         wanted = desired_fingerprint(item)
+        if item["kind"] == "voice":
+            # Older hosts may only expose the text of an existing voice.
+            # A matching line with an unknown speaker could already satisfy
+            # this operation. Do not silently add another copy.
+            uncertain = []
+            for current, fingerprint in fingerprints:
+                if (current["item_id"] in claimed or fingerprint[0] != "voice"
+                        or fingerprint[1] != item["layer"] or fingerprint[3] != item["text"]):
+                    continue
+                character = fingerprint[2]
+                if isinstance(character, str) and character.strip():
+                    continue
+                frame = current.get("frame")
+                if (item["frame_source"] == "explicit" and type(frame) is int
+                        and frame >= 0 and frame != item["frame"]):
+                    continue
+                uncertain.append(current["item_id"])
+            if uncertain:
+                warnings.append({"code": "CONTENT_STATE_CONFLICT", "severity": "error",
+                                 "reason": "VOICE_CHARACTER_UNAVAILABLE", "id": item["id"],
+                                 "candidate_count": len(uncertain),
+                                 "candidate_item_ids": uncertain[:20],
+                                 "message": "同じレイヤーとセリフの既存音声でキャラ名を確認できません"})
+                continue
         matches = [current for current, fingerprint in fingerprints
                    if current["item_id"] not in claimed and fingerprint == wanted]
         if len(matches) > 1:

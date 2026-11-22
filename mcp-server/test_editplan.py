@@ -45,6 +45,18 @@ def one_video_plan():
     ]}]}}
 
 
+def one_voice_plan(**fields):
+    return {"plan": {"scenes": [{"id": "scene", "items": [
+        {"id": "line", "type": "dialogue", "character": "ゆっくり霊夢",
+         "text": "こんにちは", "layer": 7, **fields}
+    ]}]}}
+
+
+def voice_item(**fields):
+    return {"item_id": "native:existing-line", "revision": "r1", "type": "VoiceItem",
+            "frame": 0, "length": 80, "layer": 7, "text": "こんにちは", **fields}
+
+
 def video_item(item_id="native:clip", **fields):
     return {"item_id": item_id, "revision": "r1", "type": "VideoItem", "frame": 0,
             "length": 10, "layer": 1, "source_path": r"c:\VIDEOS\PLAY.MP4",
@@ -184,6 +196,26 @@ class DiffAndReplayTests(unittest.TestCase):
         self.assertEqual(matched["kept"], 2)
         self.assertEqual(matched["added"], 1)
         self.assertEqual(matched["ops"][2]["id"], "cap-1")
+
+    def test_existing_voice_without_character_is_an_explicit_conflict(self):
+        plan = editplan.parse_plan(one_voice_plan(frame=0))
+        for item in (voice_item(), voice_item(character=""), voice_item(character=None)):
+            with self.subTest(item=item):
+                preview = editplan.diff_plan(plan, [item])
+                self.assertFalse(preview["passed"])
+                self.assertEqual(preview["added"], 0)
+                self.assertEqual(preview["warnings"][0]["reason"], "VOICE_CHARACTER_UNAVAILABLE")
+
+    def test_explicitly_repeated_voice_is_allowed_at_a_different_frame(self):
+        preview = editplan.diff_plan(editplan.parse_plan(one_voice_plan(frame=100)), [voice_item()])
+        self.assertTrue(preview["passed"])
+        self.assertEqual(preview["added"], 1)
+
+    def test_known_voice_character_is_checked_in_the_snapshot_hash(self):
+        item = voice_item(character="ゆっくり霊夢")
+        self.assertNotEqual(
+            editplan.snapshot_hash([item]),
+            editplan.snapshot_hash([{**item, "character": "ゆっくり魔理沙"}]))
 
     def test_bindings_and_idempotent_replay(self):
         parsed = editplan.parse_plan(sample_plan())
@@ -438,6 +470,17 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             posted.assert_not_awaited()
         self.assertTrue(result["dry_run"])
         self.assertEqual(result["added"], 3)
+
+    async def test_unknown_existing_voice_character_prevents_write_on_apply_and_reconcile(self):
+        get, post = self._patches([voice_item()], [{"name": "ゆっくり霊夢"}], {"success": True})
+        with get, post as posted:
+            for action in ("apply_edit", "reconcile_edit"):
+                with self.subTest(action=action):
+                    result = await server.dispatch({"action": action, "dry_run": False,
+                                                    **one_voice_plan(frame=0)})
+                    self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+                    self.assertEqual(result["conflicts"][0]["reason"], "VOICE_CHARACTER_UNAVAILABLE")
+            posted.assert_not_awaited()
 
     async def test_ambiguous_media_prevents_new_writes_in_apply_and_reconcile(self):
         current = [video_item(), video_item("native:duplicate")]
