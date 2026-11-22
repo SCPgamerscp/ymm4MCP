@@ -63,6 +63,11 @@ namespace YMM4McpPlugin
                 if (req.HttpMethod != "GET") throw new ArgumentException("Unsupported checkpoint method");
                 return GetCheckpoint(id);
             }
+            if (rest.Equals("restore-backup", StringComparison.OrdinalIgnoreCase))
+            {
+                if (req.HttpMethod != "POST") throw new ArgumentException("Unsupported restore-backup method");
+                return await RollbackCheckpoint(req, restoreOnly: true);
+            }
             if (rest.Equals("rollback", StringComparison.OrdinalIgnoreCase))
             {
                 if (req.HttpMethod != "POST") throw new ArgumentException("Unsupported rollback method");
@@ -449,7 +454,7 @@ namespace YMM4McpPlugin
             }
         }
 
-        private async Task<object> RollbackCheckpoint(HttpListenerRequest req)
+        private async Task<object> RollbackCheckpoint(HttpListenerRequest req, bool restoreOnly = false)
         {
             var body = await ReadBody(req);
             string id = GetStr(body, "checkpoint_id", "");
@@ -465,7 +470,10 @@ namespace YMM4McpPlugin
             // restoration opens the original on-disk checkpoint as a separate
             // project, restoring deletions and property changes without writing
             // over the current project file.
-            if (GetBool(body, "restore_backup", false))
+            bool restoreBackup = GetBool(body, "restore_backup", restoreOnly);
+            if (restoreOnly && !restoreBackup)
+                return Failure("INVALID_ARGUMENT", "restore-backup cannot perform an item rollback");
+            if (restoreBackup)
             {
                 if (!GetBool(body, "confirm_restore_backup", false))
                     return Failure("RESTORE_CONFIRMATION_REQUIRED",

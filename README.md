@@ -139,6 +139,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `POST /api/edits/checkpoint` | 現在の `item_id` スナップショット。`backup=true` なら保存済み `.ymmp` をコピー |
 | `GET  /api/edits/checkpoints` | チェックポイント一覧 |
 | `POST /api/edits/rollback` | 既定はスナップショット以降に追加されたアイテムを削除。保存済みバックアップがあれば、明示的な `restore_backup` モードでコピーを別プロジェクトとして開くことも可能 |
+| `POST /api/edits/restore-backup` | `checkpoint_id` と `confirm_restore_backup=true` を指定し、保存済みバックアップを別プロジェクトとして開く |
 
 **チェックポイントのバックアップ復元（#30 / #61、実機検証待ち）:** `POST /api/edits/checkpoint` に `{"backup":true}` を渡すと、YMM4で現在のプロジェクトが保存済みと確認できた場合のみ、ディスク上の `.ymmp` をコピーします。バックアップ作成前後のSHA-256が一致する場合のみ公開し、`backup_sha256` を返して記録します。作成できなければ `backup_path=null` と `backup_warning`（`NO_PROJECT_FILE` / `PROJECT_UNSAVED_OR_CHANGED` / `PROJECT_CHANGED_DURING_BACKUP` / `BACKUP_FAILED:<message>`）を返します。バックアップが存在する場合、`POST /api/edits/rollback` に `{"checkpoint_id":"cp_...","restore_backup":true,"confirm_restore_backup":true}` を渡すと、同じ元プロジェクトが開かれ保存済みであること、バックアップが専用ディレクトリ内の当該IDに対応する非空ファイルであること、保存したSHA-256と現在の内容が一致することを確認してから、YMM4のパス指定オープンAPIでバックアップを開きます。**ハッシュのない旧チェックポイントは完全復元を拒否します。** **元のプロジェクトファイルは上書きしません。** 保存・再読込後のプロジェクト切替を確認できない場合は `RESTORE_OUTCOME_UNKNOWN` を返します。復元後のバックアップは現在開いている間は自動削除しませんが、一時チェックポイント領域にあるため**編集前に別の場所へ名前を付けて保存**してください。既定の削除ベースrollbackの挙動は変わりません。YMM4実機での復元・保存・再読込確認が完了するまで、完全Rollbackの受け入れ条件達成とは見なしません。
 | `POST /api/timeline/duration` | タイムライン長を設定 |
@@ -370,6 +371,7 @@ YMM4内部の Animation API をリフレクションで叩くため、対象バ�
 | `get_info` | `checkpoints` | チェックポイント一覧。`checkpoint_id` で1件 |
 | `control` | `cancel_job` / `resume_job` | ジョブ中止 / 失敗・中断の再投入 |
 | `control` | `checkpoint` / `rollback` | item_idスナップショット / 追加分の削除。`backup`で.ymmpコピー |
+| `control` | `rollback`（`restore_backup=true`） | `confirm_restore_backup=true` も指定すると、ハッシュを確認したバックアップを別プロジェクトとして開く。復元用エンドポイントに対応したプラグインが必要 |
 | `plan_edit` | —— | 完成状態のEditPlanを検証し、差分と警告だけ返す（編集なし） |
 | `apply_edit` | —— | 差分だけ適用。シーン失敗時はそのシーンの追加分をrollback。同じ `idempotency_key` は二重追加しない |
 | `reconcile_edit` | —— | 中断後に不足分だけ再実行 |
