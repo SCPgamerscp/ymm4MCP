@@ -26,7 +26,8 @@ class InstallationAcceptanceTests(unittest.TestCase):
                       / "Roaming" / "Claude" / "claude_desktop_config.json")
         self.status = Mock(return_value={"status": "running", "port": 8765,
                                          "version": "1.5.0"})
-        self.mcp = Mock(return_value={"tool_count": 4})
+        self.mcp = Mock(side_effect=lambda _python, _server, *, env, expected_port:
+                        {"tool_count": 4, "status_port": expected_port})
         self.write_config(self.classic)
 
     def write_config(self, path, *, command=None, args=None, env=None):
@@ -47,7 +48,10 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.assertTrue(report["success"])
         self.assertEqual(report["claude_profiles_checked"], 2)
         self.assertEqual(report["mcp_profiles_checked"], 2)
+        self.assertEqual([call.kwargs["expected_port"] for call in self.mcp.call_args_list],
+                         [8765, 8765])
         self.assertEqual(report["mcp_stdio"], "ready")
+        self.assertEqual(report["mcp_status"], "running")
         self.assertEqual(self.mcp.call_count, 2)
         self.assertEqual(self.status.call_count, 2)
         self.assertNotIn("token", json.dumps(report).lower())
@@ -297,9 +301,20 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.status.assert_called_once()
 
     def test_stdio_missing_required_tools_blocks_acceptance(self):
+        self.mcp.side_effect = None
         self.mcp.return_value = {"tool_count": 0}
         with self.assertRaisesRegex(InstallationError, "tool discovery failed"):
             self.inspect()
+
+    def test_stdio_status_failure_cannot_be_hidden_by_direct_http_success(self):
+        self.mcp.side_effect = [
+            {"tool_count": 4, "status_port": 8765},
+            {"tool_count": 4, "status_port": 8766},
+        ]
+        self.write_config(self.store)
+        with self.assertRaisesRegex(InstallationError, "status port was not verified"):
+            self.inspect()
+        self.assertEqual(self.status.call_count, 2)
 
     def test_claude_profile_environment_is_used_for_stdio(self):
         self.write_config(self.classic, env={
@@ -316,9 +331,9 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.assertNotIn("YMM4_API_BASE", self.mcp.call_args.kwargs["env"])
 
     def test_profile_change_during_stdio_blocks_acceptance(self):
-        def probe(_python, _server, *, env):
+        def probe(_python, _server, *, env, expected_port):
             self.write_config(self.classic, command="C:/old/python.exe")
-            return {"tool_count": 4}
+            return {"tool_count": 4, "status_port": expected_port}
         self.mcp.side_effect = probe
         with self.assertRaisesRegex(InstallationError, "changed during"):
             self.inspect()

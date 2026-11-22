@@ -160,20 +160,20 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
         if expected_port is not None and current["port"] != expected_port:
             raise InstallationError("Running YMM4 port differs from the expected port")
         status = current
-    # A healthy HTTP endpoint alone does not prove Claude can start the
-    # installed MCP server. Perform a real stdio initialize + tools/list for
-    # every initialized Claude profile, using that profile's environment.
-    # Never invoke an editing tool or expose the profile's secrets in output.
+    # Verify the installed process can read YMM4 status with each profile's
+    # actual environment. A successful handshake alone only lists tools.
     mcp_tool_counts = []
     for profile_env in profile_envs:
         child_env = dict(os.environ)
         for key in ("YMM4_API_BASE", "YMM4_API_TOKEN", "YMM4_CONNECTION_FILE"):
             child_env.pop(key, None)
         child_env.update(profile_env)
-        report = mcp_probe(python, server, env=child_env)
+        report = mcp_probe(python, server, env=child_env, expected_port=status["port"])
         if (not isinstance(report, dict) or type(report.get("tool_count")) is not int
                 or report["tool_count"] < 3):
             raise InstallationError("Installed MCP server tool discovery failed")
+        if type(report.get("status_port")) is not int or report["status_port"] != status["port"]:
+            raise InstallationError("Installed MCP server YMM4 status port was not verified")
         mcp_tool_counts.append(report["tool_count"])
     if expected_port is not None:
         # Explicit profile overrides could otherwise hide a stale plugin descriptor.
@@ -200,7 +200,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
     return {"success": True, "persistent_install": True,
             "claude_profiles_checked": len(configs),
             "authenticated_status": "running", "port": status["port"],
-            "mcp_stdio": "ready", "mcp_profiles_checked": len(mcp_tool_counts),
+            "mcp_stdio": "ready", "mcp_status": "running",
+            "mcp_profiles_checked": len(mcp_tool_counts),
             "mcp_tools_minimum": min(mcp_tool_counts),
             "version": status.get("version")}
 

@@ -1,10 +1,12 @@
 """Real, read-only MCP stdio handshake for installed ymm4MCP (#22).
 
 Starts the installed server exactly as Claude Desktop would, negotiates the
-MCP protocol and discovers tools. It never calls a tool or logs credentials.
+MCP protocol, discovers tools, and can check plugin status through the installed
+MCP server. It only calls a read-only status operation and never logs credentials.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -22,13 +24,15 @@ class McpStdioProbeError(RuntimeError):
 
 
 def check_stdio(python: Path, server: Path, *, env: dict[str, str],
-                timeout_seconds: float = 20.0) -> dict:
-    """Verify real initialize + tools/list, without executing editing tools."""
+                timeout_seconds: float = 20.0, expected_port: int | None = None) -> dict:
+    """Verify the stdio handshake and, when requested, a read-only status call."""
     if (not python.is_file() or not server.is_file() or
             not isinstance(env, dict) or
             any(not isinstance(k, str) or not isinstance(v, str)
                 for k, v in env.items()) or
-            not 0 < timeout_seconds <= 60):
+            not 0 < timeout_seconds <= 60 or
+            (expected_port is not None and
+             (type(expected_port) is not int or not 1 <= expected_port <= 65535))):
         raise McpStdioProbeError("MCP stdio probe inputs are invalid")
 
     async def run() -> dict:
@@ -48,7 +52,23 @@ def check_stdio(python: Path, server: Path, *, env: dict[str, str],
                         # Advanced tool is intentionally hidden unless enabled.
                         if not REQUIRED_TOOLS.issubset(names):
                             raise McpStdioProbeError("Required MCP tools unavailable")
-                        return {"tool_count": len(names)}
+                        report = {"tool_count": len(names)}
+                        if expected_port is not None:
+                            status_result = await session.call_tool(
+                                "ymm4_interact", arguments={"action": "get_info", "sub_action": "status"})
+                            content = status_result.content
+                            if (status_result.isError or len(content) != 1 or
+                                    content[0].type != "text" or len(content[0].text) > 65536):
+                                raise McpStdioProbeError("Installed MCP server could not read YMM4 status")
+                            try:
+                                status = json.loads(content[0].text)
+                            except (ValueError, RecursionError):
+                                raise McpStdioProbeError("Installed MCP server returned invalid YMM4 status") from None
+                            if (not isinstance(status, dict) or status.get("status") != "running" or
+                                    type(status.get("port")) is not int or status["port"] != expected_port):
+                                raise McpStdioProbeError("Installed MCP server did not reach YMM4 on the expected port")
+                            report["status_port"] = status["port"]
+                        return report
 
     try:
         return anyio.run(run)
@@ -68,4 +88,4 @@ def check_stdio(python: Path, server: Path, *, env: dict[str, str],
         reasons = ",".join(known(exc) or sorted(classes(exc)))
         raise McpStdioProbeError(
             "Installed MCP server did not complete stdio initialization "
-            f"and tool discovery ({reasons})") from None
+            f"and acceptance checks ({reasons})") from None
