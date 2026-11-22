@@ -33,6 +33,16 @@ namespace YMM4McpPlugin
             public Guid Id { get; } = Guid.NewGuid();
         }
 
+        private static Guid? ReadNativeExportTimelineId(object timeline)
+        {
+            // The Timeline.ID GUID is stored in the .ymmp file.
+            var value = GetPropObj(timeline, "ID");
+            if (value is Guid id && id != Guid.Empty) return id;
+            if (value is string text && Guid.TryParse(text, out Guid parsed) && parsed != Guid.Empty)
+                return parsed;
+            return null;
+        }
+
         private ExportProjectIdentity? CaptureExportProject()
         {
             var vm = GetMainViewModel();
@@ -46,7 +56,8 @@ namespace YMM4McpPlugin
             var saved = GetPropValue(vm, "IsSaved") ?? (model == null ? null : GetPropValue(model, "IsSaved"));
             var identity = new ExportProjectIdentity(ExportSessionId,
                 ExportTimelines.GetValue(timeline, static _ => new ExportTimelineToken()).Id,
-                string.IsNullOrWhiteSpace(path) ? null : path, saved is true);
+                string.IsNullOrWhiteSpace(path) ? null : path, saved is true,
+                ReadNativeExportTimelineId(timeline));
             return identity.IsKnown ? identity : null;
         }
 
@@ -88,6 +99,8 @@ namespace YMM4McpPlugin
             var source = previous.ExportSource;
             if (source == null || !source.IsKnown)
                 return Failure("EXPORT_PROJECT_UNVERIFIED", "書き出し元の記録がないため、新しいジョブとして投入してください");
+            if (source.SessionId != ExportSessionId && !source.CanResumeAfterRestart)
+                return Failure("EXPORT_PROJECT_UNVERIFIED", "再起動前のタイムラインを特定できないため、新しいジョブとして投入してください");
             string path = RequestString(previous.Request, "output_path");
             string format = RequestString(previous.Request, "format");
             if (string.IsNullOrEmpty(format)) format = "mp4";

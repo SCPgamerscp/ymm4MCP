@@ -20,7 +20,7 @@ static void Check(bool condition, string message)
 }
 
 string projectPath = Path.Combine(Path.GetTempPath(), "original.ymmp");
-var originalExport = new ExportProjectIdentity(Guid.NewGuid(), Guid.NewGuid(), projectPath, true);
+var originalExport = new ExportProjectIdentity(Guid.NewGuid(), Guid.NewGuid(), projectPath, true, Guid.NewGuid());
 var restarted = originalExport with { SessionId = Guid.NewGuid(), TimelineId = Guid.NewGuid() };
 var otherProject = originalExport with { ProjectPath = Path.Combine(Path.GetTempPath(), "other.ymmp") };
 var untitled = originalExport with { ProjectPath = null, IsSaved = false };
@@ -29,7 +29,17 @@ Check(originalExport.Matches(originalExport with { IsSaved = false }),
 Check(!originalExport.Matches(otherProject) &&
     !originalExport.Matches(originalExport with { TimelineId = Guid.NewGuid() }),
     "A different project or a replaced timeline must not start the export");
-Check(originalExport.Matches(restarted), "A restart may resume from the saved source path");
+Check(originalExport.Matches(restarted), "A restart may resume the same saved timeline and project path");
+Check(!originalExport.Matches(restarted with { NativeTimelineId = Guid.NewGuid() }),
+    "A different timeline within the same saved file must not resume");
+Check(!originalExport.Matches(restarted with { ProjectPath = otherProject.ProjectPath }),
+    "A different saved file must not resume even if it contains a copy of the timeline ID");
+Check(!originalExport.Matches(restarted with { NativeTimelineId = null }) &&
+    !(originalExport with { NativeTimelineId = null }).Matches(restarted) &&
+    !(originalExport with { NativeTimelineId = Guid.Empty }).Matches(restarted with { NativeTimelineId = Guid.Empty }),
+    "Missing or empty native timeline IDs must not authorize a restart");
+Check((originalExport with { NativeTimelineId = null }).Matches(originalExport with { NativeTimelineId = null }),
+    "The original active timeline remains available within a process without a native ID");
 Check(!originalExport.Matches(restarted with { IsSaved = false }) &&
     !(originalExport with { IsSaved = false }).Matches(restarted),
     "A restart cannot recover unsaved edits on either side");
