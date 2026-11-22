@@ -170,7 +170,7 @@ namespace YMM4McpPlugin
         // A full restore opens a saved checkpoint backup as a separate project.
         // Never open an arbitrary path supplied by a persisted checkpoint index,
         // a backup for a different project, an empty file, or a reparse point.
-        internal static bool IsRestorableBackup(
+        internal static FileStream? OpenVerifiedBackup(
             string? path, string backupDirectory, string? checkpointId,
             string? checkpointProject, string? currentProject, string? expectedSha256)
         {
@@ -178,24 +178,34 @@ namespace YMM4McpPlugin
                 !IsValidBackupSha256(expectedSha256) ||
                 !IsOwnedBackupPath(path, backupDirectory) ||
                 !SameProject(checkpointProject, currentProject))
-                return false;
+                return null;
+            FileStream? stream = null;
             try
             {
                 if (!string.Equals(Path.GetFileName(path),
                         checkpointId + ".ymmp", StringComparison.OrdinalIgnoreCase))
-                    return false;
+                    return null;
                 var attributes = File.GetAttributes(path!);
                 if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-                    return false;
-                return new FileInfo(path!).Length > 0 &&
-                    string.Equals(ComputeBackupSha256(path!), expectedSha256,
-                        StringComparison.OrdinalIgnoreCase);
+                    return null;
+                // On Windows, allow the host to open its own read handle but
+                // deny writes and replacements until the caller disposes this one.
+                stream = new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (stream.Length == 0 || !string.Equals(
+                        Convert.ToHexString(SHA256.HashData(stream)), expectedSha256,
+                        StringComparison.OrdinalIgnoreCase))
+                    return null;
+                stream.Position = 0;
+                var verified = stream;
+                stream = null;
+                return verified;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                        ArgumentException or NotSupportedException)
             {
-                return false;
+                return null;
             }
+            finally { stream?.Dispose(); }
         }
 
         // Hash the source before and after the copy, and verify the published

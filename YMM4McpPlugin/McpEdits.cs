@@ -558,25 +558,21 @@ namespace YMM4McpPlugin
 
         private async Task<object> RestoreCheckpointBackup(CheckpointRecord record)
         {
-            if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
-                    record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
+            using var backup = EditCheckpointSafety.OpenVerifiedBackup(record.BackupPath, CheckpointBackupDir,
+                record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256);
+            if (backup == null)
                 return Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
                     "保存済みの同一プロジェクトに属する安全なバックアップがありません");
             return await RunOnUi(async () =>
             {
-                // Recheck the project and the backup immediately before invoking
-                // the host. Never discard unsaved changes, even when confirmed.
+                // The verified backup still denies writes and replacement.
+                // Recheck the live project before invoking the host.
                 if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
                     return (object)Failure("CHECKPOINT_PROJECT_MISMATCH",
                         "チェックポイント作成時と現在のプロジェクトが異なります");
                 if (CurrentProjectSaveState() is not true)
                     return (object)Failure("UNSAVED_CHANGES",
                         "保存状態が不明か未保存の変更があります。保存してから復元してください");
-                if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
-                        record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
-                    return (object)Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
-                        "復元用バックアップが存在しないか安全ではありません");
-
                 var invoked = InvokeNamed(OpenMethodHints, record.BackupPath!);
                 if (!invoked.ok)
                     return (object)Failure("OPEN_METHOD_UNAVAILABLE",

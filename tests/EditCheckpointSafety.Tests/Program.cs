@@ -187,34 +187,56 @@ try
     string backup = Path.Combine(restoreDir, checkpointId + ".ymmp");
     File.WriteAllText(backup, "original backup payload");
     string hash = EditCheckpointSafety.ComputeBackupSha256(backup);
+    bool IsRestorable(string path, string id, string? source, string active, string? digest)
+    {
+        using var verified = EditCheckpointSafety.OpenVerifiedBackup(path, restoreDir, id, source, active, digest);
+        return verified != null;
+    }
     Check(EditCheckpointSafety.IsValidBackupSha256(hash), "generated SHA-256 is invalid");
     Check(!EditCheckpointSafety.IsValidBackupSha256(null), "missing digest accepted");
     Check(!EditCheckpointSafety.IsValidBackupSha256(new string('a', 63)), "short digest accepted");
     Check(!EditCheckpointSafety.IsValidBackupSha256(new string('g', 64)), "nonhex digest accepted");
-    Check(EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
-        "valid owned hashed backup must be restorable");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, null),
+    using (var verified = EditCheckpointSafety.OpenVerifiedBackup(
+               backup, restoreDir, checkpointId, project, project, hash))
+    {
+        Check(verified is { CanRead: true, CanWrite: false, Position: 0 },
+            "a valid backup must keep a read-only handle positioned at the start");
+        Check(File.ReadAllText(backup) == "original backup payload",
+            "the host must be able to open a second read handle");
+        if (OperatingSystem.IsWindows())
+        {
+            bool writeBlocked = false;
+            try { using var writer = File.Open(backup, FileMode.Open, FileAccess.Write, FileShare.Read); }
+            catch (IOException) { writeBlocked = true; }
+            Check(writeBlocked, "an external writer must be refused until the verified handle is disposed");
+            bool renameBlocked = false;
+            try { File.Move(backup, backup + ".moved"); }
+            catch (IOException) { renameBlocked = true; }
+            Check(renameBlocked, "a verified backup must not be renamed during restore");
+        }
+    }
+    Check(!IsRestorable(backup, checkpointId, project, project, null),
         "legacy backup without integrity digest must fail closed");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, "cp_87654321", project, project, hash),
+    Check(!IsRestorable(backup, "cp_87654321", project, project, hash),
         "a checkpoint must not restore another checkpoint's backup");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project,
+    Check(!IsRestorable(backup, checkpointId, project,
             "C:\\video\\different.ymmp", hash), "backup must not restore into a different project");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, null, project, hash),
+    Check(!IsRestorable(backup, checkpointId, null, project, hash),
         "unknown source project must reject restore");
-    Check(!EditCheckpointSafety.IsRestorableBackup(
+    Check(!IsRestorable(
             Path.Combine(restoreDir, "..", "outside", checkpointId + ".ymmp"),
-            restoreDir, checkpointId, project, project, hash),
+            checkpointId, project, project, hash),
         "restore must reject paths outside the private backup directory");
     var originalTimestamp = File.GetLastWriteTimeUtc(backup);
     File.WriteAllText(backup, "modified backup payload");
     File.SetLastWriteTimeUtc(backup, originalTimestamp);
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
+    Check(!IsRestorable(backup, checkpointId, project, project, hash),
         "modified backup with identical length and timestamp must fail");
     File.WriteAllText(backup, "");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
+    Check(!IsRestorable(backup, checkpointId, project, project, hash),
         "empty backups must not be opened");
     File.Delete(backup);
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
+    Check(!IsRestorable(backup, checkpointId, project, project, hash),
         "missing backups must not be opened");
 }
 finally
