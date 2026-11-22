@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,11 +25,38 @@ namespace YMM4McpPlugin
             { "OpenProject", "Open", "LoadProject", "Load", "OpenFile" };
         private static readonly string[] SaveAsMethodHints =
             { "SaveAsProject", "SaveProjectAs", "SaveAs", "SaveProject" };
+        private static readonly Guid ExportSessionId = Guid.NewGuid();
+        private static readonly ConditionalWeakTable<object, ExportTimelineToken> ExportTimelines = new();
+
+        private sealed class ExportTimelineToken
+        {
+            public Guid Id { get; } = Guid.NewGuid();
+        }
+
+        private ExportProjectIdentity? CaptureExportProject()
+        {
+            var vm = GetMainViewModel();
+            if (vm == null) return null;
+            var timelineViewModel = GetPropObj(vm, "ActiveTimelineViewModel");
+            var timeline = timelineViewModel == null ? null : GetPropObj(timelineViewModel, "timeline");
+            if (timeline == null) return null;
+            var model = GetMainModel(vm);
+            string? path = GetPropValue(vm, "ProjectFilePath")?.ToString() ??
+                (model == null ? null : GetPropObj(model, "ProjectFilePath")?.ToString());
+            var saved = GetPropValue(vm, "IsSaved") ?? (model == null ? null : GetPropValue(model, "IsSaved"));
+            var identity = new ExportProjectIdentity(ExportSessionId,
+                ExportTimelines.GetValue(timeline, static _ => new ExportTimelineToken()).Id,
+                string.IsNullOrWhiteSpace(path) ? null : path, saved is true);
+            return identity.IsKnown ? identity : null;
+        }
 
         private async Task<object> EnqueueExport(HttpListenerRequest req)
         {
             var body = await ReadBody(req);
             var parsed = ParseExportRequest(body);
+            var source = Application.Current.Dispatcher.Invoke(CaptureExportProject);
+            if (source == null)
+                return Failure("EXPORT_PROJECT_UNAVAILABLE", "書き出し元のタイムラインを確認できません");
             var request = new Dictionary<string, object?>
             {
                 ["output_path"] = parsed.path,
@@ -38,7 +66,7 @@ namespace YMM4McpPlugin
             };
             var existing = FindIdempotentJob(parsed.key);
             if (existing != null)
-                return SameJobRequest(existing, "export", request)
+                return SameJobRequest(existing, "export", request, source)
                     ? DescribeJob(existing)
                     : Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
             if (File.Exists(parsed.path) && !parsed.overwrite)
@@ -47,7 +75,7 @@ namespace YMM4McpPlugin
             if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
                 return Failure("DIRECTORY_NOT_FOUND", "出力先フォルダがありません: " + parent);
 
-            var job = CreateJob("export", request, parsed.key, out bool created, out bool conflict);
+            var job = CreateJob("export", request, parsed.key, source, out bool created, out bool conflict);
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
             if (created)
@@ -57,6 +85,9 @@ namespace YMM4McpPlugin
 
         private object RestartExport(McpJob previous)
         {
+            var source = previous.ExportSource;
+            if (source == null || !source.IsKnown)
+                return Failure("EXPORT_PROJECT_UNVERIFIED", "書き出し元の記録がないため、新しいジョブとして投入してください");
             string path = RequestString(previous.Request, "output_path");
             string format = RequestString(previous.Request, "format");
             if (string.IsNullOrEmpty(format)) format = "mp4";
@@ -66,7 +97,7 @@ namespace YMM4McpPlugin
             var request = new Dictionary<string, object?>(previous.Request);
             // The predecessor ID makes repeated resume calls idempotent even when the
             // original request had no key. A failed successor can itself be resumed.
-            var job = CreateJob("export", request, previous.Id + ":resume",
+            var job = CreateJob("export", request, previous.Id + ":resume", source,
                 out bool created, out bool conflict);
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "再開キーは別の書き出し要求に使用されています");
@@ -86,10 +117,17 @@ namespace YMM4McpPlugin
             // A stable old file must never be reported as this job's completed output.
             (long length, DateTime lastWriteUtc)? previousOutput = null;
             bool overwrite = RequestBool(job.Request, "overwrite");
-            var discovery = Application.Current.Dispatcher.Invoke(() => DiscoverExportSurface());
+            ExportDiscovery? discovery = null;
+            bool sourceChanged = false;
             var start = Application.Current.Dispatcher.Invoke<(bool invoked, string method, string target, Task? task)?>(() =>
             {
                 token.ThrowIfCancellationRequested();
+                discovery = DiscoverExportSurface();
+                if (job.ExportSource?.Matches(CaptureExportProject()) != true)
+                {
+                    sourceChanged = true;
+                    return null;
+                }
                 // A queued or resumed job may have missed the enqueue-time
                 // check. Read the path before invoking the native exporter.
                 if (!ExportInvocationPolicy.TryCaptureOutputBaseline(outputPath, overwrite, out previousOutput))
@@ -98,16 +136,19 @@ namespace YMM4McpPlugin
             });
             if (start is null)
             {
-                const string message = "出力先が既に存在するため書き出しを開始しませんでした";
+                string message = sourceChanged
+                    ? "書き出し元のプロジェクトを確認できないため開始しませんでした"
+                    : "出力先が既に存在するため書き出しを開始しませんでした";
                 UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
-                    errorCode: "FILE_EXISTS", result: new { output_path = outputPath, format });
+                    errorCode: sourceChanged ? "EXPORT_PROJECT_CHANGED" : "FILE_EXISTS",
+                    result: new { output_path = outputPath, format });
                 return;
             }
             var started = start.Value;
             if (!started.invoked)
             {
                 bool dialogRequired = ExportInvocationPolicy.HasDialogOnlyMethod(
-                    discovery.Methods.Select(m => m.method), format);
+                    discovery!.Methods.Select(m => m.method), format);
                 UpdateJob(job, "failed", phase: "failed", progress: 0,
                     message: dialogRequired ? "保存先を指定できる書き出し方法がありません" : "プログラムからの書き出し方法が見つかりません",
                     error: dialogRequired ? "YMM4の出力ダイアログはMCPから自動入力できません" : "YMM4の出力コマンド/メソッドを実行できませんでした",
@@ -441,8 +482,10 @@ namespace YMM4McpPlugin
             return raw is JsonElement element && element.ValueKind == JsonValueKind.True;
         }
 
-        private static bool SameJobRequest(McpJob existing, string kind, Dictionary<string, object?> request)
+        private static bool SameJobRequest(McpJob existing, string kind, Dictionary<string, object?> request,
+            ExportProjectIdentity source)
             => existing.Kind == kind
+               && existing.ExportSource?.Matches(source) == true
                && StringComparer.OrdinalIgnoreCase.Equals(RequestString(existing.Request, "output_path"), RequestString(request, "output_path"))
                && StringComparer.OrdinalIgnoreCase.Equals(RequestString(existing.Request, "format"), RequestString(request, "format"))
                && RequestBool(existing.Request, "overwrite") == RequestBool(request, "overwrite")

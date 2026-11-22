@@ -19,6 +19,37 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+string projectPath = Path.Combine(Path.GetTempPath(), "original.ymmp");
+var originalExport = new ExportProjectIdentity(Guid.NewGuid(), Guid.NewGuid(), projectPath, true);
+var restarted = originalExport with { SessionId = Guid.NewGuid(), TimelineId = Guid.NewGuid() };
+var otherProject = originalExport with { ProjectPath = Path.Combine(Path.GetTempPath(), "other.ymmp") };
+var untitled = originalExport with { ProjectPath = null, IsSaved = false };
+Check(originalExport.Matches(originalExport with { IsSaved = false }),
+    "Unsaved edits to the same live timeline remain exportable");
+Check(!originalExport.Matches(otherProject) &&
+    !originalExport.Matches(originalExport with { TimelineId = Guid.NewGuid() }),
+    "A different project or a replaced timeline must not start the export");
+Check(originalExport.Matches(restarted), "A restart may resume from the saved source path");
+Check(!originalExport.Matches(restarted with { IsSaved = false }) &&
+    !(originalExport with { IsSaved = false }).Matches(restarted),
+    "A restart cannot recover unsaved edits on either side");
+Check(untitled.Matches(untitled) && !untitled.Matches(untitled with { SessionId = restarted.SessionId }),
+    "An untitled export requires the same live timeline");
+Check(!originalExport.Matches(null) && !originalExport.Matches(originalExport with { TimelineId = Guid.Empty }),
+    "Missing and invalid project identities cannot authorize an export");
+var jobJson = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+var savedSource = ExportProjectIdentity.ReadSnapshot(
+    JsonSerializer.SerializeToElement(originalExport, jobJson), jobJson);
+Check(savedSource == originalExport && savedSource!.Matches(restarted),
+    "Job snapshots must retain the identity needed after a process restart");
+using (var malformed = JsonDocument.Parse("""{"sessionId":"not-a-guid"}"""))
+{
+    Check(ExportProjectIdentity.ReadSnapshot(malformed.RootElement, jobJson) == null,
+        "Corrupt identity must not prevent reading the rest of a job snapshot");
+}
+Check(ExportProjectIdentity.ReadSnapshot(null, jobJson) == null,
+    "Legacy snapshot evidence is unavailable without preventing read-only inspection");
+
 foreach (var status in new[] { "queued", "running", "completed", "failed", "cancelled", "interrupted" })
     Check(JobSnapshotSafety.IsRestorable("job_12345678", "export", status, "valid-key"),
         "Valid persisted export job was rejected: " + status);

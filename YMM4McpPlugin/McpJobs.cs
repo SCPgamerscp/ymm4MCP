@@ -201,6 +201,7 @@ namespace YMM4McpPlugin
         }
 
         private McpJob CreateJob(string kind, Dictionary<string, object?> request, string? idempotencyKey,
+            ExportProjectIdentity source,
             out bool created, out bool conflict)
         {
             lock (_jobsLock)
@@ -209,7 +210,7 @@ namespace YMM4McpPlugin
                     && _jobs.TryGetValue(existingId, out var existing))
                 {
                     created = false;
-                    conflict = !SameJobRequest(existing, kind, request);
+                    conflict = !SameJobRequest(existing, kind, request, source);
                     return existing;
                 }
                 var job = new McpJob
@@ -221,6 +222,7 @@ namespace YMM4McpPlugin
                     CreatedAt = DateTime.UtcNow.ToString("o"),
                     UpdatedAt = DateTime.UtcNow.ToString("o"),
                     IdempotencyKey = idempotencyKey,
+                    ExportSource = source,
                     Request = request
                 };
                 _jobs[job.Id] = job;
@@ -310,6 +312,7 @@ namespace YMM4McpPlugin
             created_at = job.CreatedAt,
             updated_at = job.UpdatedAt,
             idempotency_key = job.IdempotencyKey,
+            source_project_path = job.ExportSource?.ProjectPath,
             request = job.Request,
             checkpoint = job.Checkpoint,
             result = job.Result,
@@ -329,6 +332,7 @@ namespace YMM4McpPlugin
             public string CreatedAt { get; init; } = "";
             public string UpdatedAt { get; set; } = "";
             public string? IdempotencyKey { get; init; }
+            public ExportProjectIdentity? ExportSource { get; init; }
             public Dictionary<string, object?> Request { get; init; } = new();
             public object? Result { get; set; }
             public object? Checkpoint { get; set; }
@@ -349,6 +353,7 @@ namespace YMM4McpPlugin
             public string CreatedAt { get; set; } = "";
             public string UpdatedAt { get; set; } = "";
             public string? IdempotencyKey { get; set; }
+            public JsonElement? ExportSource { get; set; }
             public Dictionary<string, JsonElement>? Request { get; set; }
             public JsonElement? Result { get; set; }
             public JsonElement? Checkpoint { get; set; }
@@ -366,6 +371,7 @@ namespace YMM4McpPlugin
                 CreatedAt = job.CreatedAt,
                 UpdatedAt = job.UpdatedAt,
                 IdempotencyKey = job.IdempotencyKey,
+                ExportSource = job.ExportSource == null ? null : JsonSerializer.SerializeToElement(job.ExportSource, JobJson),
                 Request = JsonSerializer.SerializeToElement(job.Request).Deserialize<Dictionary<string, JsonElement>>(),
                 Result = job.Result == null ? null : JsonSerializer.SerializeToElement(job.Result),
                 Checkpoint = job.Checkpoint == null ? null : JsonSerializer.SerializeToElement(job.Checkpoint)
@@ -392,6 +398,7 @@ namespace YMM4McpPlugin
                     CreatedAt = CreatedAt,
                     UpdatedAt = UpdatedAt,
                     IdempotencyKey = IdempotencyKey,
+                    ExportSource = ExportProjectIdentity.ReadSnapshot(ExportSource, JobJson),
                     Request = request,
                     Result = Result is JsonElement r && r.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null ? r : null,
                     Checkpoint = Checkpoint is JsonElement c && c.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null ? c : null
