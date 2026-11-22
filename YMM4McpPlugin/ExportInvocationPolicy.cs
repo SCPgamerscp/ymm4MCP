@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 
@@ -8,6 +9,18 @@ namespace YMM4McpPlugin
     internal static class ExportInvocationPolicy
     {
         private static readonly string[] FormatNames = { "Exo", "Mp4", "Wav", "Avi", "Mov", "Mkv", "Webm" };
+
+        internal static bool TryCaptureOutputBaseline(string path, bool overwrite,
+            out (long length, DateTime lastWriteUtc)? previousOutput)
+        {
+            previousOutput = null;
+            if (Directory.Exists(path)) return false;
+            var file = new FileInfo(path);
+            if (!file.Exists) return true;
+            if (!overwrite) return false;
+            previousOutput = (file.Length, file.LastWriteTimeUtc);
+            return true;
+        }
 
         // Format names must be whole CamelCase/acronym tokens. Substrings such as
         // "avi" in "Saving" or "wav" in "Waving" are not export formats.

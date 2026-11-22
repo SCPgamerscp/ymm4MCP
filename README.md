@@ -227,7 +227,7 @@ POST /api/project/export
 
 戻り値の `job_id` を `GET /api/jobs/{id}` でポーリングします。完了時はファイルの存在・サイズを確認し、MP4 は `ftyp`、`moov`、`mdat`、映像トラック、長さ、解像度を検証して `duration_seconds`、`width`、`height`、`has_audio` を返します。WAV は `RIFF/WAVE` ヘッダを確認します。コンテナの構造検証であり、映像・音声を実際にデコードして再生品質まで判定するものではありません。
 
-同じ `idempotency_key` の再送は、実行中または成功済みのジョブをそのまま返します。既存ファイルを消したくない場合は `overwrite` を省略してください。
+同じ `idempotency_key` の再送は、実行中または成功済みのジョブをそのまま返します。既存ファイルを消したくない場合は `overwrite` を省略してください。待機中や中断中に出力先が作られた場合も、書き出し開始時に上書き設定を確認し、許可されていなければ `FILE_EXISTS` でジョブを停止します。`resume` は元のジョブの上書き設定を引き継ぎます。
 
 本体の出力APIはバージョン差があるため実行時に探索します。パス付きメソッドが無い場合は `EXPORT_METHOD_UNAVAILABLE` または `EXPORT_DIALOG_REQUIRED` になり、ダイアログ操作は自動化しません。
 

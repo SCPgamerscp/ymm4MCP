@@ -58,6 +58,27 @@ Check(ExportInvocationPolicy.IsValidIdempotencyKey(new string('a', 128)), "128-c
 Check(ExportInvocationPolicy.IsValidIdempotencyKey("編集 job-1"), "Normal Unicode and internal spaces remain valid");
 foreach (var key in new[] { " a", "a ", new string('a', 129), "a\nb", "a\rb", "a\tb", "a\0b", "a\u007fb", "a\u001fb" })
     Check(!ExportInvocationPolicy.IsValidIdempotencyKey(key), "Invalid idempotency key accepted: " + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(key)));
+
+string outputDirectory = Directory.CreateTempSubdirectory("ymm4-export-destination-").FullName;
+try
+{
+    string output = Path.Combine(outputDirectory, "episode.mp4");
+    Check(ExportInvocationPolicy.TryCaptureOutputBaseline(output, false, out var missing) && missing is null,
+        "A new destination may be used without overwrite");
+    File.WriteAllBytes(output, [1, 2, 3]);
+    Check(!ExportInvocationPolicy.TryCaptureOutputBaseline(output, false, out var blocked) && blocked is null,
+        "A destination created while the job waited or was interrupted must block export");
+    Check(File.ReadAllBytes(output).SequenceEqual(new byte[] { 1, 2, 3 }),
+        "The no-overwrite check must leave the existing file as-is");
+    Check(ExportInvocationPolicy.TryCaptureOutputBaseline(output, true, out var baseline) &&
+        baseline == (3L, File.GetLastWriteTimeUtc(output)),
+        "An allowed overwrite must retain the previous file's length and timestamp for verification");
+    string folder = Directory.CreateDirectory(Path.Combine(outputDirectory, "folder.mp4")).FullName;
+    Check(!ExportInvocationPolicy.TryCaptureOutputBaseline(folder, true, out _),
+        "An existing directory cannot serve as an export file even with overwrite enabled");
+}
+finally { Directory.Delete(outputDirectory, recursive: true); }
+
 Console.WriteLine("Export invocation policy tests passed");
 
 class ExportMethods
