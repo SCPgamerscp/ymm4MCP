@@ -1976,7 +1976,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     content_conflicts = [w for w in preview["warnings"] if w.get("code") == "CONTENT_STATE_CONFLICT"]
     if content_conflicts:
         return {"success": False, "error_code": "EDIT_STATE_CONFLICT",
-                "error": "同じ内容の既存アイテムの配置が計画と異なります",
+                "error": "同じ内容の既存アイテムを計画に一意に対応付けられません",
                 "conflicts": content_conflicts, "rolled_back": False}
 
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}

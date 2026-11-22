@@ -38,6 +38,19 @@ def one_text_record(revision="r1"):
             {"id": "caption", "item_id": "native:caption", "revision": revision}]}
 
 
+def one_video_plan():
+    return {"plan": {"scenes": [{"id": "scene", "items": [
+        {"id": "clip", "type": "video", "source": "C:/Videos/play.mp4",
+         "frame": 0, "layer": 1, "length": 10}
+    ]}]}}
+
+
+def video_item(item_id="native:clip", **fields):
+    return {"item_id": item_id, "revision": "r1", "type": "VideoItem", "frame": 0,
+            "length": 10, "layer": 1, "source_path": r"c:\VIDEOS\PLAY.MP4",
+            "text": "Visible clip name", **fields}
+
+
 class ParsePlanTests(unittest.TestCase):
     def test_explicit_frames_cannot_escape_their_scene(self):
         text_item = {"id": "b", "type": "text", "text": "b", "layer": 1, "length": 10}
@@ -245,6 +258,33 @@ class DiffAndReplayTests(unittest.TestCase):
         self.assertFalse(preview["passed"])
         self.assertEqual(preview["warnings"][0]["code"], "CONTENT_STATE_CONFLICT")
 
+    def test_windows_source_path_is_reused_despite_slash_case_and_display_text(self):
+        parsed = editplan.parse_plan(one_video_plan())
+        for host_field in ("source_path", "path", "source", "text"):
+            host = video_item()
+            if host_field != "source_path":
+                host[host_field] = host.pop("source_path")
+            with self.subTest(host_field=host_field):
+                preview = editplan.diff_plan(parsed, [host])
+                self.assertTrue(preview["passed"])
+                self.assertEqual(preview["added"], 0)
+                self.assertEqual(preview["ops"][0]["item_id"], "native:clip")
+
+    def test_posix_media_identity_remains_case_sensitive(self):
+        item = video_item(source_path="/tmp/Media/clip.mp4")
+        self.assertNotEqual(editplan.current_fingerprint(item),
+                            editplan.current_fingerprint({**item, "source_path": "/tmp/media/clip.mp4"}))
+
+    def test_repeated_media_is_reused_only_if_explicit_location_selects_one_item(self):
+        parsed = editplan.parse_plan(one_video_plan())
+        existing = video_item()
+        for unrelated in (video_item("native:later", frame=12), video_item("native:longer", length=15)):
+            with self.subTest(unrelated=unrelated["item_id"]):
+                preview = editplan.diff_plan(parsed, [unrelated, existing])
+                self.assertTrue(preview["passed"])
+                self.assertEqual(preview["added"], 0)
+                self.assertEqual(preview["ops"][0]["item_id"], existing["item_id"])
+
     def test_added_item_verification_checks_identity_and_revision(self):
         detail = {"id": "caption", "op": "add", "item_id": "native:caption",
                   "result": {"revision": "r1", "frame": 0, "layer": 1, "length": 10}}
@@ -354,6 +394,17 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             posted.assert_not_awaited()
         self.assertTrue(result["dry_run"])
         self.assertEqual(result["added"], 3)
+
+    async def test_ambiguous_media_prevents_new_writes_in_apply_and_reconcile(self):
+        current = [video_item(), video_item("native:duplicate")]
+        for action in ("apply_edit", "reconcile_edit"):
+            get, post = self._patches(current, [], {"success": True})
+            with self.subTest(action=action), get, post as posted:
+                result = await server.dispatch({"action": action, **one_video_plan()})
+                posted.assert_not_awaited()
+            self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+            self.assertEqual(result["conflicts"][0]["candidate_item_ids"],
+                             ["native:clip", "native:duplicate"])
 
     async def test_apply_edit_adds_then_replays(self):
         created = []

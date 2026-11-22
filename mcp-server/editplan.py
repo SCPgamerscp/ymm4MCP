@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import ntpath
 import re
 from pathlib import Path
 
@@ -63,7 +64,7 @@ def _kind(type_name):
 
 
 def host_kind(type_name):
-    name = (type_name or "").lower()
+    name = type_name.lower() if isinstance(type_name, str) else ""
     for key in ("voice", "video", "audio", "image", "subtitle", "text", "tachie", "face"):
         if key in name:
             return "text" if key == "subtitle" else key
@@ -313,7 +314,11 @@ def _fingerprint(kind, layer, text=None, character=None, source=None):
     if kind == "voice":
         return ("voice", layer, character, text)
     if kind in {"video", "audio", "image"}:
-        return (kind, layer, source or text)
+        path = source or text
+        if (isinstance(path, str) and ntpath.splitdrive(path)[0] and
+                is_absolute_media_path(path)):
+            path = ntpath.normcase(path)
+        return (kind, layer, path)
     if kind == "text":
         return ("text", layer, text)
     if kind in {"tachie", "face"}:
@@ -324,7 +329,8 @@ def _fingerprint(kind, layer, text=None, character=None, source=None):
 def current_fingerprint(item):
     kind = host_kind(item.get("type"))
     return _fingerprint(kind, item.get("layer"), text=item.get("text"),
-                        character=item.get("character"), source=item.get("path") or item.get("source"))
+                        character=item.get("character"),
+                        source=item.get("source_path") or item.get("path") or item.get("source"))
 
 
 def desired_fingerprint(item):
@@ -494,6 +500,8 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
     mapped = bindings_map(bindings)
     current_by_id = {item.get("item_id"): item for item in current_items
                      if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
+    fingerprints = [(current, current_fingerprint(current)) for current in current_items
+                    if isinstance(current, dict) and isinstance(current.get("item_id"), str)]
     claimed = set()
     ops = []
     warnings = []
@@ -514,17 +522,27 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
             ops.append({**item, "op": "keep", "item_id": bound["item_id"],
                         "revision": current.get("revision"), "reason": "binding"})
             continue
-        match = None
         wanted = desired_fingerprint(item)
-        for current in current_items:
-            if not isinstance(current, dict) or current.get("item_id") in claimed:
+        matches = [current for current, fingerprint in fingerprints
+                   if current["item_id"] not in claimed and fingerprint == wanted]
+        if len(matches) > 1:
+            # Explicit coordinates or length can distinguish repeated clips.
+            # Estimated or sequential frames cannot identify a clip.
+            compatible = [current for current in matches
+                          if (item["frame_source"] != "explicit" or
+                              current.get("frame") == item["frame"])
+                          and (item["length_source"] != "explicit" or
+                               current.get("length") == item["length"])]
+            if len(compatible) == 1:
+                matches = compatible
+            else:
+                warnings.append({"code": "CONTENT_STATE_CONFLICT", "severity": "error",
+                                 "id": item["id"], "candidate_count": len(matches),
+                                 "candidate_item_ids": [current["item_id"] for current in matches[:20]],
+                                 "message": "同じ内容の既存アイテムが複数あり、再利用する項目を一意に特定できません"})
                 continue
-            if current_fingerprint(current) == wanted:
-                if match is not None:
-                    match = None
-                    break
-                match = current
-        if match is not None:
+        if matches:
+            match = matches[0]
             claimed.add(match["item_id"])
             mismatches = []
             if item["frame_source"] == "explicit" and match.get("frame") != item["frame"]:
