@@ -74,6 +74,7 @@ namespace YMM4McpPlugin
         private object GetEditState()
         {
             var items = SnapshotTimelineItems();
+            if (items == null) return Failure("ITEMS_UNAVAILABLE", "タイムライン項目を取得できません");
             return new
             {
                 success = true,
@@ -88,17 +89,17 @@ namespace YMM4McpPlugin
             };
         }
 
-        private List<object> SnapshotTimelineItems()
+        private List<object>? SnapshotTimelineItems()
         {
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var vm = GetMainViewModel();
-                if (vm == null) return new List<object>();
+                if (vm == null) return null;
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
-                if (tvm == null) return new List<object>();
+                if (tvm == null) return null;
                 var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return null;
                 var items = new List<object>();
-                if (rawItems == null) return items;
                 foreach (var iv in rawItems)
                 {
                     var info = ReadItemInfo(iv);

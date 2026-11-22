@@ -1123,13 +1123,23 @@ async def dispatch(args: dict) -> Any:
                 case "items": return await ymm4_get("/items")
                 case "missing_assets":
                     snapshot = await ymm4_get("/items")
-                    if not isinstance(snapshot, dict) or snapshot.get("success") is not True or \
-                            "error" in snapshot or "error_code" in snapshot or \
-                            not isinstance(snapshot.get("items"), list):
+                    if (not isinstance(snapshot, dict) or
+                            ("success" in snapshot and snapshot["success"] is not True) or
+                            ("success" not in snapshot and "count" not in snapshot) or
+                            "error" in snapshot or "error_code" in snapshot or
+                            not isinstance(snapshot.get("items"), list)):
                         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+                    items = snapshot["items"]
+                    # The native endpoint reports items/count without a success
+                    # flag. Its inventory is usable only if that count is sound.
+                    if "count" in snapshot:
+                        count = snapshot["count"]
+                        if type(count) is not int or count != len(items):
+                            return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
+                                    "reported_count": count, "observed_count": len(items)}
                     sources = {}
                     unknown = []
-                    for item in snapshot["items"]:
+                    for item in items:
                         if not isinstance(item, dict):
                             return {"success": False, "error_code": "ITEMS_UNAVAILABLE"}
                         if not scene_media.is_known_item_type(item.get("type"), ("videoitem", "audioitem", "imageitem")):

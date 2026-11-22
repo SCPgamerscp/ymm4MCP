@@ -6,6 +6,47 @@ import server
 
 
 class MissingAssetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_inventory_without_success_flag_checks_media(self):
+        snapshot = {"count": 1, "items": [{"item_id": "native:video", "type": "VideoItem",
+                                          "source_path": "C:/Media/missing.mp4"}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                snapshot, {"success": True, "exists": False}])) as get:
+            result = await server.dispatch({"action": "get_info", "sub_action": "missing_assets"})
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["checked_count"], 1)
+        self.assertEqual(result["missing"], [{"path": "C:/Media/missing.mp4", "item_ids": ["native:video"]}])
+        get.assert_awaited_with("/media/info?path=C%3A%2FMedia%2Fmissing.mp4")
+
+    async def test_native_missing_assets_are_reported_by_qa_gate(self):
+        snapshot = {"count": 1, "items": [{"item_id": "native:video", "type": "VideoItem",
+                    "revision": "r1", "frame": 0, "length": 30, "layer": 0,
+                    "source_path": "C:/Media/missing.mp4"}]}
+
+        async def get(path):
+            if path == "/items":
+                return snapshot
+            self.assertEqual(path, "/media/info?path=C%3A%2FMedia%2Fmissing.mp4")
+            return {"success": True, "exists": False}
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)):
+            result = await server.dispatch({"action": "qa_gate", "assets_check": {}})
+        self.assertEqual(result["decision"], "repair")
+        self.assertTrue(any(issue["code"] == "ASSET_MISSING" for issue in result["qa"]["issues"]))
+
+    async def test_incomplete_asset_inventory_fails_before_media_probes(self):
+        for fields, code in (({}, "ITEMS_UNAVAILABLE"), ({"count": 0}, "ITEMS_INVENTORY_INCOMPLETE"),
+                             ({"count": True}, "ITEMS_INVENTORY_INCOMPLETE"),
+                             ({"count": "1"}, "ITEMS_INVENTORY_INCOMPLETE"),
+                             ({"success": True, "count": 2}, "ITEMS_INVENTORY_INCOMPLETE")):
+            snapshot = {"items": [{"item_id": "a", "type": "ImageItem",
+                                   "source_path": "C:/Media/a.png"}], **fields}
+            with self.subTest(fields=fields), patch.object(
+                    server, "ymm4_get", AsyncMock(return_value=snapshot)) as get:
+                result = await server.dispatch({"action": "get_info", "sub_action": "missing_assets"})
+            self.assertFalse(result["success"])
+            self.assertEqual(result["error_code"], code)
+            get.assert_awaited_once_with("/items")
+
     async def test_deduplicates_paths_and_reports_unknown_sources(self):
         items = {"success": True, "items": [
             {"item_id": "a", "type": "VideoItem", "source_path": "C:/Media/x.mp4"},
