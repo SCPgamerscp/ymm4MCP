@@ -34,6 +34,7 @@ Equal(3, faceWrites);
 Equal(requestedFacePath, FacePathMutation.SetAndVerify(requestedFacePath,
     () => activeFacePath = requestedFacePath, () => activeFacePath));
 Equal(requestedFacePath, activeFacePath);
+activeFacePath = "C:/faces/happy.png";
 bool readbackFailed = false;
 try
 {
@@ -43,6 +44,25 @@ try
 }
 catch (InvalidOperationException) { readbackFailed = true; }
 Equal(true, readbackFailed);
+Equal(requestedFacePath, activeFacePath);
+
+activeFacePath = "C:/faces/happy.png";
+bool setterFailed = false;
+int readsAfterFailedSet = 0;
+try
+{
+    FacePathMutation.SetAndVerify(requestedFacePath,
+        () =>
+        {
+            activeFacePath = requestedFacePath;
+            throw new InvalidOperationException("FacePath notification failed after assignment");
+        },
+        () => { readsAfterFailedSet++; return activeFacePath; });
+}
+catch (InvalidOperationException) { setterFailed = true; }
+Equal(true, setterFailed);
+Equal(requestedFacePath, activeFacePath);
+Equal(0, readsAfterFailedSet);
 
 Equal(7, TimelineInputValidation.GetInt(Body("{}"), "frame", 7));
 Equal(-1, TimelineInputValidation.GetInt(Body("{\"frame\":-1}"), "frame", 7));

@@ -1244,10 +1244,11 @@ namespace YMM4McpPlugin
                     }
                 }
                 bool changed = results.Any(result => result.EndsWith("=OK", StringComparison.Ordinal));
+                // A FacePath setter can write before it throws, or its readback
+                // can fail after writing. Preserve undo in either case.
                 if (changed || facePathUnverified)
-                    MarkItemChanged(targetItem);
-                if (changed)
                 {
+                    MarkItemChanged(targetItem);
                     var vm = GetMainViewModel();
                     var model = vm == null ? null : GetMainModel(vm);
                     if (model != null) TryRecordHistory(model);
