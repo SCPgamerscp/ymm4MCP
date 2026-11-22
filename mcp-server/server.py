@@ -1784,6 +1784,14 @@ def _valid_timeline_id(value):
     return isinstance(value, str) and re.fullmatch(r"timeline:[0-9a-f]{32}", value) is not None
 
 
+def _edit_plan_inventory_error(snapshot):
+    # A host that reports a live timeline ID also reports a complete count.
+    legacy = isinstance(snapshot, dict) and "timeline_id" not in snapshot
+    _, error = read_item_inventory(snapshot, max_items=quality_guard.MAX_SNAPSHOT_ITEMS,
+                                   allow_missing_count=legacy)
+    return error
+
+
 def _rollback_unverified(item_ids, verification):
     return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
             "error": "ロールバック対象と同じタイムラインで削除結果を確認できませんでした",
@@ -1928,15 +1936,15 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if isinstance(characters, dict) and characters.get("success") is not False and "error" not in characters:
         names = [c["name"] for c in characters.get("characters", []) if isinstance(c, dict) and "name" in c]
     snapshot = await ymm4_get("/items")
-    if not isinstance(snapshot, dict):
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("items"), list):
+        if isinstance(snapshot, dict) and snapshot.get("success") is False:
+            return snapshot
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
                 "error": "タイムラインの状態を取得できません。編集せず停止しました"}
-    if snapshot.get("success") is False or "error" in snapshot:
-        return snapshot
-    items = snapshot.get("items")
-    if not isinstance(items, list):
-        return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
-                "error": "タイムラインの状態を取得できません。編集せず停止しました"}
+    inventory_error = _edit_plan_inventory_error(snapshot)
+    if inventory_error is not None:
+        return {**inventory_error, "rolled_back": False}
+    items = snapshot["items"]
     timeline_id = snapshot.get("timeline_id")
     if not dry_run and "timeline_id" in snapshot and not _valid_timeline_id(timeline_id):
         return {"success": False, "error_code": "TIMELINE_UNAVAILABLE",
@@ -2132,14 +2140,14 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
         verified_snapshot = await ymm4_get("/items")
     except (httpx.HTTPError, ValueError) as exc:
         verified_snapshot = {"error": str(exc)}
-    if (not isinstance(verified_snapshot, dict) or verified_snapshot.get("success") is False
-            or "error" in verified_snapshot or not isinstance(verified_snapshot.get("items"), list)
-            or (timeline_id is not None and verified_snapshot.get("timeline_id") != timeline_id)):
+    inventory_error = _edit_plan_inventory_error(verified_snapshot)
+    if inventory_error is not None or (
+            isinstance(verified_snapshot, dict) and verified_snapshot.get("timeline_id") != timeline_id):
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
                 "error": "適用後のタイムラインを確認できません。itemsを確認してから再実行してください",
                 "added": added, "details": details, "outcome_unknown": True, "rolled_back": False,
                 "atomic_scenes": atomic, "committed_scenes": committed, "scenes": scene_reports,
-                "verification": verified_snapshot}
+                "verification": inventory_error if inventory_error is not None else verified_snapshot}
     verification_failures = editplan.verify_applied_items(details, verified_snapshot["items"])
     if verification_failures:
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",

@@ -458,6 +458,37 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         post.assert_not_awaited()
         self.assertEqual(result["error_code"], "TIMELINE_UNAVAILABLE")
 
+    async def test_initial_edit_inventory_must_be_complete_before_any_write(self):
+        for snapshot, code in (
+            ({"items": [], "count": 1}, "ITEMS_SNAPSHOT_INVALID"),
+            ({"items": [], "timeline_id": ROLLBACK_TIMELINE_ID}, "ITEMS_SNAPSHOT_INVALID"),
+            ({"items": [], "count": 0, "error_code": "ITEMS_UNAVAILABLE"}, "ITEMS_UNAVAILABLE"),
+            ({"items": [], "count": 0, "success": 1}, "ITEMS_UNAVAILABLE"),
+        ):
+            with self.subTest(snapshot=snapshot), patch.object(
+                    server, "ymm4_get", AsyncMock(side_effect=[{"characters": []}, snapshot])), \
+                    patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            post.assert_not_awaited()
+            self.assertEqual(result["error_code"], code)
+
+    async def test_incomplete_edit_readback_does_not_save_bindings(self):
+        item = {"item_id": "native:caption", "revision": "r1", "frame": 0,
+                "layer": 1, "length": 10, "type": "TextItem", "text": "hello"}
+        initial = {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID}
+        for extra, code in (({"count": 2}, "ITEMS_SNAPSHOT_INVALID"),
+                            ({"count": 1, "error_code": "ITEMS_UNAVAILABLE"}, "ITEMS_UNAVAILABLE")):
+            snapshot = {"items": [item], "timeline_id": ROLLBACK_TIMELINE_ID, **extra}
+            get = AsyncMock(side_effect=[{"characters": []}, initial, {"bindings": []}, snapshot])
+            post = AsyncMock(return_value={"success": True, **item})
+            with self.subTest(snapshot=snapshot), patch.object(server, "ymm4_get", get), \
+                    patch.object(server, "ymm4_post", post):
+                result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            self.assertEqual([entry.args[0] for entry in post.await_args_list], ["/items/text"])
+            self.assertEqual(result["error_code"], "EDIT_VERIFY_FAILED")
+            self.assertEqual(result["verification"]["error_code"], code)
+            self.assertTrue(result["outcome_unknown"])
+
     async def test_readback_from_a_different_timeline_does_not_save_bindings(self):
         item = {"item_id": "native:caption", "revision": "r1", "frame": 0,
                 "layer": 1, "length": 10, "type": "TextItem", "text": "hello"}

@@ -53,16 +53,17 @@ def validate_expected_items(expected):
     return expected
 
 
-def read_item_inventory(snapshot, *, max_items=MAX_SNAPSHOT):
+def read_item_inventory(snapshot, *, max_items=MAX_SNAPSHOT, allow_missing_count=False):
     """Index a complete /api/items snapshot, or return its validation failure."""
     if (not isinstance(snapshot, dict) or
             ("success" in snapshot and snapshot["success"] is not True) or
             "error" in snapshot or "error_code" in snapshot):
         return None, {"success": False, "passed": False, "error_code": "ITEMS_UNAVAILABLE"}
     items = snapshot.get("items")
-    count = snapshot.get("count")
-    if (not isinstance(items, list) or len(items) > max_items or
-            isinstance(count, bool) or not isinstance(count, int) or count != len(items)):
+    if not isinstance(items, list) or len(items) > max_items:
+        return None, {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
+    count = snapshot.get("count", len(items) if allow_missing_count else None)
+    if type(count) is not int or count != len(items):
         return None, {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
     ids = []
     for item in items:
