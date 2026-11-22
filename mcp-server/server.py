@@ -1591,7 +1591,8 @@ async def dispatch(args: dict) -> Any:
                             "check": "decoded_export", "details": report}
                 checks["decoded_export"] = report
             if checks:
-                conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+                conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"],
+                                                               initial_inventory=snapshot)
                 if conflict is not None:
                     return {**conflict, "passed": False,
                             "error_code": "QA_" + conflict["error_code"]}

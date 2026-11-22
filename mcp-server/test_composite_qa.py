@@ -26,6 +26,31 @@ class CompositeQaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_code"], "QA_ITEMS_INVENTORY_INCOMPLETE")
         self.assertNotIn("qa", result)
 
+    async def test_composite_qa_requires_the_same_timeline_even_for_identical_items(self):
+        timeline_id = "timeline:" + "a" * 32
+        legacy = {"items": [], "count": 0}
+        active = {**legacy, "timeline_id": timeline_id}
+        clean = {"success": True, "passed": True, "issues": []}
+        for before, after, error in (
+            (active, active, None),
+            (active, {**active, "timeline_id": "timeline:" + "b" * 32}, "QA_TIMELINE_CHANGED"),
+            (active, legacy, "QA_TIMELINE_ID_UNAVAILABLE"),
+            (legacy, active, "QA_TIMELINE_ID_UNAVAILABLE"),
+            (active, {**legacy, "timeline_id": None}, "QA_TIMELINE_ID_UNAVAILABLE"),
+            ({**legacy, "timeline_id": "invalid"}, active, "QA_TIMELINE_ID_UNAVAILABLE"),
+            (legacy, legacy, None),
+        ):
+            with self.subTest(before=before, after=after), \
+                    patch.object(server, "ymm4_get", AsyncMock(side_effect=[before, clean, after])):
+                result = await server.dispatch({"action": "qa_gate",
+                                                "export_check": {"path": "C:/done.mp4"}})
+            self.assertEqual(result.get("error_code"), error)
+            if error:
+                self.assertFalse(result["passed"])
+                self.assertNotIn("qa", result)
+            else:
+                self.assertEqual(result["decision"], "pass")
+
     async def test_export_qa_failure_blocks_final_gate(self):
         async def get(path):
             if path == "/items":

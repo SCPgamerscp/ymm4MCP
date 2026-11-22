@@ -1,9 +1,12 @@
 """Read-only consistency checks shared by quality gates and derived edits."""
 
+import re
+
 import editplan
 from editing import MAX_FRAME, integer
 
 MAX_SNAPSHOT_ITEMS = 100_000
+_TIMELINE_ID = re.compile(r"timeline:[0-9a-f]{32}")
 _BIDI_CONTROLS = {0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F),
                   *range(0x2066, 0x206A)}
 
@@ -75,7 +78,21 @@ def timeline_inventory_error(snapshot):
     return None
 
 
-async def verify_snapshot(get, items):
+def _timeline_identity_error(before, after):
+    if "timeline_id" not in before and "timeline_id" not in after:
+        return None
+    expected, actual = before.get("timeline_id"), after.get("timeline_id")
+    if any(not isinstance(value, str) or _TIMELINE_ID.fullmatch(value) is None
+           for value in (expected, actual)):
+        return {"success": False, "error_code": "TIMELINE_ID_UNAVAILABLE",
+                "error": "The active timeline could not be identified before and after QA"}
+    if actual != expected:
+        return {"success": False, "error_code": "TIMELINE_CHANGED",
+                "error": "The active timeline changed during QA"}
+    return None
+
+
+async def verify_snapshot(get, items, *, initial_inventory=None):
     # The caller's reference snapshot can be malformed too. Fail closed
     # instead of raising before we have a chance to return a QA failure.
     try:
@@ -88,6 +105,10 @@ async def verify_snapshot(get, items):
         inventory_error = timeline_inventory_error(current)
         if inventory_error is not None:
             return inventory_error
+        if initial_inventory is not None:
+            identity_error = _timeline_identity_error(initial_inventory, current)
+            if identity_error is not None:
+                return identity_error
         _validate_observable_fields(current["items"])
         actual = editplan.snapshot_hash(current["items"])
     except Exception as exc:

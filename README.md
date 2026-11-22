@@ -452,6 +452,8 @@ expected=[
 
 `/api/items` が返す `count` と実際の一覧件数が一致しない場合、開始時は `ITEMS_INVENTORY_INCOMPLETE`、追加チェック後の再取得時は `QA_ITEMS_INVENTORY_INCOMPLETE` を返し、QAを合格にしません。
 
+追加チェックの前後で `/api/items` のタイムラインIDも照合します。IDが変わると `QA_TIMELINE_CHANGED`、片方だけIDが欠落するか値が不正な場合は `QA_TIMELINE_ID_UNAVAILABLE` を返します。どちらも `qa` や合格判定を返しません。両方でIDフィールドを省略する旧版ではアイテム一覧の比較を行います。
+
 `visual_qa` は `start_frame`（既定0）から `end_frame` までを `step_frames`（既定30）間隔で最大40枚シーク・撮影し、元のプレビュー位置に戻します。代わりに `scene_ranges` と `scene_id` を指定すると、該当シーンの半開区間内を検査します。`qa_gate` の `visual_check` でも同じ指定が可能です。RGBの色変化も比較します。ほぼ黒いサンプルを `BLACK_FRAME`、`min_static_frames`（既定60）以上変化が小さい区間を `STATIC_PREVIEW` として報告します。意図した演出の可能性があるため既定は warning です。`black_as_error=true` で黒画面を error にできます。取得失敗や位置の復元失敗時は `success=false`、`passed=false` を返します。サンプルの間のフレームは検査しません。
 
 ---
