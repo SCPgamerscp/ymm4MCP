@@ -79,9 +79,25 @@ var fault = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsA
 Check(tracker.TryStart(() => Start(fault.Task))?.task == fault.Task && invocations == 2,
     "A completed native task must release the exporter for another job");
 fault.SetException(new InvalidOperationException("encoder failed after the wait ended"));
-Check(tracker.TryStart(() => Start(null))?.invoked == true && invocations == 3,
-    "A faulted native task must also release the exporter");
-Check(tracker.TryStart(() => Start(null))?.invoked == true && invocations == 4,
-    "An invocation without an observable task must preserve the synchronous route");
+Check(tracker.TryStart(() => (false, "", "", null))?.invoked == false,
+    "Discovery without invoking an exporter must not reserve it");
+Check(tracker.TryStart(() => Start(Task.CompletedTask))?.invoked == true && invocations == 3,
+    "A faulted native task must release the exporter, including after unsuccessful discovery");
+Check(tracker.TryStart(() => Start(null))?.invoked == true && invocations == 4 &&
+      tracker.CompletionUnknown, "An invoked exporter that does not return a Task has an unknown outcome");
+Check(tracker.TryStart(() => Start(Task.CompletedTask)) is null && invocations == 4,
+    "An unknown native outcome must not allow a second export");
+
+var throwingTracker = new NativeExportTaskTracker();
+try
+{
+    throwingTracker.TryStart(() => throw new System.Reflection.TargetInvocationException(
+        new InvalidOperationException("started host then threw")));
+    throw new Exception("A synchronous host failure should reach the job handler");
+}
+catch (System.Reflection.TargetInvocationException) { }
+Check(throwingTracker.CompletionUnknown &&
+      throwingTracker.TryStart(() => Start(Task.CompletedTask)) is null,
+    "A host call that throws before returning its Task must not allow a second export");
 
 Console.WriteLine("Export task deadline regression tests passed");

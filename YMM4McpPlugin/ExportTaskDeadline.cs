@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -34,11 +35,12 @@ namespace YMM4McpPlugin
     {
         private Task? pending;
         private bool starting;
+        internal bool CompletionUnknown { get; private set; }
 
         internal (bool invoked, string method, string target, Task? task)? TryStart(
             Func<(bool invoked, string method, string target, Task? task)> start)
         {
-            if (starting || pending is { IsCompleted: false })
+            if (starting || CompletionUnknown || pending is { IsCompleted: false })
                 return null;
 
             pending = null;
@@ -48,6 +50,7 @@ namespace YMM4McpPlugin
             {
                 var invocation = start();
                 pending = invocation.task;
+                CompletionUnknown = invocation.invoked && pending == null;
 
                 // A failure may arrive after the MCP job stopped waiting.
                 if (pending is { } task)
@@ -57,6 +60,12 @@ namespace YMM4McpPlugin
                         TaskScheduler.Default);
 
                 return invocation;
+            }
+            catch (TargetInvocationException)
+            {
+                // The host was entered and may have launched work before throwing.
+                CompletionUnknown = true;
+                throw;
             }
             finally { starting = false; }
         }

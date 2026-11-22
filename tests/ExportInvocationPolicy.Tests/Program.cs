@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Windows.Input;
 using YMM4McpPlugin;
 
 static MethodInfo Method(string name, params Type[] parameters) =>
@@ -51,6 +52,28 @@ Check(ExportInvocationPolicy.HasDialogOnlyMethod(
     "A matching parameterless method requires a dialog");
 Check(!ExportInvocationPolicy.HasDialogOnlyMethod([Method(nameof(ExportMethods.OutputExoFile))], "mp4"),
     "An EXO-only method is unavailable for MP4");
+
+Check(!ExportInvocationPolicy.ReturnsCompletionTask(Method(nameof(ExportMethods.OutputMp4File), typeof(string))),
+    "A path-taking void method cannot be observed through completion");
+Check(ExportInvocationPolicy.ReturnsCompletionTask(Method(nameof(ExportMethods.OutputAwaitable), typeof(string))),
+    "A native ValueTask<T> export must be supported");
+Check(ExportInvocationPolicy.GetCompletionTask(new ValueTask<int>(42)) is Task<int> converted &&
+      await converted == 42, "The original ValueTask<T> must be converted into an observable Task");
+Check(ExportInvocationPolicy.GetCompletionTask(null) is null, "A null return must not imply completion");
+
+var plain = new PlainExportCommand();
+Check(ExportInvocationPolicy.FindAwaitableCommand(plain) is null && !plain.Executed,
+    "A command offering only void Execute must not be invoked");
+var asyncCommand = new AsyncExportCommand();
+var execute = ExportInvocationPolicy.FindAwaitableCommand(asyncCommand);
+var nativeTask = execute == null ? null
+    : ExportInvocationPolicy.GetCompletionTask(execute.Invoke(asyncCommand, new object[] { "episode.mp4" }));
+Check(nativeTask == asyncCommand.Completion.Task && !asyncCommand.Executed &&
+      asyncCommand.OutputPath == "episode.mp4" && nativeTask is { IsCompleted: false },
+    "A command must use ExecuteAsync with the requested path and track its actual pending task");
+asyncCommand.Completion.SetResult(true);
+await nativeTask!;
+
 // Regression: export jobs persist idempotency keys, so embedded control characters
 // must be rejected before the request is recorded or replayed.
 Check(ExportInvocationPolicy.IsValidIdempotencyKey(""), "Omitted key remains valid");
@@ -89,7 +112,28 @@ class ExportMethods
     public void OutputWavFile(string path) { }
     public void OutputAsync(string path) { }
     public void OutputWithFormat(string path, string format) { }
+    public ValueTask<int> OutputAwaitable(string path) => new(42);
     public void OutputWithOutputFormat(string path, string outputFormat) { }
     public void OutputWithPreset(string path, string presetPath) { }
     public void OutputWithDirectory(string path, string outputDirectory) { }
+}
+
+class PlainExportCommand : ICommand
+{
+    public bool Executed { get; private set; }
+    public bool CanExecute(object? parameter) => true;
+    public void Execute(object? parameter) => Executed = true;
+    public event EventHandler? CanExecuteChanged { add { } remove { } }
+}
+
+class AsyncExportCommand : PlainExportCommand
+{
+    public TaskCompletionSource<bool> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public string? OutputPath { get; private set; }
+
+    public Task ExecuteAsync(object? parameter)
+    {
+        OutputPath = parameter as string;
+        return Completion.Task;
+    }
 }

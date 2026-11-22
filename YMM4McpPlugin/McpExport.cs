@@ -134,6 +134,7 @@ namespace YMM4McpPlugin
             bool overwrite = RequestBool(job.Request, "overwrite");
             ExportDiscovery? discovery = null;
             string? startErrorCode = null;
+            bool completionUnavailable = false;
             var start = Application.Current.Dispatcher.Invoke<(bool invoked, string method, string target, Task? task)?>(() =>
             {
                 token.ThrowIfCancellationRequested();
@@ -150,9 +151,11 @@ namespace YMM4McpPlugin
                     startErrorCode = "FILE_EXISTS";
                     return null;
                 }
-                var invocation = NativeExports.TryStart(() => StartNativeExport(discovery, outputPath, format));
+                var invocation = NativeExports.TryStart(() =>
+                    StartNativeExport(discovery, outputPath, format, out completionUnavailable));
                 if (invocation is null)
-                    startErrorCode = "EXPORT_NATIVE_BUSY";
+                    startErrorCode = NativeExports.CompletionUnknown
+                        ? "EXPORT_COMPLETION_UNAVAILABLE" : "EXPORT_NATIVE_BUSY";
                 return invocation;
             });
             if (start is null)
@@ -161,6 +164,7 @@ namespace YMM4McpPlugin
                 {
                     "EXPORT_PROJECT_CHANGED" => "書き出し元のプロジェクトを確認できないため開始しませんでした",
                     "EXPORT_NATIVE_BUSY" => "前回のYMM4書き出しが実行中です。完了後に再開してください",
+                    "EXPORT_COMPLETION_UNAVAILABLE" => "前回のYMM4書き出しの終了を確認できません",
                     _ => "出力先が既に存在するため書き出しを開始しませんでした"
                 };
                 UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
@@ -172,19 +176,32 @@ namespace YMM4McpPlugin
             {
                 bool dialogRequired = ExportInvocationPolicy.HasDialogOnlyMethod(
                     discovery!.Methods.Select(m => m.method), format);
-                UpdateJob(job, "failed", phase: "failed", progress: 0,
-                    message: dialogRequired ? "保存先を指定できる書き出し方法がありません" : "プログラムからの書き出し方法が見つかりません",
-                    error: dialogRequired ? "YMM4の出力ダイアログはMCPから自動入力できません" : "YMM4の出力コマンド/メソッドを実行できませんでした",
-                    errorCode: dialogRequired ? "EXPORT_DIALOG_REQUIRED" : "EXPORT_METHOD_UNAVAILABLE",
+                string code = completionUnavailable ? "EXPORT_COMPLETION_UNAVAILABLE" :
+                    dialogRequired ? "EXPORT_DIALOG_REQUIRED" : "EXPORT_METHOD_UNAVAILABLE";
+                string message = code switch
+                {
+                    "EXPORT_COMPLETION_UNAVAILABLE" => "このYMM4では完了を確認できる書き出し方法がありません",
+                    "EXPORT_DIALOG_REQUIRED" => "保存先を指定できる書き出し方法がありません",
+                    _ => "プログラムからの書き出し方法が見つかりません"
+                };
+                UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
+                    errorCode: code,
                     result: new { discovered = discovery.Describe(), output_path = outputPath, format });
+                return;
+            }
+            if (started.task == null)
+            {
+                const string message = "YMM4の書き出しを呼びましたが、完了を確認するタスクが返りませんでした";
+                UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
+                    errorCode: "EXPORT_COMPLETION_UNAVAILABLE",
+                    result: new { output_path = outputPath, invoked = started.method, outcome_unknown = true });
                 return;
             }
             UpdateJob(job, "running", phase: "render", progress: 15,
                 message: "書き出しを開始しました: " + started.method,
                 checkpoint: new { output_path = outputPath, method = started.method, target = started.target });
 
-            if (started.task != null &&
-                !await ExportTaskDeadline.WaitForCompletion(started.task, deadline, token))
+            if (!await ExportTaskDeadline.WaitForCompletion(started.task, deadline, token))
             {
                 UpdateJob(job, "failed", phase: "timeout",
                     message: "書き出し処理が制限時間内に完了しませんでした",
@@ -576,38 +593,46 @@ namespace YMM4McpPlugin
         }
 
         private static (bool invoked, string method, string target, Task? task) StartNativeExport(
-            ExportDiscovery discovery, string outputPath, string format)
+            ExportDiscovery discovery, string outputPath, string format, out bool completionUnavailable)
         {
+            completionUnavailable = false;
             foreach (var (target, method, obj) in discovery.Methods)
             {
                 if (!ExportInvocationPolicy.AcceptsPath(method, format)) continue;
-                var parameters = method.GetParameters();
-                object?[] args;
-                if (parameters.Length == 1)
-                    args = new object?[] { outputPath };
-                else if (parameters.Length == 2)
-                    args = new object?[] { outputPath, format };
-                else continue;
-                try
+                if (!ExportInvocationPolicy.ReturnsCompletionTask(method))
                 {
-                    var result = method.Invoke(obj, args);
-                    Task? task = result as Task;
-                    return (true, method.Name, target, task);
+                    completionUnavailable = true;
+                    continue;
                 }
-                catch { }
+                object[] args = method.GetParameters().Length == 1
+                    ? new object[] { outputPath } : new object[] { outputPath, format };
+                // A thrown host call may have already started work. Do not
+                // also invoke a fallback exporter for this job.
+                var result = method.Invoke(obj, args);
+                return (true, method.Name, target, ExportInvocationPolicy.GetCompletionTask(result));
             }
 
             foreach (var (target, name, obj) in discovery.Commands)
             {
+                if (!ExportInvocationPolicy.MatchesFormat(name, format)
+                    || GetPropObj(obj, name) is not ICommand command)
+                    continue;
+                var execute = ExportInvocationPolicy.FindAwaitableCommand(command);
+                if (execute == null)
+                {
+                    completionUnavailable = true;
+                    continue;
+                }
                 try
                 {
-                    var prop = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (prop?.GetValue(obj) is not ICommand cmd) continue;
-                    if (!ExportInvocationPolicy.MatchesFormat(name, format) || !cmd.CanExecute(outputPath)) continue;
-                    cmd.Execute(outputPath);
-                    return (true, name, target, null);
+                    if (!command.CanExecute(outputPath)) continue;
                 }
-                catch { }
+                catch (Exception ex) when (ex is ArgumentException or InvalidCastException)
+                {
+                    continue;
+                }
+                var result = execute.Invoke(command, new object[] { outputPath });
+                return (true, name, target, ExportInvocationPolicy.GetCompletionTask(result));
             }
             return (false, "", "", null);
         }
