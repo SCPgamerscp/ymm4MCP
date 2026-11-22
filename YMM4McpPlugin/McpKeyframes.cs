@@ -120,12 +120,17 @@ namespace YMM4McpPlugin
             if (string.IsNullOrWhiteSpace(prop)) throw new ArgumentException("prop is required");
             string action = GetStr(body, "action", "set").ToLowerInvariant();
             DuckingVoiceGuard? voiceGuard = null;
+            string? expectedDuckingProject = null;
             double? expectedBaseVolume = null;
             if (action == "set_ducking")
             {
                 if (prop != "Volume" || itemId.Length == 0 || string.IsNullOrWhiteSpace(expectedRevision) ||
                     !body.TryGetValue("expected_ducking_voices", out var voices))
                     throw new ArgumentException("set_ducking requires Volume, item_id, expected_revision and expected_ducking_voices");
+                expectedDuckingProject = GetStr(body, "expected_project_path", "");
+                if (expectedDuckingProject.Length > 4096 ||
+                    !System.IO.Path.IsPathFullyQualified(expectedDuckingProject))
+                    throw new ArgumentException("set_ducking requires an absolute expected_project_path");
                 voiceGuard = DuckingVoiceGuard.Parse(voices);
                 if (body.TryGetValue("expected_base_volume", out var baseline))
                 {
@@ -145,6 +150,10 @@ namespace YMM4McpPlugin
                 throw new ArgumentException("value must be a finite number");
             return Application.Current.Dispatcher.Invoke(() =>
             {
+                if (expectedDuckingProject != null &&
+                    !EditCheckpointSafety.SameProject(expectedDuckingProject, CurrentProjectPath()))
+                    return Failure("BGM_DUCKING_PROJECT_CONFLICT",
+                        "バックアップ作成前と現在のプロジェクトが異なるため、打刻を中止しました");
                 var located = LocateTimelineItem(itemId, tf, tl);
                 if (located.error != null) return located.error;
                 var item = located.item!;

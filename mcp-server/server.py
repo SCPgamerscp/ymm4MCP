@@ -779,6 +779,11 @@ async def run_bgm_ducking(args: dict) -> dict:
             project.get("isSaved") is not True):
         return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
     try:
+        expected_project = project_identity(project)
+    except ValueError:
+        return {"success": False, "error_code": "BGM_DUCKING_PROJECT_UNAVAILABLE", "applied": []}
+    active_path = project["projectPath"]
+    try:
         checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
     except Exception as exc:
         # A timed-out checkpoint may have created a backup; no keyframes were written.
@@ -792,11 +797,18 @@ async def run_bgm_ducking(args: dict) -> dict:
             not backup.lower().endswith(".ymmp")):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
     # A backup that aliases the active project is not a recoverable copy.
-    active_path = project.get("projectPath")
-    if (isinstance(active_path, str) and active_path and
-            _same_project_path(backup, active_path)):
+    if _same_project_path(backup, active_path):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED",
                 "details": checkpoint}
+    try:
+        backed_up_project = project_identity(
+            {"success": True, "projectPath": checkpoint.get("project_path")})
+    except ValueError:
+        return {"success": False, "error_code": "BGM_DUCKING_PROJECT_UNAVAILABLE",
+                "backup_path": backup, "applied": []}
+    if expected_project != backed_up_project:
+        return {"success": False, "error_code": "BGM_DUCKING_PROJECT_CONFLICT",
+                "backup_path": backup, "applied": []}
     try:
         conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
     except Exception as exc:
@@ -834,6 +846,7 @@ async def run_bgm_ducking(args: dict) -> dict:
         # Old hosts reject this action instead of silently ignoring the guard.
         payload = {"item_id": item_id, "expected_revision": revision,
                    "prop": "Volume", "action": "set_ducking",
+                   "expected_project_path": active_path,
                    "expected_ducking_voices": voice_timing, **point}
         if not applied:
             payload["expected_base_volume"] = baseline
@@ -850,7 +863,8 @@ async def run_bgm_ducking(args: dict) -> dict:
         if (isinstance(changed, dict) and changed.get("success") is False and
                 changed.get("outcome_unknown") is False and
                 changed.get("error_code") in ("BGM_DUCKING_VOICE_CONFLICT",
-                    "BGM_DUCKING_VOLUME_CONFLICT", "BGM_DUCKING_GUARD_UNAVAILABLE")):
+                    "BGM_DUCKING_PROJECT_CONFLICT", "BGM_DUCKING_VOLUME_CONFLICT",
+                    "BGM_DUCKING_GUARD_UNAVAILABLE")):
             return {**changed, "applied": applied, "backup_path": backup}
         # A rejected/ill-formed response does not prove that the host made no
         # change. Never retry or apply another point without a fresh snapshot.

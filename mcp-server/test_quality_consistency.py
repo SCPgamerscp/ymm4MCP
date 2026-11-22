@@ -141,9 +141,9 @@ class DuckingConsistencyTests(unittest.IsolatedAsyncioTestCase):
         changed = copy.deepcopy(ITEMS)
         changed["items"][1]["frame"] = 50
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, changed])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, changed])), \
              patch.object(server, "ymm4_post", AsyncMock(return_value={
-                 "success": True, "backup_path": "C:/backup.ymmp"})) as post:
+                 "success": True, "backup_path": "C:/backup.ymmp", "project_path": "C:/Projects/episode.ymmp"})) as post:
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
         self.assertEqual(result["error_code"], "BGM_DUCKING_SNAPSHOT_CONFLICT")
         self.assertEqual(result["applied"], [])
@@ -168,9 +168,9 @@ class DuckingConsistencyTests(unittest.IsolatedAsyncioTestCase):
         for readback in variants:
             with self.subTest(readback=readback), \
                  patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                     ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS, readback])), \
+                     ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS, readback])), \
                  patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-                     {"success": True, "backup_path": "C:/backup.ymmp"}, *[
+                     {"success": True, "backup_path": "C:/backup.ymmp", "project_path": "C:/Projects/episode.ymmp"}, *[
                          {"success": True, "revision": f"r{i}"} for i in range(2, 6)]])):
                 result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
                 self.assertEqual(result["error_code"], "BGM_DUCKING_VERIFY_FAILED")

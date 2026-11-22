@@ -99,8 +99,8 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_UNAVAILABLE")
 
     async def _apply_with_checkpoint_readback(self, readback):
-        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, readback]
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, readback]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
              patch.object(server, "ymm4_post", AsyncMock(return_value=backup)) as post:
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
@@ -183,8 +183,8 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
         verified = {"success": True, "item_id": "bgm:1", "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
             {"at": 0, "value": 100, "absolute_frame": 0},
             *[{**point, "absolute_frame": point["at"]} for point in planned]]}]}
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS, verified]
-        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS, verified]
+        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post:
@@ -197,9 +197,9 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_failure_exposes_backup_and_applied_points(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-                 {"success": True, "backup_path": "C:/backup/cp.ymmp"},
+                 {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"},
                  {"success": True, "revision": "r2"},
                  {"success": False, "error_code": "KEYFRAME_METHOD_UNAVAILABLE"}])):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
@@ -209,11 +209,12 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["backup_path"], "C:/backup/cp.ymmp")
 
     async def test_voice_conflict_at_host_stops_writes_and_preserves_backup(self):
-        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS]
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS]
         expected = {"all_voices": True, "items": [{"item_id": "voice:1", "frame": 20, "length": 10}]}
         for completed in (0, 1):
-            for code in ("BGM_DUCKING_VOICE_CONFLICT", "BGM_DUCKING_GUARD_UNAVAILABLE"):
+            for code in ("BGM_DUCKING_VOICE_CONFLICT", "BGM_DUCKING_PROJECT_CONFLICT",
+                         "BGM_DUCKING_GUARD_UNAVAILABLE"):
                 conflict = {"success": False, "error_code": code, "outcome_unknown": False}
                 posts = [backup, *([{"success": True, "revision": "r2"}] * completed), conflict]
                 with self.subTest(completed=completed, code=code), \
@@ -230,13 +231,14 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
                 for i, payload in enumerate(mutations):
                     self.assertEqual(payload["action"], "set_ducking")
                     self.assertEqual(payload["expected_ducking_voices"], expected)
+                    self.assertEqual(payload["expected_project_path"], "C:/Projects/episode.ymmp")
                     self.assertEqual(payload.get("expected_base_volume"), 100.0 if i == 0 else None)
 
     async def test_native_guard_sends_only_explicit_voice_selection(self):
         items = {"items": [*ITEMS["items"],
                            {"item_id": "voice:2", "type": "VoiceItem", "frame": 40, "length": 10}]}
-        gets = [items, KEYS, {"success": True, "isSaved": True}, items, KEYS]
-        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
+        gets = [items, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, items, KEYS]
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
         conflict = {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
                     "outcome_unknown": False}
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
@@ -249,10 +251,10 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
             "all_voices": False, "items": [{"item_id": "voice:2", "frame": 40, "length": 10}]})
 
     async def test_verification_failure_preserves_backup_path(self):
-        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
+        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS,
+                 ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS,
                  TimeoutError("read timed out")])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
