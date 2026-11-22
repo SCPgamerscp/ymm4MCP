@@ -51,7 +51,36 @@ def _trusted_filter_payload(line, filter_name, bare_names):
     return match.group(1) if match else ""
 
 
-def _signal_ranges(log, start_name, end_name, window_duration=None):
+def _trailing_black_range(log, window_duration, minimum_duration):
+    """Use blackdetect frame metadata to distinguish EOF from a color change."""
+    active_start = None
+    for line in log.splitlines():
+        payload = _trusted_filter_payload(line, "metadata", ())
+        if not payload.startswith(("lavfi.black_start", "lavfi.black_end")):
+            continue
+        key, separator, raw = payload.partition("=")
+        if not separator or key not in {"lavfi.black_start", "lavfi.black_end"}:
+            raise ValueError("invalid blackdetect frame metadata")
+        timestamp = float(raw)
+        if not math.isfinite(timestamp):
+            raise ValueError("invalid blackdetect frame timestamp")
+        if key == "lavfi.black_start":
+            if active_start is not None:
+                raise ValueError("unexpected blackdetect start")
+            active_start = timestamp
+        else:
+            if active_start is None or timestamp < active_start:
+                raise ValueError("unexpected blackdetect end")
+            active_start = None
+    if active_start is not None:
+        start = max(0.0, active_start)
+        if start < window_duration and window_duration - start >= minimum_duration:
+            return start, window_duration
+    return None
+
+
+def _signal_ranges(log, start_name, end_name, window_duration=None, *,
+                   black_tail_minimum=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     # Capture complete tokens, including malformed punctuation. Treating
     # "1,broken" as "1" would invent a valid event and conceal bad logs.
@@ -97,6 +126,13 @@ def _signal_ranges(log, start_name, end_name, window_duration=None):
     # Close it at the decoded window boundary rather than silently dropping it.
     if start is not None and window_duration is not None and start < window_duration:
         ranges.append((start, window_duration))
+    if start_name == "black_start" and black_tail_minimum is not None:
+        # At EOF, blackdetect's log can stop at the last frame's timestamp
+        # or omit the interval entirely. Without a non-black frame marker,
+        # the final black frame persists to the end of the active window.
+        tail = _trailing_black_range(log, window_duration, black_tail_minimum)
+        if tail is not None:
+            ranges.append(tail)
     return ranges
 
 
@@ -766,6 +802,15 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                               min(2.0, max(0.001, max_silence_seconds)))
     freeze_detect_seconds = (2.0 if max_freeze_seconds is None else
                              min(2.0, max(0.001, max_freeze_seconds)))
+    video_signal_filters = (
+        f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
+        f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}")
+    black_tail_minimum = None
+    if max_black_seconds is not None:
+        video_signal_filters += (
+            ",metadata=mode=print:key=lavfi.black_start,"
+            "metadata=mode=print:key=lavfi.black_end")
+        black_tail_minimum = black_detect_seconds
     target = Path(path)
     try:
         exists = target.is_file()
@@ -1368,9 +1413,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
             # Keep the decode check and add non-blocking signal hints. The
             # filters emit bounded info logs for the sampled windows only.
             signal_filter = (
-                f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
-                f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}"
-                if kind == "video" else
+                video_signal_filters if kind == "video" else
                 f"silencedetect=noise=-50dB:d={silence_detect_seconds:.6f},"
                 "astats=metadata=0:reset=0")
             command = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats",
@@ -1595,8 +1638,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     "severity": "error", "stream_type": kind,
                     "stream_ordinal": ordinal,
                     "sample_start_seconds": round(start, 6)})
-            for signal_start, signal_end in _signal_ranges(
-                    decoded.stderr or "", start_name, end_name, signal_window_length):
+            try:
+                signal_ranges = _signal_ranges(
+                    decoded.stderr or "", start_name, end_name, signal_window_length,
+                    black_tail_minimum=black_tail_minimum)
+            except ValueError:
+                return failure("EXPORT_BLACK_SIGNAL_METADATA_INVALID",
+                               "黒画面のフレームメタデータを確認できません")
+            for signal_start, signal_end in signal_ranges:
                 signal_start = max(signal_start, signal_active_start)
                 if signal_start >= signal_end:
                     continue
@@ -1759,9 +1808,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 # The original track start is restored in public video-time
                 # coordinates below (late-starting audio is not at t=0).
                 filters = (
-                    "setpts=PTS-STARTPTS,"
-                    f"blackdetect=d={black_detect_seconds:.6f}:pix_th=0.10:pic_th=0.98,"
-                    f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}"
+                    f"setpts=PTS-STARTPTS,{video_signal_filters}"
                     if kind == "video" else
                     "asetpts=PTS-STARTPTS,"
                     f"silencedetect=noise=-50dB:d={silence_detect_seconds:.6f}")
@@ -1839,8 +1886,14 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                        "severity": "error", "stream_type": kind,
                                        "stream_ordinal": ordinal})
                         continue
-                    for signal_start, signal_end in _signal_ranges(
-                            diagnostics, start_name, end_name, active_duration):
+                    try:
+                        signal_ranges = _signal_ranges(
+                            diagnostics, start_name, end_name, active_duration,
+                            black_tail_minimum=black_tail_minimum)
+                    except ValueError:
+                        return failure("EXPORT_BLACK_SIGNAL_METADATA_INVALID",
+                                       "黒画面のフレームメタデータを確認できません")
+                    for signal_start, signal_end in signal_ranges:
                         if signal_start >= signal_end:
                             continue
                         absolute_start = max(0.0, offset + signal_start)
@@ -1928,7 +1981,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         if threshold is None:
             continue
         for event in signal_events:
-            measured = event["video_end_seconds"] - event["video_start_seconds"]
+            measured = round(event["video_end_seconds"] - event["video_start_seconds"], 6)
             if measured > threshold:
                 issues.append({
                     "code": code, "severity": "error",
