@@ -17,6 +17,7 @@ namespace YMM4McpPlugin
     internal static class WavAudioInspector
     {
         private const double MinContinuousClipSeconds = 0.005;
+        private const double NearFullScale = 32760.0 / 32768;
 
         public static AudioQaReport Inspect(string path, double minSilenceSeconds = 2)
         {
@@ -33,7 +34,7 @@ namespace YMM4McpPlugin
                     return Fail("AUDIO_FORMAT_UNSUPPORTED", "RIFF/WAVE 形式が必要です");
                 long end = 8L + U32(riff, 4);
                 if (end > file.Length || end < 44) return Fail("AUDIO_FILE_INVALID", "WAV のサイズが不正です");
-                int rate = 0, channels = 0, align = 0, bits = 0, format = 0;
+                int rate = 0, channels = 0, align = 0, bits = 0, validBits = 0, format = 0;
                 uint byteRate = 0;
                 bool fmtSeen = false;
                 long dataStart = -1, dataSize = 0;
@@ -58,19 +59,27 @@ namespace YMM4McpPlugin
                         format = U16(fmt, 0); channels = U16(fmt, 2); rate = checked((int)U32(fmt, 4));
                         byteRate = U32(fmt, 8);
                         align = U16(fmt, 12); bits = U16(fmt, 14);
+                        validBits = bits;
                         // WAVE_FORMAT_EXTENSIBLE's cbSize must fit within the fmt chunk.
                         // Otherwise malformed headers can claim extension bytes that do not exist.
                         if (format == 0xfffe &&
                             (size < 40 || U16(fmt, 16) < 22 || U16(fmt, 16) > size - 18))
                             return Fail("AUDIO_FILE_INVALID", "WAVE_FORMAT_EXTENSIBLE fmt の長さが不正です");
                         // WAVE_FORMAT_EXTENSIBLE carries the actual PCM/float format in its subtype GUID.
-                        if (format == 0xfffe && size >= 40 && U16(fmt, 16) >= 22 &&
-                            U16(fmt, 18) is > 0 && U16(fmt, 18) <= bits)
+                        if (format == 0xfffe)
                         {
-                            var subtype = new Guid(fmt.AsSpan(24, 16));
-                            if (subtype == new Guid("00000001-0000-0010-8000-00aa00389b71")) format = 1;
-                            else if (bits == 32 && U16(fmt, 18) == 32 &&
-                                subtype == new Guid("00000003-0000-0010-8000-00aa00389b71")) format = 3;
+                            int precision = U16(fmt, 18);
+                            if (precision > 0 && precision <= bits)
+                            {
+                                var subtype = new Guid(fmt.AsSpan(24, 16));
+                                if (subtype == new Guid("00000001-0000-0010-8000-00aa00389b71"))
+                                {
+                                    format = 1;
+                                    validBits = precision;
+                                }
+                                else if (bits == 32 && precision == 32 &&
+                                    subtype == new Guid("00000003-0000-0010-8000-00aa00389b71")) format = 3;
+                            }
                         }
                     }
                     else if (Text(header, 0) == "data")
@@ -102,6 +111,11 @@ namespace YMM4McpPlugin
                 long frames = dataSize / align;
                 long minSilenceFrames = (long)Math.Ceiling(minSilenceSeconds * rate);
                 long minClipFrames = Math.Max(2, (long)Math.Ceiling(MinContinuousClipSeconds * rate));
+                // Left-aligned PCM may reach its positive endpoint below the common
+                // threshold. One-bit PCM has no positive code above silence.
+                double positiveClipThreshold = pcm && validBits > 1
+                    ? Math.Min(NearFullScale, 1.0 - 1.0 / (1L << (validBits - 1)))
+                    : NearFullScale;
                 var issues = new List<AudioQaIssue>();
                 double[] sumSquares = new double[channels];
                 double[] sumSamples = new double[channels];
@@ -146,8 +160,7 @@ namespace YMM4McpPlugin
                             double amplitude = Math.Abs(normalized);
                             peak = Math.Max(peak, amplitude);
                             peaksByChannel[ch] = Math.Max(peaksByChannel[ch], amplitude);
-                            // The positive PCM8 endpoint is 127/128, below the common threshold.
-                            if (amplitude >= 32760.0 / 32768 || (bits == 8 && buffer[offset] == byte.MaxValue))
+                            if (normalized <= -NearFullScale || normalized >= positiveClipThreshold)
                             {
                                 clipped++;
                                 long runLength = ++clipRuns[ch];

@@ -65,7 +65,7 @@ static byte[] FloatWave(float[] samples, bool extensible = false, int channels =
     return bytes;
 }
 
-static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate = 8000)
+static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate = 8000, int? validBits = null)
 {
     int sampleBytes = bits / 8, fmtSize = extensible ? 40 : 16, offset = 20 + fmtSize;
     int dataSize = samples.Length * sampleBytes;
@@ -83,7 +83,7 @@ static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate
     if (extensible)
     {
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(36, 2), 22);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(38, 2), (ushort)bits);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(38, 2), (ushort)(validBits ?? bits));
         new Guid("00000001-0000-0010-8000-00aa00389b71").TryWriteBytes(bytes.AsSpan(44, 16));
     }
     Encoding.ASCII.GetBytes("data").CopyTo(bytes, offset);
@@ -267,6 +267,25 @@ try
             && pcm8Qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING"),
             "PCM8 must detect both clipping endpoints without including RIFF padding as audio");
     }
+    foreach (var (bits, validBits, positiveRail, nextNegative) in new[]
+        { (8, 8, 127, -127), (8, 7, 126, -126), (16, 8, 32512, -32512) })
+    {
+        File.WriteAllBytes(path, PcmWave(Enumerable.Repeat(positiveRail, 8000).ToArray(),
+            bits, extensible: true, validBits: validBits));
+        var clippedQa = WavAudioInspector.Inspect(path);
+        Check(clippedQa.Success && !clippedQa.Passed && clippedQa.Issues.Any(i =>
+            i.Code == "AUDIO_CLIPPING" && i.StartSeconds == 0 && i.EndSeconds == 1),
+            $"PCM {validBits}/{bits} positive endpoint must be detected");
+        File.WriteAllBytes(path, PcmWave(Enumerable.Repeat(nextNegative, 8000).ToArray(),
+            bits, extensible: true, validBits: validBits));
+        Check(WavAudioInspector.Inspect(path).Passed,
+            $"PCM {validBits}/{bits} next negative code must keep the common negative threshold");
+    }
+    File.WriteAllBytes(path, PcmWave(new int[80], 8, extensible: true, validBits: 1));
+    var oneBitSilence = WavAudioInspector.Inspect(path);
+    Check(oneBitSilence.Success && oneBitSilence.Issues.Any(i => i.Code == "AUDIO_SILENT")
+        && !oneBitSilence.Issues.Any(i => i.Code == "AUDIO_CLIPPING"),
+        "one-bit silence must not be counted as clipping");
     var floatSamples = new float[8000 * 2];
     Array.Fill(floatSamples, 0.25f);
     foreach (bool extensible in new[] { false, true })
