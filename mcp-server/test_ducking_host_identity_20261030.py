@@ -169,7 +169,7 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(post.await_count, 1)
 
     async def _apply(self, mutation_responses, *, final_readback=None):
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}]
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, KEYS]
         if final_readback is not None:
             gets.append(final_readback)
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),

@@ -180,6 +180,7 @@ TOOLS = [
                 "shake_distance": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "shake_tachie: X座標の左右移動量"},
                 "voice_item_id": {"type": "string", "description": "jump_tachie/shake_tachie: 発話アイテムの開始を at=0 とする安定ID"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
+                "expected_base_volume": {"type": "number", "exclusiveMinimum": 0, "description": "duck_bgm: プレビューのbase_volume。適用時に異なれば編集前に停止"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
@@ -621,6 +622,41 @@ async def create_from_template(args: dict) -> dict:
             "destination_path": destination, "verified": True}
 
 
+def _bgm_volume_baseline(state: dict, bgm: dict) -> tuple[float | None, dict | None]:
+    if (not isinstance(state, dict) or state.get("success") is not True or
+            "error" in state or "error_code" in state or
+            state.get("revision") != bgm["revision"]):
+        return None, {"error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
+    if ("item_id" in state and state["item_id"] != bgm["item_id"]) or any(
+            field in state and field in bgm and state[field] != bgm[field]
+            for field in ("frame", "layer")):
+        return None, {"error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
+    if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    animations = [a for a in state["animations"]
+                  if isinstance(a, dict) and a.get("prop") == "Volume"]
+    if len(animations) != 1 or not isinstance(animations[0].get("keyframes"), list):
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    keys = animations[0]["keyframes"]
+    if (len(keys) != 1 or not isinstance(keys[0], dict) or
+            type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
+        return None, {"error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
+    if ("absolute_frame" in keys[0] and
+            (type(keys[0]["absolute_frame"]) is not int or
+             keys[0]["absolute_frame"] != bgm.get("frame"))):
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    baseline = keys[0].get("value")
+    if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    try:
+        baseline = finite_number(baseline, "base_volume")
+    except ValueError:
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    if baseline <= 0:
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    return baseline, None
+
+
 async def run_bgm_ducking(args: dict) -> dict:
     item_id = args.get("bgm_item_id")
     if not ducking.valid_identifier(item_id):
@@ -632,6 +668,13 @@ async def run_bgm_ducking(args: dict) -> dict:
     if expected_snapshot is not None and (not isinstance(expected_snapshot, str) or
             re.fullmatch(r"[0-9a-f]{64}", expected_snapshot) is None):
         raise ValueError("expected_snapshot_hash must be a lowercase SHA-256 hex digest")
+    expected_baseline = args.get("expected_base_volume")
+    if expected_baseline is not None:
+        if isinstance(expected_baseline, bool) or not isinstance(expected_baseline, (int, float)):
+            raise ValueError("expected_base_volume must be a positive finite number")
+        expected_baseline = finite_number(expected_baseline, "expected_base_volume")
+        if expected_baseline <= 0:
+            raise ValueError("expected_base_volume must be positive")
     snapshot = await ymm4_get("/items")
     if (not isinstance(snapshot, dict) or
             ("success" in snapshot and snapshot["success"] is not True) or
@@ -714,41 +757,13 @@ async def run_bgm_ducking(args: dict) -> dict:
                 "expected_snapshot_hash": expected_snapshot, "actual_snapshot_hash": snapshot_hash,
                 "applied": []}
     key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
-    state = await ymm4_get(key_path)
-    if (not isinstance(state, dict) or state.get("success") is not True or
-            "error" in state or "error_code" in state or
-            state.get("revision") != revision):
-        return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
-    # A keyframe response for another item must never authorize a mutation.
-    if ("item_id" in state and state["item_id"] != item_id) or any(
-            field in state and field in bgm and state[field] != bgm[field]
-            for field in ("frame", "layer")):
-        return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
-    if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    animations = [a for a in state["animations"]
-                  if isinstance(a, dict) and a.get("prop") == "Volume"]
-    if len(animations) != 1 or not isinstance(animations[0].get("keyframes"), list):
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    keys = animations[0]["keyframes"]
-    if (len(keys) != 1 or not isinstance(keys[0], dict) or
-            type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
-        return {"success": False, "error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
-    # The host also reports the absolute position of the initial keyframe.
-    # A mismatch means the curve may belong to a different timeline location.
-    if ("absolute_frame" in keys[0] and
-            (type(keys[0]["absolute_frame"]) is not int or
-             keys[0]["absolute_frame"] != bgm.get("frame"))):
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    baseline = keys[0].get("value")
-    if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    try:
-        baseline = ducking._finite_input(baseline, "base_volume")
-    except ValueError:
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    if baseline <= 0:
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+    baseline, error = _bgm_volume_baseline(await ymm4_get(key_path), bgm)
+    if error is not None:
+        return {"success": False, **error}
+    if expected_baseline is not None and baseline != expected_baseline:
+        return {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
+                "expected_base_volume": expected_baseline, "actual_base_volume": baseline,
+                "applied": []}
     points = ducking.plan(bgm, voices, baseline,
                           ratio=args.get("duck_ratio", .3),
                           attack_frames=args.get("attack_frames", 5),
@@ -795,6 +810,22 @@ async def run_bgm_ducking(args: dict) -> dict:
                     "backup_path": backup, "applied": [], "outcome_unknown": True}
         return {**conflict, "error_code": "BGM_DUCKING_" + conflict["error_code"],
                 "applied": [], "backup_path": backup}
+    # Manual changes to Volume may leave the timeline item revision unchanged.
+    try:
+        current_state = await ymm4_get(key_path)
+    except Exception as exc:
+        return {"success": False, "error_code": "BGM_DUCKING_VOLUME_UNAVAILABLE",
+                "error": str(exc), "backup_path": backup, "applied": []}
+    current_baseline, error = _bgm_volume_baseline(current_state, bgm)
+    if error is not None:
+        code = ("BGM_DUCKING_VOLUME_CONFLICT" if error["error_code"] == "BGM_HAS_EXISTING_KEYFRAMES"
+                else "BGM_DUCKING_VOLUME_UNAVAILABLE")
+        return {"success": False, "error_code": code, "details": error,
+                "backup_path": backup, "applied": []}
+    if current_baseline != baseline:
+        return {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
+                "expected_base_volume": baseline, "actual_base_volume": current_baseline,
+                "backup_path": backup, "applied": []}
     applied = []
     seen_revisions = {revision}
     for point in points:

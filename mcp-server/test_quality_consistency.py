@@ -168,7 +168,7 @@ class DuckingConsistencyTests(unittest.IsolatedAsyncioTestCase):
         for readback in variants:
             with self.subTest(readback=readback), \
                  patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                     ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, readback])), \
+                     ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS, readback])), \
                  patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                      {"success": True, "backup_path": "C:/backup.ymmp"}, *[
                          {"success": True, "revision": f"r{i}"} for i in range(2, 6)]])):

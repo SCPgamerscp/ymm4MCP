@@ -112,7 +112,7 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unchanged_revision_after_set_is_unknown_outcome(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                  {"success": True, "backup_path": "C:/backup/cp.ymmp"},
                  {"success": True, "revision": "r1"}])) as post:

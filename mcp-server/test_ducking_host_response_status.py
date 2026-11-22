@@ -61,7 +61,7 @@ class BgmHostResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mutation_error_marker_is_reported_as_unknown_outcome(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                ITEMS, KEYS, PROJECT, ITEMS])), \
+                ITEMS, KEYS, PROJECT, ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                  CHECKPOINT, {"success": True, "revision": "r2",
                               "error_code": None}])) as post:

@@ -138,7 +138,7 @@ class HostBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
     async def _attempt_mutation(self, response):
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                  ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                  ITEMS, KEYS, {"success": True, "isSaved": True}, KEYS])),
               patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                   {"success": True, "backup_path": "C:/backup/cp.ymmp"}, response])) as post,
               patch.object(server.quality_guard, "verify_snapshot",
