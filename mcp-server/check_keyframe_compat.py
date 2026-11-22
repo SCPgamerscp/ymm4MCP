@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import sys
 from urllib.parse import quote
 
@@ -92,10 +93,14 @@ def snapshot_all_animations(client: httpx.Client, base: str,
     return snapshot, revision
 
 
+def valid_timeline_id(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"timeline:[0-9a-f]{32}", value) is not None
+
+
 def validate_test_item(client: httpx.Client, base: str,
                        headers: dict[str, str], item_id: str, at: int | None,
-                       *, require_persistent: bool = False) -> tuple[int, str | None]:
-    """Resolve the relative frame and item revision from one inventory."""
+                       *, require_persistent: bool = False) -> tuple[int, str | None, str | None]:
+    """Resolve the relative frame, item revision, and live timeline from one inventory."""
     try:
         response = client.get(base + "/items", headers=headers)
         response.raise_for_status()
@@ -120,7 +125,10 @@ def validate_test_item(client: httpx.Client, base: str,
     if type(frame) is not int or not 0 < frame < length:
         raise ProbeError(f"Frame {frame} is outside the target item length; refusing edit")
     revision = item.get("revision")
-    return frame, revision if isinstance(revision, str) else None
+    timeline_id = payload.get("timeline_id")
+    if "timeline_id" in payload and not valid_timeline_id(timeline_id):
+        raise ProbeError("Live timeline identity is unavailable")
+    return frame, revision if isinstance(revision, str) else None, timeline_id
 
 
 
@@ -151,7 +159,7 @@ def _unacknowledged_insert_is_isolated(current: dict[str, list[dict]],
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, at: int | None, values: dict[str, float]) -> None:
     last_frame = at is None
-    at, item_revision = validate_test_item(client, base, headers, item_id, at)
+    at, item_revision, _ = validate_test_item(client, base, headers, item_id, at)
     # Capture every property before writing: YMM4 may share one KeyFrames
     # collection among Zoom, X and other animation properties.
     baseline, baseline_revision = snapshot_all_animations(client, base, headers, item_id)
@@ -186,7 +194,7 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             if current != baseline:
                 raise ProbeError(f"{prop}: animation inventory changed; refusing edit")
             if last_frame:
-                current_at, item_revision = validate_test_item(client, base, headers, item_id, None)
+                current_at, item_revision, _ = validate_test_item(client, base, headers, item_id, None)
                 if current_at != at or item_revision != current_revision:
                     raise ProbeError(f"{prop}: item length or revision changed; refusing last-frame edit")
             _, revision = keyframes(client, base, headers, item_id, prop)

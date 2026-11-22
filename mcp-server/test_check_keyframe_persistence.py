@@ -12,6 +12,8 @@ from check_keyframe_persistence import capture, verify
 
 BASE = "http://127.0.0.1:8765/api"
 HEADERS = {"X-Ymm4-Token": "test-token"}
+BEFORE_TIMELINE = "timeline:" + "a" * 32
+REOPENED_TIMELINE = "timeline:" + "b" * 32
 
 
 class FakeYmm4:
@@ -22,6 +24,7 @@ class FakeYmm4:
         self.item_id = "native:test"
         self.length = 100
         self.item_revision = "r1"
+        self.timeline_metadata = {}
         self.frames = {"Zoom": [{"at": 0, "value": 1.0}, {"at": 24, "value": 1.25}],
                        "X": [{"at": 0, "value": 0.0}, {"at": 24, "value": 80.0}],
                        "Opacity": [{"at": 0, "value": 100.0}]}
@@ -37,7 +40,8 @@ class FakeYmm4:
         if request.url.path == "/api/items":
             return httpx.Response(200, json={"items": [{"item_id": self.item_id,
                 "identity_persistent": self.persistent,
-                "length": self.length, "revision": self.item_revision, "type": "ImageItem"}]})
+                "length": self.length, "revision": self.item_revision, "type": "ImageItem"}],
+                **self.timeline_metadata})
         if request.url.path == "/api/items/keyframes":
             prop = request.url.params.get("prop")
             props = [prop] if prop else list(self.frames)
@@ -70,14 +74,54 @@ class KeyframePersistenceTests(unittest.TestCase):
         self.fake.saved = True
 
     def test_capture_then_save_and_reopen_verifies_full_inventory(self):
+        self.fake.timeline_metadata = {"timeline_id": BEFORE_TIMELINE}
         self.capture()
         self.assertFalse(self.fake.saved)
         data = json.loads(self.snapshot.read_text())
         self.assertEqual(data["animations"]["Opacity"][0]["value"], 100.0)
+        self.assertEqual(data["timeline_id"], BEFORE_TIMELINE)
         self.assertNotIn("test-token", self.snapshot.read_text())
         self.save()
+        self.fake.timeline_metadata["timeline_id"] = REOPENED_TIMELINE
         verify(self.client, BASE, HEADERS, self.snapshot)
         self.assertTrue(all(r.method == "GET" for r in self.fake.requests))
+
+    def test_verify_rejects_saving_without_reopening_live_timeline(self):
+        self.fake.timeline_metadata = {"timeline_id": BEFORE_TIMELINE}
+        self.capture()
+        self.save()
+        with self.assertRaisesRegex(ProbeError, "original live timeline is still active"):
+            verify(self.client, BASE, HEADERS, self.snapshot)
+
+    def test_verify_rejects_missing_live_timeline_after_capture(self):
+        self.fake.timeline_metadata = {"timeline_id": BEFORE_TIMELINE}
+        self.capture()
+        self.save()
+        self.fake.timeline_metadata.clear()
+        with self.assertRaisesRegex(ProbeError, "now missing"):
+            verify(self.client, BASE, HEADERS, self.snapshot)
+
+    def test_capture_rejects_a_null_live_timeline(self):
+        self.fake.timeline_metadata = {"timeline_id": None}
+        with self.assertRaisesRegex(ProbeError, "Live timeline identity is unavailable"):
+            self.capture()
+        self.assertFalse(self.snapshot.exists())
+
+    def test_verify_rejects_timeline_switch_during_readback_even_with_same_revision(self):
+        self.fake.timeline_metadata = {"timeline_id": BEFORE_TIMELINE}
+        self.capture()
+        self.save()
+        self.fake.timeline_metadata["timeline_id"] = REOPENED_TIMELINE
+
+        def switch_timeline(request):
+            response = self.fake(request)
+            if request.url.params.get("prop") == "X":
+                self.fake.timeline_metadata["timeline_id"] = "timeline:" + "c" * 32
+            return response
+
+        with httpx.Client(transport=httpx.MockTransport(switch_timeline), trust_env=False) as client:
+            with self.assertRaisesRegex(ProbeError, "live timeline changed during snapshot"):
+                verify(client, BASE, HEADERS, self.snapshot)
 
     def test_capture_refuses_preexisting_snapshot(self):
         self.capture()

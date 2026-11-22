@@ -15,7 +15,8 @@ import sys
 import httpx
 
 from check_keyframe_compat import (ProbeError, api, keyframes,
-                                   snapshot_all_animations, validate_test_item)
+                                   snapshot_all_animations, valid_timeline_id,
+                                   validate_test_item)
 from ymm4_connection import connection_settings
 
 SCHEMA = 1
@@ -37,9 +38,9 @@ def _project(client: httpx.Client, base: str, headers: dict) -> tuple[str, Path,
 
 
 def _state(client: httpx.Client, base: str, headers: dict,
-           item_id: str, at: int | None, values: dict[str, float]) -> tuple[dict, int]:
-    at, item_revision = validate_test_item(client, base, headers, item_id, at,
-                                           require_persistent=True)
+           item_id: str, at: int | None, values: dict[str, float]) -> tuple[dict, int, str | None]:
+    initial = validate_test_item(client, base, headers, item_id, at, require_persistent=True)
+    resolved_at, item_revision, timeline_id = initial
     animations, revision = snapshot_all_animations(client, base, headers, item_id)
     if item_revision != revision:
         raise ProbeError("Image revision changed or was unavailable during snapshot")
@@ -47,13 +48,15 @@ def _state(client: httpx.Client, base: str, headers: dict,
         frames, prop_revision = keyframes(client, base, headers, item_id, prop)
         if prop_revision != revision or frames != animations.get(prop):
             raise ProbeError(f"{prop}: timeline changed during snapshot")
-        matches = [f for f in frames if f["at"] == at]
+        matches = [f for f in frames if f["at"] == resolved_at]
         if len(matches) != 1 or type(matches[0].get("value")) not in (int, float):
             raise ProbeError(f"{prop}: expected keyframe is missing or ambiguous")
         actual = matches[0]["value"]
         if not math.isfinite(actual) or not math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-5):
             raise ProbeError(f"{prop}: expected {expected}, got {actual!r}")
-    return animations, at
+    if validate_test_item(client, base, headers, item_id, at, require_persistent=True) != initial:
+        raise ProbeError("Image or live timeline changed during snapshot")
+    return animations, resolved_at, timeline_id
 
 
 def capture(client: httpx.Client, base: str, headers: dict, item_id: str,
@@ -63,7 +66,7 @@ def capture(client: httpx.Client, base: str, headers: dict, item_id: str,
         raise ProbeError("Edit the disposable project before capture; isSaved must be false")
     mtime_ns = path.stat().st_mtime_ns
     last_frame = at is None
-    animations, at = _state(client, base, headers, item_id, at, values)
+    animations, at, timeline_id = _state(client, base, headers, item_id, at, values)
     # Guard against a concurrent project switch or save while reading.
     second_name, _, second_saved = _project(client, base, headers)
     if second_name != project_name or second_saved or path.stat().st_mtime_ns != mtime_ns:
@@ -72,6 +75,8 @@ def capture(client: httpx.Client, base: str, headers: dict, item_id: str,
                "project_mtime_ns": mtime_ns,
                "item_id": item_id, "at": at, "last_frame": last_frame, "values": values,
                "animations": animations}
+    if timeline_id is not None:
+        payload["timeline_id"] = timeline_id
     encoded = (json.dumps(payload, ensure_ascii=False, allow_nan=False,
                           separators=(",", ":")) + "\n").encode("utf-8")
     if len(encoded) > MAX_SNAPSHOT_BYTES:
@@ -98,6 +103,7 @@ def verify(client: httpx.Client, base: str, headers: dict, snapshot: Path) -> No
             or not isinstance(data.get("item_id"), str)
             or type(data.get("at")) is not int or data["at"] <= 0
             or type(data.get("last_frame", False)) is not bool
+            or ("timeline_id" in data and not valid_timeline_id(data["timeline_id"]))
             or not isinstance(data.get("values"), dict)
             or set(data["values"]) != {"Zoom", "X"}
             or any(type(v) not in (int, float) or not math.isfinite(v)
@@ -110,8 +116,15 @@ def verify(client: httpx.Client, base: str, headers: dict, snapshot: Path) -> No
     mtime_ns = path.stat().st_mtime_ns
     if mtime_ns <= data["project_mtime_ns"]:
         raise ProbeError("Project file was not saved after capture")
-    current, at = _state(client, base, headers, data["item_id"],
-                         None if data.get("last_frame") else data["at"], data["values"])
+    current, at, timeline_id = _state(client, base, headers, data["item_id"],
+                                      None if data.get("last_frame") else data["at"],
+                                      data["values"])
+    previous_timeline_id = data.get("timeline_id")
+    if previous_timeline_id is not None:
+        if timeline_id is None:
+            raise ProbeError("Live timeline identity was present at capture but is now missing")
+        if timeline_id == previous_timeline_id:
+            raise ProbeError("The original live timeline is still active; close and reopen the saved project")
     if at != data["at"]:
         raise ProbeError("Image last frame differs after save/reopen")
     if current != data["animations"]:
@@ -120,7 +133,10 @@ def verify(client: httpx.Client, base: str, headers: dict, snapshot: Path) -> No
     if second_name != project_name or not second_saved or path.stat().st_mtime_ns != mtime_ns:
         raise ProbeError("Project changed during save/reopen verification")
     print("PASS verify: saved project and full Zoom/X animation inventory match capture")
-    print("NOTE: YMM4 reopen was manually confirmed, not observable through this API")
+    if previous_timeline_id is not None:
+        print("PASS verify: live timeline identity changed after the operator-confirmed reopen")
+    else:
+        print("NOTE: Capture has no live timeline identity; YMM4 reopen relies on manual confirmation")
 
 
 def main(argv: list[str] | None = None) -> int:

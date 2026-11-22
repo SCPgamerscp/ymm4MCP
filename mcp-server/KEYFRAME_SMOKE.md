@@ -35,13 +35,13 @@ python mcp-server/check_keyframe_compat.py --item-id "native:YOUR-TEST-IMAGE" --
 python mcp-server/check_keyframe_persistence.py capture --snapshot "$env:TEMP\\ymm4-keyframe-capture.json" --item-id "native:YOUR-TEST-IMAGE" --last-frame --zoom 1.25 --x 80 --confirm-test-project
 ```
 
-3. **YMM4のUIから**使い捨てプロジェクトを保存し、いったん閉じて同じ `.ymmp` を開き直します。再読込はAPIで証明できないため、操作者が確認してください。
+3. **YMM4のUIから**使い捨てプロジェクトを保存し、いったん閉じて同じ `.ymmp` を開き直します。操作者が閉じて開き直したことを確認してください。プラグインがライブタイムラインIDを返す場合は、検証時にIDが切り替わったことも確認します。
 4. 同じPCで次を実行します。
 
 ```powershell
 python mcp-server/check_keyframe_persistence.py verify --snapshot "$env:TEMP\\ymm4-keyframe-capture.json" --confirm-test-project --confirm-reopened
 ```
 
-`verify` はプロジェクトパスの一致・保存済み状態・ファイル更新時刻の前進・画像の永続ID・Zoom/Xの期待値・**全Animationのキーフレーム一覧**を比較します。`--last-frame` で採取した場合は画像の最終フレームも照合し、検査中にプロジェクトや画像が切り替わった場合は停止します。スナップショットはローカルのプロジェクトパスとキー値を含むため公開しないでください。既存スナップショットを上書きせず、接続トークンも保存しません。
+`verify` はプロジェクトパスの一致・保存済み状態・ファイル更新時刻の前進・画像の永続ID・Zoom/Xの期待値・**全Animationのキーフレーム一覧**を比較します。`--last-frame` で採取した場合は画像の最終フレームも照合し、検査中にプロジェクトや画像が切り替わった場合は停止します。採取時にライブタイムラインIDを取得できた場合は、保存しただけで元のタイムラインが開いたままの場合や、検証時にIDを取得できない場合も失敗です。スナップショットはローカルのプロジェクトパスとキー値を含むため公開しないでください。既存スナップショットを上書きせず、接続トークンも保存しません。
 
-**限界:** APIだけではYMM4のUIで実際に閉じて開き直した事実や、プレビュー表示の正しさは検証できません。テストのPASSだけでIssue #140をクローズせず、プレビュー・再編集・削除の実機確認とPRマージも必要です。CIの `test_check_keyframe_persistence.py` はHTTPモックであり、YMM4実機を使用しません。
+**限界:** 操作者による再読込の確認とプレビューの目視確認は必要です。ライブタイムラインIDを返さない旧プラグインや旧スナップショットでは、再読込の判定に操作者の確認を使います。テストのPASSだけでIssue #140をクローズせず、プレビュー・再編集・削除の実機確認とPRマージも必要です。CIの `test_check_keyframe_persistence.py` はHTTPモックであり、YMM4実機を使用しません。
