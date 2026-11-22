@@ -27,4 +27,38 @@ namespace YMM4McpPlugin
             return true;
         }
     }
+
+    // Accessed on the YMM4 dispatcher. Cancelling the MCP wait does not
+    // cancel the encoder Task, which may still be using the native exporter.
+    internal sealed class NativeExportTaskTracker
+    {
+        private Task? pending;
+        private bool starting;
+
+        internal (bool invoked, string method, string target, Task? task)? TryStart(
+            Func<(bool invoked, string method, string target, Task? task)> start)
+        {
+            if (starting || pending is { IsCompleted: false })
+                return null;
+
+            pending = null;
+            // A native call can pump the dispatcher before returning a Task.
+            starting = true;
+            try
+            {
+                var invocation = start();
+                pending = invocation.task;
+
+                // A failure may arrive after the MCP job stopped waiting.
+                if (pending is { } task)
+                    _ = task.ContinueWith(static completed => { _ = completed.Exception; },
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+
+                return invocation;
+            }
+            finally { starting = false; }
+        }
+    }
 }

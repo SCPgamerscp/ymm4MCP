@@ -26,6 +26,8 @@ namespace YMM4McpPlugin
         private static readonly string[] SaveAsMethodHints =
             { "SaveAsProject", "SaveProjectAs", "SaveAs", "SaveProject" };
         private static readonly Guid ExportSessionId = Guid.NewGuid();
+        // The HTTP listener can restart while a native export is still alive.
+        private static readonly NativeExportTaskTracker NativeExports = new();
         private static readonly ConditionalWeakTable<object, ExportTimelineToken> ExportTimelines = new();
 
         private sealed class ExportTimelineToken
@@ -131,30 +133,38 @@ namespace YMM4McpPlugin
             (long length, DateTime lastWriteUtc)? previousOutput = null;
             bool overwrite = RequestBool(job.Request, "overwrite");
             ExportDiscovery? discovery = null;
-            bool sourceChanged = false;
+            string? startErrorCode = null;
             var start = Application.Current.Dispatcher.Invoke<(bool invoked, string method, string target, Task? task)?>(() =>
             {
                 token.ThrowIfCancellationRequested();
                 discovery = DiscoverExportSurface();
                 if (job.ExportSource?.Matches(CaptureExportProject()) != true)
                 {
-                    sourceChanged = true;
+                    startErrorCode = "EXPORT_PROJECT_CHANGED";
                     return null;
                 }
                 // A queued or resumed job may have missed the enqueue-time
                 // check. Read the path before invoking the native exporter.
                 if (!ExportInvocationPolicy.TryCaptureOutputBaseline(outputPath, overwrite, out previousOutput))
+                {
+                    startErrorCode = "FILE_EXISTS";
                     return null;
-                return StartNativeExport(discovery, outputPath, format);
+                }
+                var invocation = NativeExports.TryStart(() => StartNativeExport(discovery, outputPath, format));
+                if (invocation is null)
+                    startErrorCode = "EXPORT_NATIVE_BUSY";
+                return invocation;
             });
             if (start is null)
             {
-                string message = sourceChanged
-                    ? "書き出し元のプロジェクトを確認できないため開始しませんでした"
-                    : "出力先が既に存在するため書き出しを開始しませんでした";
+                string message = startErrorCode switch
+                {
+                    "EXPORT_PROJECT_CHANGED" => "書き出し元のプロジェクトを確認できないため開始しませんでした",
+                    "EXPORT_NATIVE_BUSY" => "前回のYMM4書き出しが実行中です。完了後に再開してください",
+                    _ => "出力先が既に存在するため書き出しを開始しませんでした"
+                };
                 UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
-                    errorCode: sourceChanged ? "EXPORT_PROJECT_CHANGED" : "FILE_EXISTS",
-                    result: new { output_path = outputPath, format });
+                    errorCode: startErrorCode, result: new { output_path = outputPath, format });
                 return;
             }
             var started = start.Value;
