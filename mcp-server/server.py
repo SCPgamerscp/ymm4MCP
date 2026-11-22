@@ -841,7 +841,7 @@ async def set_expression(args: dict) -> dict:
     expression = args.get("expression")
     mapping = args.get("expression_map")
     dry_run = args.get("dry_run", True)
-    if not isinstance(item_id, str) or not item_id.strip():
+    if not ducking.valid_identifier(item_id):
         raise ValueError("set_expression requires item_id")
     if not isinstance(expression, str) or not 1 <= len(expression) <= 64:
         raise ValueError("expression must be a nonempty label of at most 64 characters")
@@ -855,17 +855,23 @@ async def set_expression(args: dict) -> dict:
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
     expected = args.get("expected_revision")
-    if expected is not None and (not isinstance(expected, str) or not expected):
-        raise ValueError("expected_revision must be a nonempty string")
+    if expected is not None and not ducking.valid_identifier(expected, max_length=256):
+        raise ValueError("expected_revision must be a valid revision identifier")
     snapshot = await ymm4_get("/items")
-    if not isinstance(snapshot, dict) or snapshot.get("success") is False or "error" in snapshot or \
-            not isinstance(snapshot.get("items"), list):
+    if (not isinstance(snapshot, dict) or
+            ("success" in snapshot and snapshot["success"] is not True) or
+            "error" in snapshot or "error_code" in snapshot or
+            not isinstance(snapshot.get("items"), list)):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    if "count" in snapshot and (type(snapshot["count"]) is not int or
+                                snapshot["count"] != len(snapshot["items"])):
+        return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
+                "reported_count": snapshot["count"], "observed_count": len(snapshot["items"])}
     matches = [item for item in snapshot["items"] if isinstance(item, dict) and item.get("item_id") == item_id]
-    if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("faceitem"):
+    if len(matches) != 1 or not scene_media.is_known_item_type(matches[0].get("type"), ("faceitem",)):
         return {"success": False, "error_code": "FACE_ITEM_NOT_FOUND", "item_id": item_id}
     revision = matches[0].get("revision")
-    if not isinstance(revision, str) or not revision:
+    if not ducking.valid_identifier(revision, max_length=256):
         return {"success": False, "error_code": "FACE_REVISION_UNAVAILABLE", "item_id": item_id}
     if expected is not None and expected != revision:
         return {"success": False, "error_code": "REVISION_CONFLICT", "item_id": item_id}
@@ -875,15 +881,28 @@ async def set_expression(args: dict) -> dict:
         return result
     try:
         changed = await ymm4_post("/items/face/param", {
-            "item_id": item_id, "expected_revision": revision, "FacePath": mapping[expression]})
+            "item_id": item_id, "expected_revision": revision, "FacePath": mapping[expression],
+            "require_face_path_readback": True})
     except httpx.HTTPError as exc:
         return {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
                 "item_id": item_id, "outcome_unknown": True, "error": str(exc)}
-    if not isinstance(changed, dict) or changed.get("success") is not True:
+    if (isinstance(changed, dict) and changed.get("success") is False and
+            changed.get("changed") is not True and
+            (changed.get("outcome_unknown") is False or "outcome_unknown" not in changed)):
         return {"success": False, "error_code": "EXPRESSION_UPDATE_FAILED",
                 "item_id": item_id, "details": changed}
-    return {**result, "dry_run": False, "revision": changed.get("revision"),
-            "host_result": changed}
+    if (not isinstance(changed, dict) or changed.get("success") is not True or
+            "error" in changed or changed.get("error_code") is not None or
+            changed.get("item_id") != item_id or changed.get("changed") is not True or
+            changed.get("outcome_unknown") is not False or
+            changed.get("face_path") != mapping[expression] or
+            changed.get("results") != ["FacePath=OK"] or
+            not ducking.valid_identifier(changed.get("revision"), max_length=256) or
+            changed["revision"] == revision):
+        return {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
+                "item_id": item_id, "outcome_unknown": True, "details": changed}
+    return {**result, "dry_run": False, "revision": changed["revision"],
+            "verified": True, "host_result": changed}
 
 
 async def jump_tachie(args: dict) -> dict:

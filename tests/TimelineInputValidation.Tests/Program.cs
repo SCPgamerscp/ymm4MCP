@@ -17,6 +17,33 @@ static void Invalid(Action action)
     throw new Exception("Expected ArgumentException");
 }
 
+const string requestedFacePath = "C:/faces/angry.png";
+string activeFacePath = "C:/faces/happy.png";
+int faceWrites = 0;
+foreach (object? observed in new object?[] { activeFacePath, null, 0 })
+{
+    bool rejected = false;
+    try
+    {
+        FacePathMutation.SetAndVerify(requestedFacePath, () => faceWrites++, () => observed);
+    }
+    catch (InvalidOperationException) { rejected = true; }
+    Equal(true, rejected);
+}
+Equal(3, faceWrites);
+Equal(requestedFacePath, FacePathMutation.SetAndVerify(requestedFacePath,
+    () => activeFacePath = requestedFacePath, () => activeFacePath));
+Equal(requestedFacePath, activeFacePath);
+bool readbackFailed = false;
+try
+{
+    FacePathMutation.SetAndVerify(requestedFacePath,
+        () => activeFacePath = requestedFacePath,
+        () => throw new InvalidOperationException("FaceParameter getter failed"));
+}
+catch (InvalidOperationException) { readbackFailed = true; }
+Equal(true, readbackFailed);
+
 Equal(7, TimelineInputValidation.GetInt(Body("{}"), "frame", 7));
 Equal(-1, TimelineInputValidation.GetInt(Body("{\"frame\":-1}"), "frame", 7));
 Equal(int.MaxValue, TimelineInputValidation.GetInt(Body("{\"frame\":2147483647}"), "frame", 7));
