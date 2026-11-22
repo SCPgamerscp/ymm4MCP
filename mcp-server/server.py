@@ -1125,14 +1125,15 @@ async def dispatch(args: dict) -> Any:
                     snapshot = await ymm4_get("/items")
                     if (not isinstance(snapshot, dict) or
                             ("success" in snapshot and snapshot["success"] is not True) or
+                            ("success" not in snapshot and "count" not in snapshot) or
                             "error" in snapshot or "error_code" in snapshot or
                             not isinstance(snapshot.get("items"), list)):
                         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
                     items = snapshot["items"]
                     # The native endpoint reports items/count without a success
                     # flag. Its inventory is usable only if that count is sound.
-                    if "count" in snapshot or "success" not in snapshot:
-                        count = snapshot.get("count")
+                    if "count" in snapshot:
+                        count = snapshot["count"]
                         if type(count) is not int or count != len(items):
                             return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
                                     "reported_count": count, "observed_count": len(items)}

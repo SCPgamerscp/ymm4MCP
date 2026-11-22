@@ -34,15 +34,17 @@ class MissingAssetTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(issue["code"] == "ASSET_MISSING" for issue in result["qa"]["issues"]))
 
     async def test_incomplete_asset_inventory_fails_before_media_probes(self):
-        for fields in ({}, {"count": 0}, {"count": True}, {"count": "1"},
-                       {"success": True, "count": 2}):
+        for fields, code in (({}, "ITEMS_UNAVAILABLE"), ({"count": 0}, "ITEMS_INVENTORY_INCOMPLETE"),
+                             ({"count": True}, "ITEMS_INVENTORY_INCOMPLETE"),
+                             ({"count": "1"}, "ITEMS_INVENTORY_INCOMPLETE"),
+                             ({"success": True, "count": 2}, "ITEMS_INVENTORY_INCOMPLETE")):
             snapshot = {"items": [{"item_id": "a", "type": "ImageItem",
                                    "source_path": "C:/Media/a.png"}], **fields}
             with self.subTest(fields=fields), patch.object(
                     server, "ymm4_get", AsyncMock(return_value=snapshot)) as get:
                 result = await server.dispatch({"action": "get_info", "sub_action": "missing_assets"})
             self.assertFalse(result["success"])
-            self.assertEqual(result["error_code"], "ITEMS_INVENTORY_INCOMPLETE")
+            self.assertEqual(result["error_code"], code)
             get.assert_awaited_once_with("/items")
 
     async def test_deduplicates_paths_and_reports_unknown_sources(self):
