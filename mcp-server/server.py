@@ -185,7 +185,7 @@ TOOLS = [
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "expected_plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: 確認済みplan_editのplan_hash。異なる場合は編集前に停止"},
-                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit/add_script: 確認済みタイムラインハッシュ。不一致なら編集前に停止"},
+                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit/add_script/duck_bgm: 確認済みタイムラインハッシュ。不一致なら編集前に停止"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
                 "check_project_settings": {"type": "boolean", "description": "plan_edit/apply_edit: 計画のFPS・解像度が現在のYMM4プロジェクトと一致することを確認する"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
@@ -628,6 +628,10 @@ async def run_bgm_ducking(args: dict) -> dict:
     dry_run = args.get("dry_run", True)
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
+    expected_snapshot = args.get("expected_snapshot_hash")
+    if expected_snapshot is not None and (not isinstance(expected_snapshot, str) or
+            re.fullmatch(r"[0-9a-f]{64}", expected_snapshot) is None):
+        raise ValueError("expected_snapshot_hash must be a lowercase SHA-256 hex digest")
     snapshot = await ymm4_get("/items")
     if (not isinstance(snapshot, dict) or
             ("success" in snapshot and snapshot["success"] is not True) or
@@ -635,10 +639,14 @@ async def run_bgm_ducking(args: dict) -> dict:
             not isinstance(snapshot.get("items"), list) or
             len(snapshot["items"]) > 10000):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    if "count" in snapshot and (type(snapshot["count"]) is not int or
+                                snapshot["count"] != len(snapshot["items"])):
+        return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
+                "reported_count": snapshot["count"], "observed_count": len(snapshot["items"])}
     matches = [i for i in snapshot["items"] if isinstance(i, dict) and i.get("item_id") == item_id]
     if len(matches) > 1:
         return {"success": False, "error_code": "ITEM_ID_AMBIGUOUS", "item_id": item_id}
-    if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("audioitem"):
+    if len(matches) != 1 or not scene_media.is_known_item_type(matches[0].get("type"), ("audioitem",)):
         return {"success": False, "error_code": "BGM_ITEM_NOT_FOUND"}
     bgm = matches[0]
     revision = bgm.get("revision")
@@ -652,7 +660,7 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "REVISION_CONFLICT",
                     "bgm_item_id": item_id}
     voices = [i for i in snapshot["items"] if isinstance(i, dict) and
-              str(i.get("type", "")).lower().endswith("voiceitem")]
+              scene_media.is_known_item_type(i.get("type"), ("voiceitem",))]
     if any(not ducking.valid_identifier(voice.get("item_id")) for voice in voices):
         return {"success": False, "error_code": "VOICE_ITEM_ID_INVALID"}
     # Duplicate host IDs make an explicit selection ambiguous and can also
@@ -697,6 +705,14 @@ async def run_bgm_ducking(args: dict) -> dict:
             if key in seen_ids:
                 return {"success": False, "error_code": "ITEM_ID_AMBIGUOUS", "item_id": key}
             seen_ids.add(key)
+    try:
+        snapshot_hash = editplan.snapshot_hash(snapshot["items"])
+    except (ValueError, RecursionError) as exc:
+        return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN", "error": str(exc)}
+    if expected_snapshot is not None and snapshot_hash != expected_snapshot:
+        return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_CONFLICT",
+                "expected_snapshot_hash": expected_snapshot, "actual_snapshot_hash": snapshot_hash,
+                "applied": []}
     key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
     state = await ymm4_get(key_path)
     if (not isinstance(state, dict) or state.get("success") is not True or
@@ -738,7 +754,8 @@ async def run_bgm_ducking(args: dict) -> dict:
                           attack_frames=args.get("attack_frames", 5),
                           release_frames=args.get("release_frames", 10))
     result = {"success": True, "dry_run": dry_run, "bgm_item_id": item_id,
-              "voice_count": len(voices), "keyframes": points, "base_volume": baseline}
+              "voice_count": len(voices), "keyframes": points, "base_volume": baseline,
+              "snapshot_hash": snapshot_hash}
     if dry_run or not points:
         return result
     project = await ymm4_get("/project")

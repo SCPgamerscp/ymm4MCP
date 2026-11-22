@@ -42,6 +42,45 @@ class DuckingPlanTests(unittest.TestCase):
 
 
 class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_apply_rejects_voice_changes_since_the_reviewed_preview(self):
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            preview = await server.dispatch(args)
+        changed = {"items": [ITEMS["items"][0], {**ITEMS["items"][1], "frame": 22}]}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=changed)) as get, \
+                patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({**args, "dry_run": False,
+                                            "expected_snapshot_hash": preview["snapshot_hash"]})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_SNAPSHOT_CONFLICT")
+        self.assertEqual(result["applied"], [])
+        get.assert_awaited_once_with("/items")
+        post.assert_not_awaited()
+
+    async def test_incomplete_inventory_cannot_produce_a_ducking_preview(self):
+        for count in (0, 3, True, "2"):
+            with self.subTest(count=count), patch.object(
+                    server, "ymm4_get", AsyncMock(return_value={**ITEMS, "count": count})) as get:
+                result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1"})
+            self.assertEqual(result["error_code"], "ITEMS_INVENTORY_INCOMPLETE")
+            get.assert_awaited_once_with("/items")
+
+    async def test_only_recognized_audio_and_voice_item_types_authorize_ducking(self):
+        bgm, voice = ITEMS["items"]
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={
+                "items": [{**bgm, "type": "Other.NotAudioItem"}, voice]})) as get:
+            result = await server.dispatch(args)
+        self.assertEqual(result["error_code"], "BGM_ITEM_NOT_FOUND")
+        get.assert_awaited_once_with("/items")
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"items": [{**bgm, "type": "YukkuriMovieMaker.Items.AudioItem"},
+                           {**voice, "type": "Other.NotVoiceItem"}]}, KEYS])):
+            result = await server.dispatch(args)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["voice_count"], 0)
+        self.assertEqual(result["keyframes"], [])
+
     async def test_selected_voice_outside_bgm_rejects_before_keyframe_access(self):
         distant = {"items": [ITEMS["items"][0],
                              {**ITEMS["items"][1], "frame": 100}]}
@@ -83,6 +122,9 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_apply_uses_revision_chain_and_verifies(self):
         planned = ducking.plan(ITEMS["items"][0], ITEMS["items"][1:], 100)
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            preview = await server.dispatch(args)
         verified = {"success": True, "item_id": "bgm:1", "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
             {"at": 0, "value": 100, "absolute_frame": 0},
             *[{**point, "absolute_frame": point["at"]} for point in planned]]}]}
@@ -91,7 +133,8 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post:
-            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+            result = await server.dispatch({**args, "dry_run": False,
+                                            "expected_snapshot_hash": preview["snapshot_hash"]})
         self.assertTrue(result["verified"])
         self.assertEqual([call.args[1]["expected_revision"] for call in post.await_args_list[1:]],
                          ["r1", "r2", "r3", "r4"])
