@@ -573,13 +573,13 @@ namespace YMM4McpPlugin
                 if (CurrentProjectSaveState() is not true)
                     return (object)Failure("UNSAVED_CHANGES",
                         "保存状態が不明か未保存の変更があります。保存してから復元してください");
-                var invoked = InvokeNamed(OpenMethodHints, record.BackupPath!);
+                var invoked = InvokeNamed(OpenMethodHints, backup.BackupPath);
                 if (!invoked.ok)
                     return (object)Failure("OPEN_METHOD_UNAVAILABLE",
                         "YMM4でバックアッププロジェクトを開くメソッドが見つかりません");
                 if (invoked.task != null)
                     await invoked.task;
-                if (!EditCheckpointSafety.SameProject(record.BackupPath, CurrentProjectPath()))
+                if (!EditCheckpointSafety.SameProject(backup.BackupPath, CurrentProjectPath()))
                     return (object)new
                     {
                         success = false,

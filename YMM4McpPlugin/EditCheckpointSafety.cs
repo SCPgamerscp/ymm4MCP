@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
 
 namespace YMM4McpPlugin
 {
@@ -167,45 +169,116 @@ namespace YMM4McpPlugin
                 (ch >= 'a' && ch <= 'f') ||
                 (ch >= 'A' && ch <= 'F'));
 
-        // A full restore opens a saved checkpoint backup as a separate project.
-        // Never open an arbitrary path supplied by a persisted checkpoint index,
-        // a backup for a different project, an empty file, or a reparse point.
-        internal static FileStream? OpenVerifiedBackup(
+        // Keep the verified project path stable until YMM4 finishes opening it.
+        internal sealed class VerifiedBackup(string path) : IDisposable
+        {
+            private readonly List<SafeFileHandle> directories = new();
+            private FileStream? stream;
+
+            internal string BackupPath { get; } = path;
+
+            internal bool LockDirectories()
+            {
+                var parents = new Stack<string>();
+                for (string? directory = Path.GetDirectoryName(BackupPath);
+                     directory != null && !Path.EndsInDirectorySeparator(directory);
+                     directory = Path.GetDirectoryName(directory))
+                    parents.Push(directory);
+
+                // Validate each directory before resolving its child. Holding the
+                // handle without delete sharing keeps the validated path in place.
+                foreach (string directory in parents)
+                {
+                    var handle = OpenEntry(directory, FileListDirectory | FileReadAttributes, FileShare.ReadWrite,
+                        OpenReparsePoint | BackupSemantics);
+                    directories.Add(handle);
+                    if (handle.IsInvalid || (File.GetAttributes(handle) &
+                        (FileAttributes.Directory | FileAttributes.ReparsePoint)) != FileAttributes.Directory)
+                        return false;
+                }
+                return true;
+            }
+
+            internal bool VerifyContents(string expectedSha256)
+            {
+                var handle = OpenEntry(BackupPath, GenericRead, FileShare.Read, OpenReparsePoint);
+                try
+                {
+                    if (handle.IsInvalid || (File.GetAttributes(handle) &
+                        (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                        return false;
+                    stream = new FileStream(handle, FileAccess.Read);
+                }
+                finally
+                {
+                    if (stream == null)
+                        handle.Dispose();
+                }
+                return stream.Length != 0 && string.Equals(
+                    Convert.ToHexString(SHA256.HashData(stream)), expectedSha256,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            public void Dispose()
+            {
+                stream?.Dispose();
+                for (int i = directories.Count - 1; i >= 0; --i)
+                    directories[i].Dispose();
+            }
+        }
+
+        private const uint FileListDirectory = 0x00000001;
+        private const uint FileReadAttributes = 0x00000080;
+        private const uint GenericRead = 0x80000000;
+        private const uint OpenExisting = 3;
+        private const uint OpenReparsePoint = 0x00200000;
+        private const uint BackupSemantics = 0x02000000;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern SafeFileHandle CreateFileW(string path, uint access, FileShare share,
+            IntPtr security, uint creation, uint flags, IntPtr template);
+
+        private static SafeFileHandle OpenEntry(string path, uint access, FileShare share, uint flags)
+        {
+            if (path.Length >= 260 && !path.StartsWith(@"\\?\", StringComparison.Ordinal))
+                path = path.StartsWith(@"\\", StringComparison.Ordinal)
+                    ? @"\\?\UNC\" + path[2..]
+                    : @"\\?\" + path;
+            return CreateFileW(path, access, share, IntPtr.Zero, OpenExisting, flags, IntPtr.Zero);
+        }
+
+        // Only restore the checkpoint's own file for the currently open project.
+        internal static VerifiedBackup? OpenVerifiedBackup(
             string? path, string backupDirectory, string? checkpointId,
             string? checkpointProject, string? currentProject, string? expectedSha256)
         {
-            if (string.IsNullOrWhiteSpace(checkpointId) ||
+            if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(checkpointId) ||
                 !IsValidBackupSha256(expectedSha256) ||
                 !IsOwnedBackupPath(path, backupDirectory) ||
                 !SameProject(checkpointProject, currentProject))
                 return null;
-            FileStream? stream = null;
+            VerifiedBackup? backup = null;
+            bool verified = false;
             try
             {
-                if (!string.Equals(Path.GetFileName(path),
+                string fullPath = Path.GetFullPath(path!);
+                if (!string.Equals(Path.GetFileName(fullPath),
                         checkpointId + ".ymmp", StringComparison.OrdinalIgnoreCase))
                     return null;
-                var attributes = File.GetAttributes(path!);
-                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-                    return null;
-                // On Windows, allow the host to open its own read handle but
-                // deny writes and replacements until the caller disposes this one.
-                stream = new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (stream.Length == 0 || !string.Equals(
-                        Convert.ToHexString(SHA256.HashData(stream)), expectedSha256,
-                        StringComparison.OrdinalIgnoreCase))
-                    return null;
-                stream.Position = 0;
-                var verified = stream;
-                stream = null;
-                return verified;
+                backup = new VerifiedBackup(fullPath);
+                verified = backup.LockDirectories() && backup.VerifyContents(expectedSha256!);
+                return verified ? backup : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                        ArgumentException or NotSupportedException)
             {
                 return null;
             }
-            finally { stream?.Dispose(); }
+            finally
+            {
+                if (!verified)
+                    backup?.Dispose();
+            }
         }
 
         // Hash the source before and after the copy, and verify the published
