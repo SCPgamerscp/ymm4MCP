@@ -146,6 +146,26 @@ class RealFfmpegExportQaTests(unittest.TestCase):
         self.assertAlmostEqual(issue["video_end_seconds"], 6.0)
         self.assertAlmostEqual(issue["duration_seconds"], 1.9)
 
+    def test_full_black_scan_keeps_tail_after_many_short_transitions(self):
+        # More than 9,000 short-transition records previously filled the
+        # stderr budget, even though those black frames are below the limit.
+        video = Path(self.directory.name) / "short-transitions-and-black-tail.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=16x16:r=120:d=126",
+            "-vf", "drawbox=c=black:t=fill:enable='not(mod(n,3))+gte(t,124)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+
+        report = qa.inspect(str(video), require_audio=False, sample_seconds=1,
+                            max_black_seconds=3, full_decode=True, full_signal_scan=True)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["signal_scope"], "full")
+        self.assertEqual(len(report["black_frames"]), 1, report)
+        event = report["black_frames"][0]
+        self.assertAlmostEqual(event["video_start_seconds"], 124.0)
+        self.assertAlmostEqual(event["video_end_seconds"], 126.0)
+
     def test_short_black_interval_that_ends_before_eof_does_not_extend(self):
         video = Path(self.directory.name) / "black-before-eof.mp4"
         subprocess.run([

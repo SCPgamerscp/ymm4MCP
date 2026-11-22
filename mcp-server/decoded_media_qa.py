@@ -51,36 +51,8 @@ def _trusted_filter_payload(line, filter_name, bare_names):
     return match.group(1) if match else ""
 
 
-def _trailing_black_range(log, window_duration, minimum_duration):
-    """Use blackdetect frame metadata to distinguish EOF from a color change."""
-    active_start = None
-    for line in log.splitlines():
-        payload = _trusted_filter_payload(line, "metadata", ())
-        if not payload.startswith(("lavfi.black_start", "lavfi.black_end")):
-            continue
-        key, separator, raw = payload.partition("=")
-        if not separator or key not in {"lavfi.black_start", "lavfi.black_end"}:
-            raise ValueError("invalid blackdetect frame metadata")
-        timestamp = float(raw)
-        if not math.isfinite(timestamp):
-            raise ValueError("invalid blackdetect frame timestamp")
-        if key == "lavfi.black_start":
-            if active_start is not None:
-                raise ValueError("unexpected blackdetect start")
-            active_start = timestamp
-        else:
-            if active_start is None or timestamp < active_start:
-                raise ValueError("unexpected blackdetect end")
-            active_start = None
-    if active_start is not None:
-        start = max(0.0, active_start)
-        if start < window_duration and window_duration - start >= minimum_duration:
-            return start, window_duration
-    return None
-
-
 def _signal_ranges(log, start_name, end_name, window_duration=None, *,
-                   black_tail_minimum=None):
+                   black_tail_start=None, black_tail_minimum=None):
     """Parse FFmpeg filter event pairs; incomplete events are not measurements."""
     # Capture complete tokens, including malformed punctuation. Treating
     # "1,broken" as "1" would invent a valid event and conceal bad logs.
@@ -126,13 +98,12 @@ def _signal_ranges(log, start_name, end_name, window_duration=None, *,
     # Close it at the decoded window boundary rather than silently dropping it.
     if start is not None and window_duration is not None and start < window_duration:
         ranges.append((start, window_duration))
-    if start_name == "black_start" and black_tail_minimum is not None:
-        # At EOF, blackdetect's log can stop at the last frame's timestamp
-        # or omit the interval entirely. Without a non-black frame marker,
-        # the final black frame persists to the end of the active window.
-        tail = _trailing_black_range(log, window_duration, black_tail_minimum)
-        if tail is not None:
-            ranges.append(tail)
+    if (start_name == "black_start" and black_tail_start is not None
+            and window_duration is not None and black_tail_minimum is not None):
+        # Without a non-black frame marker, include the last frame through EOF.
+        start = max(0.0, black_tail_start)
+        if start < window_duration and window_duration - start >= black_tail_minimum:
+            ranges.append((start, window_duration))
     return ranges
 
 
@@ -488,6 +459,59 @@ def failure(code, message):
     return {"success": False, "passed": False, "issues": [], "error_code": code, "error": message}
 
 
+_BLACK_METADATA_FILTERS = (
+    "metadata@ymm4_black_start=mode=print:key=lavfi.black_start,"
+    "metadata@ymm4_black_end=mode=print:key=lavfi.black_end")
+
+
+class _BlackMetadataError(ValueError):
+    pass
+
+
+class _BlackMetadataCapture:
+    _line = re.compile(
+        rb"^[ \t]*\[metadata@ymm4_black_(start|end) @ [^\]\r\n]+\] (.*)$")
+
+    def __init__(self):
+        self.pending_start = None
+        self.error = None
+
+    def consume(self, line):
+        match = self._line.fullmatch(line.rstrip(b"\r\n"))
+        if not match:
+            return False
+        kind, payload = match.groups()
+        if payload.startswith(b"frame:"):
+            # The next line carries the actual transition timestamp.
+            return True
+        if not payload.startswith((b"lavfi.black_start", b"lavfi.black_end")):
+            return False
+        if self.error is not None:
+            return True
+        try:
+            key, separator, raw = payload.partition(b"=")
+            if not separator or key != b"lavfi.black_" + kind:
+                raise ValueError("invalid blackdetect frame metadata")
+            timestamp = float(raw)
+            if not math.isfinite(timestamp):
+                raise ValueError("invalid blackdetect frame timestamp")
+            if kind == b"start":
+                if self.pending_start is not None:
+                    raise ValueError("unexpected blackdetect start")
+                self.pending_start = timestamp
+            else:
+                if self.pending_start is None or timestamp < self.pending_start:
+                    raise ValueError("unexpected blackdetect end")
+                self.pending_start = None
+        except ValueError as exc:
+            self.error = exc
+        return True
+
+
+class _CapturedProcess(subprocess.CompletedProcess):
+    black_tail_start: float | None = None
+
+
 def run(command, timeout):
     """Capture bounded subprocess diagnostics without exhausting RAM or disk.
 
@@ -501,17 +525,34 @@ def run(command, timeout):
     stderr_tail = bytearray()
     errors = []
     over_limit = threading.Event()
+    # Only the named metadata filters in our video QA command are compacted.
+    # Normal blackdetect diagnostics still report completed intervals and
+    # count toward the same stderr cap as all other diagnostics.
+    black_metadata = (_BlackMetadataCapture() if any(
+        option == "-vf" and _BLACK_METADATA_FILTERS in value
+        for option, value in zip(command, command[1:])) else None)
 
     with subprocess.Popen(command, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         def drain(pipe, keep_head):
             total = 0
             limit = stdout_limit if keep_head else stderr_limit
+            capture = None if keep_head else black_metadata
+            read = pipe.read if capture is None else pipe.readline
+            at_line_start = True
             try:
                 while True:
-                    chunk = pipe.read(65_536)
+                    chunk = read(65_536)
                     if not chunk:
                         break
+                    if capture is not None:
+                        # Long unrelated log lines can span multiple reads.
+                        # Only complete lines can be our metadata records.
+                        complete = len(chunk) < 65_536 or chunk.endswith(b"\n")
+                        compacted = at_line_start and complete and capture.consume(chunk)
+                        at_line_start = chunk.endswith(b"\n")
+                        if compacted:
+                            continue
                     total += len(chunk)
                     if keep_head:
                         room = stdout_limit - len(stdout_head)
@@ -555,9 +596,14 @@ def run(command, timeout):
         raise OSError("failed to capture FFmpeg process output") from errors[0]
     if over_limit.is_set():
         raise OSError("FFmpeg subprocess output exceeded the capture limit")
-    return subprocess.CompletedProcess(
+    result = _CapturedProcess(
         command, returncode, stdout_head.decode("utf-8"),
         stderr_tail.decode("utf-8", errors="replace"))
+    if black_metadata is not None:
+        if black_metadata.error is not None:
+            raise _BlackMetadataError("invalid blackdetect frame metadata") from black_metadata.error
+        result.black_tail_start = black_metadata.pending_start
+    return result
 
 def _has_loudnorm_field(text, fields):
     """Spot damaged loudnorm JSON even when its field names are escaped.
@@ -807,9 +853,7 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         f"freezedetect=n=-60dB:d={freeze_detect_seconds:.6f}")
     black_tail_minimum = None
     if max_black_seconds is not None:
-        video_signal_filters += (
-            ",metadata=mode=print:key=lavfi.black_start,"
-            "metadata=mode=print:key=lavfi.black_end")
+        video_signal_filters += "," + _BLACK_METADATA_FILTERS
         black_tail_minimum = black_detect_seconds
     target = Path(path)
     try:
@@ -1433,6 +1477,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                 return failure("FFMPEG_UNAVAILABLE", "ffmpegが見つかりません")
             except subprocess.TimeoutExpired:
                 return failure("EXPORT_DECODE_TIMEOUT", "動画サンプルのデコードが時間切れです")
+            except _BlackMetadataError:
+                return failure("EXPORT_BLACK_SIGNAL_METADATA_INVALID",
+                               "黒画面のフレームメタデータを確認できません")
             except (OSError, UnicodeDecodeError):
                 return failure("EXPORT_DECODE_FAILED", "ffmpegの出力を読み取れません")
             if decoded.returncode:
@@ -1638,14 +1685,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                     "severity": "error", "stream_type": kind,
                     "stream_ordinal": ordinal,
                     "sample_start_seconds": round(start, 6)})
-            try:
-                signal_ranges = _signal_ranges(
+            for signal_start, signal_end in _signal_ranges(
                     decoded.stderr or "", start_name, end_name, signal_window_length,
-                    black_tail_minimum=black_tail_minimum)
-            except ValueError:
-                return failure("EXPORT_BLACK_SIGNAL_METADATA_INVALID",
-                               "黒画面のフレームメタデータを確認できません")
-            for signal_start, signal_end in signal_ranges:
+                    black_tail_start=getattr(decoded, "black_tail_start", None),
+                    black_tail_minimum=black_tail_minimum):
                 signal_start = max(signal_start, signal_active_start)
                 if signal_start >= signal_end:
                     continue
@@ -1830,6 +1873,9 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                    "severity": "error", "stream_type": kind,
                                    "stream_ordinal": ordinal})
                     continue
+                except _BlackMetadataError:
+                    return failure("EXPORT_BLACK_SIGNAL_METADATA_INVALID",
+                                   "黒画面のフレームメタデータを確認できません")
                 except (OSError, UnicodeDecodeError):
                     full_signal_scan_ok = False
                     issues.append({"code": "EXPORT_FULL_SIGNAL_FAILED",
@@ -1886,14 +1932,10 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                                        "severity": "error", "stream_type": kind,
                                        "stream_ordinal": ordinal})
                         continue
-                    try:
-                        signal_ranges = _signal_ranges(
+                    for signal_start, signal_end in _signal_ranges(
                             diagnostics, start_name, end_name, active_duration,
-                            black_tail_minimum=black_tail_minimum)
-                    except ValueError:
-                        return failure("EXPORT_BLACK_SIGNAL_METADATA_INVALID",
-                                       "黒画面のフレームメタデータを確認できません")
-                    for signal_start, signal_end in signal_ranges:
+                            black_tail_start=getattr(scanned, "black_tail_start", None),
+                            black_tail_minimum=black_tail_minimum):
                         if signal_start >= signal_end:
                             continue
                         absolute_start = max(0.0, offset + signal_start)

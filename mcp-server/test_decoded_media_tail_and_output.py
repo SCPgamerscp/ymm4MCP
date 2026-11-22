@@ -120,6 +120,21 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "exceeded the capture limit"):
                     qa.run(command, 5)
 
+    def test_black_metadata_compaction_preserves_unrelated_stderr_limit(self):
+        command = [sys.executable, "-c",
+                   "import sys;sys.stderr.buffer.write(b'A'*1100000)",
+                   "-vf", qa._BLACK_METADATA_FILTERS]
+        with self.assertRaisesRegex(OSError, "exceeded the capture limit"):
+            qa.run(command, 5)
+
+    def test_malformed_black_metadata_is_rejected_during_capture(self):
+        lines = ("[metadata@ymm4_black_start @ 0x1] lavfi.black_start=2.0\n"
+                 "[metadata@ymm4_black_end @ 0x2] lavfi.black_end=1.0\n")
+        command = [sys.executable, "-c", f"import sys;sys.stderr.write({lines!r})",
+                   "-vf", qa._BLACK_METADATA_FILTERS]
+        with self.assertRaisesRegex(ValueError, "invalid blackdetect frame metadata"):
+            qa.run(command, 5)
+
     def test_subprocess_output_at_caps_remains_usable(self):
         command = [sys.executable, "-c",
                    "import sys;sys.stdout.buffer.write(b'A'*1000001);"
