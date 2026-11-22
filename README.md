@@ -261,7 +261,7 @@ LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成�
 
 素材を再利用する際は、YMM4が返した素材パスを優先します。Windowsのパスでは大文字小文字と区切り文字の違いを吸収します。同一レイヤーに同じ内容の候補が複数あり、明示したフレームや長さでも特定できない場合は差分の適用を停止します。
 
-`apply_edit` / `reconcile_edit` に `expected_plan_hash` を指定すると、事前に確認した `plan_edit` の SHA-256 と一致しない計画はホストへの通信前に拒否します。`plan_edit` が返す `snapshot_hash` を `expected_snapshot_hash` として渡すと、その後タイムラインの状態が変わっていた場合も編集前に停止します。
+`apply_edit` / `reconcile_edit` に `expected_plan_hash` を指定すると、事前に確認した `plan_edit` の SHA-256 と一致しない計画はホストへの通信前に拒否します。`plan_edit` が返す `snapshot_hash` を `expected_snapshot_hash` として渡すと、素材やプロジェクト設定の確認後にもタイムラインを読み直し、変更を検出した場合は最初の追加前に停止します。
 
 `plan_edit` は常にプレビューのみで、`reconcile_edit` は適用します。`reconcile_edit` に `dry_run=true`、`plan_edit` に `dry_run=false` を指定すると入力エラーにして、意図と異なる処理を防ぎます。
 

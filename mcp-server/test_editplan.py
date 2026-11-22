@@ -323,6 +323,50 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get.await_count, 2)
         post.assert_not_awaited()
 
+    async def test_reviewed_snapshot_is_rechecked_after_media_and_project_validation(self):
+        initial_hash = editplan.snapshot_hash([])
+        changed = [video_item()]
+        for action in ("apply_edit", "reconcile_edit"):
+            gets = [{"characters": []}, {"items": []}, {"success": True, "exists": True},
+                    {"success": True, "fps": 30}, {"items": changed}]
+            with self.subTest(action=action), \
+                 patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)) as get, \
+                 patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                result = await server.dispatch({"action": action, **one_video_plan(),
+                                                "check_project_settings": True,
+                                                "expected_snapshot_hash": initial_hash})
+            self.assertEqual(result["error_code"], "SNAPSHOT_HASH_MISMATCH")
+            self.assertEqual(result["expected_snapshot_hash"], initial_hash)
+            self.assertEqual(result["actual_snapshot_hash"], editplan.snapshot_hash(changed))
+            self.assertFalse(result["rolled_back"])
+            self.assertEqual(get.await_args.args, ("/items",))
+            self.assertEqual(get.await_args_list[-2].args, ("/project",))
+            post.assert_not_awaited()
+
+    async def test_reviewed_snapshot_unavailable_after_preflight_stops_apply(self):
+        gets = [{"characters": []}, {"items": []}, {"success": True, "exists": True},
+                {"success": False, "error_code": "ITEMS_UNAVAILABLE"}]
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_video_plan(),
+                                            "expected_snapshot_hash": editplan.snapshot_hash([])})
+        self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+        self.assertFalse(result["rolled_back"])
+        post.assert_not_awaited()
+
+    async def test_matching_snapshot_after_preflight_allows_addition(self):
+        item = video_item()
+        gets = [{"characters": []}, {"items": []}, {"success": True, "exists": True},
+                {"items": []}, {"items": [item]}]
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)) as get, \
+             patch.object(server, "ymm4_post", AsyncMock(return_value={**item, "success": True})) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_video_plan(),
+                                            "expected_snapshot_hash": editplan.snapshot_hash([])})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(get.await_count, 5)
+        post.assert_awaited_once()
+
     async def test_expected_plan_hash_mismatch_stops_before_host_call(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:

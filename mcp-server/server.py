@@ -1979,6 +1979,15 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 "error": "同じ内容の既存アイテムを計画に一意に対応付けられません",
                 "conflicts": content_conflicts, "rolled_back": False}
 
+    if expected_snapshot is not None and any(op["op"] == "add" for op in preview["ops"]):
+        # Binding, media and project lookups may have taken long enough for
+        # the reviewed timeline to change since the first inventory read.
+        conflict = await quality_guard.verify_snapshot(ymm4_get, items)
+        if conflict is not None:
+            if conflict["error_code"] == "SNAPSHOT_CONFLICT":
+                conflict["error_code"] = "SNAPSHOT_HASH_MISMATCH"
+            return {**conflict, "rolled_back": False}
+
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
     gap = plan["gap"]
     cursor = {scene["id"]: scene["start_frame"] for scene in plan["scenes"]}
