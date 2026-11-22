@@ -192,23 +192,38 @@ namespace YMM4McpPlugin
             });
         }
 
-        private async Task<object> SaveProjectAs(HttpListenerRequest req)
+        private async Task<object> SaveProjectAs(HttpListenerRequest req, bool templateCopy = false)
         {
             var body = await ReadBody(req);
             string path = RequireAbsolutePath(body, "path");
             if (!path.EndsWith(".ymmp", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("project path must end with .ymmp");
             bool overwrite = GetBool(body, "overwrite", false);
+            string? expectedTemplate = templateCopy ? RequireAbsolutePath(body, "expected_template_path") : null;
+            if (expectedTemplate != null && (overwrite ||
+                    !expectedTemplate.EndsWith(".ymmp", StringComparison.OrdinalIgnoreCase) ||
+                    EditCheckpointSafety.SameProject(expectedTemplate, path)))
+                throw new ArgumentException("Template saves require a different .ymmp path without overwrite");
             if (File.Exists(path) && !overwrite)
                 return Failure("FILE_EXISTS", "保存先が既に存在します。overwrite=true で上書きしてください");
             var parent = Path.GetDirectoryName(path);
             if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
                 return Failure("DIRECTORY_NOT_FOUND", "保存先フォルダがありません: " + parent);
             string? backupPath;
-            try { backupPath = BackupProjectFile(path); }
+            try { backupPath = templateCopy ? null : BackupProjectFile(path); }
             catch (Exception ex) { return Failure("BACKUP_FAILED", "既存プロジェクトを退避できません: " + ex.Message); }
             return await RunOnUi(async () =>
             {
+                // The caller's earlier GET cannot prevent the active project
+                // changing before the save request reaches the dispatcher.
+                if (expectedTemplate != null)
+                {
+                    if (!EditCheckpointSafety.IsStableSavedProject(expectedTemplate, CurrentProjectPath(),
+                            CurrentProjectSaveState()))
+                        return Failure("TEMPLATE_SOURCE_CHANGED", "テンプレートが切り替わったか、未保存の変更があります");
+                    if (File.Exists(path))
+                        return Failure("FILE_EXISTS", "保存先が既に存在します");
+                }
                 var invoked = InvokeNamed(SaveAsMethodHints, path);
                 if (!invoked.ok)
                     return (object)new { success = false, error_code = "SAVE_AS_METHOD_UNAVAILABLE",

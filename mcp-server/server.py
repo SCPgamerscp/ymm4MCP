@@ -576,6 +576,12 @@ async def create_from_template(args: dict) -> dict:
         return {"success": True, "dry_run": True, "template_path": template,
                 "destination_path": destination, "current_project_path": current.get("projectPath"),
                 "steps": ["open_template", "save_as_new_path", "verify_project_path"]}
+    capabilities = await ymm4_get("/capabilities")
+    features = capabilities.get("features") if isinstance(capabilities, dict) else None
+    if (not isinstance(features, dict) or capabilities.get("success") is not True or
+            "error" in capabilities or "error_code" in capabilities or
+            features.get("guarded_template_save") is not True):
+        return {"success": False, "error_code": "TEMPLATE_GUARDED_SAVE_UNAVAILABLE"}
     try:
         opened = await ymm4_post("/project/open", {"path": template})
     except Exception as exc:
@@ -601,11 +607,15 @@ async def create_from_template(args: dict) -> dict:
         return {"success": False, "error_code": "TEMPLATE_OPEN_NOT_VERIFIED",
                 "outcome_unknown": True, "details": opened_state, "opened_template_path": template}
     try:
-        saved = await ymm4_post("/project/save-as", {"path": destination, "overwrite": False})
+        saved = await ymm4_post("/project/save-template-as", {
+            "path": destination, "expected_template_path": template})
     except Exception as exc:
         return {"success": False, "error_code": "TEMPLATE_SAVE_OUTCOME_UNKNOWN",
                 "outcome_unknown": True, "error": str(exc), "opened_template_path": template}
     if saved.get("success") is not True:
+        if saved.get("error_code") == "TEMPLATE_SOURCE_CHANGED":
+            return {"success": False, "error_code": "TEMPLATE_SOURCE_CHANGED", "details": saved,
+                    "template_path": template, "destination_path": destination}
         return {"success": False, "error_code": "TEMPLATE_SAVE_FAILED", "details": saved,
                 "opened_template_path": template}
     try:
