@@ -9,7 +9,7 @@
 
 `check_installation.cmd` は**読み取り専用**です。永続インストール先のPython・server.py・requirements.txt、通常版と初期化済みMicrosoft Store版のClaude Desktop設定、Pythonとserver.pyの絶対パス、設定されたループバックポートを検査します。さらに**初期化済みのClaude Desktopプロファイルごとに**、そのプロファイルの接続先・トークン・接続ディスクリプタで `check_connection.check()` を実行し、正しいトークンでstatusが成功し、不正なトークンではHTTP 401になることを確認します。プロファイル間で接続ポートが違う場合は失敗します。検証用ターミナルだけに設定された `YMM4_API_BASE`・`YMM4_API_TOKEN`・`YMM4_CONNECTION_FILE` は継承しません。APIトークンやClaudeの環境変数の値は表示しません。
 
-検査中に初期化済みプロファイルの構成や設定ファイルが変わった場合は失敗します。プロファイルの初期化や設定変更が終わってから再実行してください。
+通常版またはMicrosoft Store版の設定ディレクトリが作成済みで、`claude_desktop_config.json` が欠けている場合は失敗します。検査中にプロファイルの初期化や設定ファイルの変更が検出された場合も、変更が終わってから再実行してください。
 
 失敗した場合は、YMM4のMCPサーバーが起動しているか、Claude Desktop設定が古いZIP展開先を指していないか、ポートが一致しているかを確認してください。失敗時も設定を変更しません。テストは`python -m unittest -v test_check_installation`で実行でき、HTTPはモックです。
 

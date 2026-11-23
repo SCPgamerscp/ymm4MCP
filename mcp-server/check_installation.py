@@ -25,6 +25,8 @@ MAX_CLAUDE_CONFIG_BYTES = 1024 * 1024
 
 def _read_claude_config(path: Path):
     """Read a bounded, duplicate-safe snapshot; never log config values."""
+    if not path.is_file():
+        raise InstallationError("Missing Claude Desktop configuration in an initialized profile")
     try:
         with path.open("rb") as stream:
             raw = stream.read(MAX_CLAUDE_CONFIG_BYTES + 1)
@@ -52,7 +54,8 @@ def _same_path(actual, expected):
 
 
 def _initialized_config_paths(local_appdata: Path, appdata: Path):
-    paths = [appdata / "Claude" / "claude_desktop_config.json"]
+    classic = appdata / "Claude"
+    paths = [classic / "claude_desktop_config.json"] if classic.is_dir() else []
     packages = local_appdata / "Packages"
     if packages.is_dir():
         for directory in sorted(packages.glob("Claude_*")):
@@ -60,7 +63,9 @@ def _initialized_config_paths(local_appdata: Path, appdata: Path):
                 path = directory / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json"
                 if path.parent.is_dir():
                     paths.append(path)
-    return [path for path in paths if path.is_file()]
+    # Profile initialization is indicated by the configuration directory.
+    # A missing config in such a profile must fail, not disappear from the check.
+    return paths
 
 
 def _authenticated_status_for_profile(status_check, profile_env):

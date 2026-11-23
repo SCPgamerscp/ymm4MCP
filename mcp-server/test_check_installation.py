@@ -241,8 +241,27 @@ class InstallationAcceptanceTests(unittest.TestCase):
 
     def test_missing_claude_config_fails(self):
         self.classic.unlink()
+        self.classic.parent.rmdir()
         with self.assertRaisesRegex(InstallationError, "No initialized"):
             self.inspect()
+
+    def test_initialized_profile_without_config_fails_even_if_other_profile_is_valid(self):
+        self.store.parent.mkdir(parents=True)
+        with self.assertRaisesRegex(InstallationError, "Missing Claude Desktop configuration"):
+            self.inspect()
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
+
+        self.write_config(self.store)
+        self.classic.unlink()
+        with self.assertRaisesRegex(InstallationError, "Missing Claude Desktop configuration"):
+            self.inspect()
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
+
+    def test_uninitialized_store_package_does_not_require_configuration(self):
+        (self.local / "Packages" / "Claude_Test").mkdir(parents=True)
+        self.assertEqual(self.inspect()["claude_profiles_checked"], 1)
 
     def test_invalid_authenticated_status_fails(self):
         self.status.return_value = {"status": "stopped", "port": 8765}
@@ -351,6 +370,16 @@ class InstallationAcceptanceTests(unittest.TestCase):
         # The subsequent run sees the new profile and rejects its old port.
         with self.assertRaisesRegex(InstallationError, "differs from the running"):
             self.inspect()
+
+    def test_new_store_profile_directory_without_config_blocks_acceptance(self):
+        def probe(_python, _server, *, env, expected_port):
+            self.store.parent.mkdir(parents=True)
+            return {"tool_count": 4, "status_port": expected_port}
+
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "profiles changed during"):
+            self.inspect()
+        self.assertEqual(self.mcp.call_count, 1)
 
     def test_non_string_claude_env_rejected_before_network(self):
         self.write_config(self.classic, env={"GEMINI_API_KEY": 123})
