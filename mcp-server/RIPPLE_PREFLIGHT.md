@@ -13,6 +13,10 @@ An item crossing a cut boundary returns `RIPPLE_SPLIT_REQUIRED` rather than
 silently shortening the source. Missing, stale or ambiguous item IDs/revisions
 return `RIPPLE_CONFLICT` or `RIPPLE_ID_AMBIGUOUS`. Malformed snapshots are
 rejected. Plans are sorted by layer/frame/ID to make review reproducible.
+Every explicitly supplied `expected_revisions` entry is checked, even if
+the current cut would leave the item untouched. An ID absent from the
+inventory is reported as `expected_item_missing`. A matching revision for
+an untouched item is allowed and does not add an operation.
 
 **Safety limit:** `success=true` means the plan passed static preflight,
 not that the edit is complete or even executable. The response deliberately
