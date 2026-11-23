@@ -124,6 +124,7 @@ namespace YMM4McpPlugin
                 double crossSamples = 0;
                 long clipped = 0, silentStart = -1;
                 long longestClipLength = 0, longestClipEnd = 0;
+                long firstOverRangeFrame = -1;
                 double peak = 0;
                 file.Position = dataStart;
                 var buffer = new byte[8192];
@@ -160,6 +161,8 @@ namespace YMM4McpPlugin
                             double amplitude = Math.Abs(normalized);
                             peak = Math.Max(peak, amplitude);
                             peaksByChannel[ch] = Math.Max(peaksByChannel[ch], amplitude);
+                            if (ieeeFloat && amplitude > 1 && firstOverRangeFrame < 0)
+                                firstOverRangeFrame = frame;
                             if (normalized <= -NearFullScale || normalized >= positiveClipThreshold)
                             {
                                 clipped++;
@@ -197,6 +200,10 @@ namespace YMM4McpPlugin
                     issues.Add(new("AUDIO_CLIPPING", "error",
                         (double)(longestClipEnd - longestClipLength) / rate, (double)longestClipEnd / rate,
                         "フルスケール付近のサンプルが続いた最長区間です"));
+                else if (firstOverRangeFrame >= 0)
+                    issues.Add(new("AUDIO_CLIPPING", "error",
+                        (double)firstOverRangeFrame / rate, (double)(firstOverRangeFrame + 1) / rate,
+                        "浮動小数点 WAV でフルスケールを超えた最初のフレームです"));
                 else if (clipped > frames * channels * 0.001)
                     issues.Add(new("AUDIO_CLIPPING", "error", null, null,
                         "ファイル全体でフルスケール付近のサンプルが0.1%を超えています"));

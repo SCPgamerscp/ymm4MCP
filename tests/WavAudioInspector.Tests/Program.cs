@@ -294,6 +294,23 @@ try
         var floatQa = WavAudioInspector.Inspect(path);
         Check(floatQa.Passed && floatQa.Peak == 0.25 && floatQa.Rms == 0.25,
             "IEEE float mono/stereo QA failed");
+
+        const int firstPeakFrame = 4097;
+        int peakIndex = firstPeakFrame * 2 + 1;
+        floatSamples[peakIndex] = extensible ? -1f : 1f;
+        File.WriteAllBytes(path, FloatWave(floatSamples, extensible));
+        Check(WavAudioInspector.Inspect(path).Passed,
+            "a single sample exactly at full scale must keep the existing clipping threshold");
+
+        floatSamples[peakIndex] = extensible ? -1.25f : MathF.BitIncrement(1f);
+        File.WriteAllBytes(path, FloatWave(floatSamples, extensible));
+        var overRangeQa = WavAudioInspector.Inspect(path);
+        Check(overRangeQa.Success && !overRangeQa.Passed && overRangeQa.Issues.Count(i =>
+            i.Code == "AUDIO_CLIPPING") == 1 && overRangeQa.Issues.Any(i =>
+            i.Code == "AUDIO_CLIPPING" && i.StartSeconds == firstPeakFrame / 8000.0 &&
+            i.EndSeconds == (firstPeakFrame + 1) / 8000.0),
+            "an isolated float sample beyond full scale must fail QA at its actual frame");
+        floatSamples[peakIndex] = 0.25f;
     }
     floatSamples[0] = float.NaN;
     File.WriteAllBytes(path, FloatWave(floatSamples));
