@@ -1,5 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
 
 namespace YMM4McpPlugin
 {
@@ -7,6 +10,47 @@ namespace YMM4McpPlugin
     // paths and collection fallbacks share the same readback contract.
     internal static class KeyframeMutationVerification
     {
+        // Missing collections are valid for default-only animations. A
+        // throwing host getter must propagate instead of looking missing.
+        private static object? ReadMember(object source, string name)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var type = source.GetType();
+            return (type.GetProperty(name) ?? type.GetProperty(name, flags))?.GetValue(source)
+                ?? (type.GetField(name) ?? type.GetField(name, flags))?.GetValue(source);
+        }
+
+        internal static List<int> ReadFrames(object animation)
+        {
+            var keys = ReadMember(animation, "KeyFrames") ?? animation;
+            var frames = ReadMember(keys, "Frames") ?? ReadMember(keys, "FrameList");
+            if (frames == null) return new List<int>();
+            if (frames is not IEnumerable entries || frames is string)
+                throw new InvalidOperationException("Animation Frames is not enumerable");
+            return ParseObservedFrames(entries);
+        }
+
+        internal static List<double> ReadValues(object animation)
+        {
+            var values = ReadMember(animation, "Values");
+            if (values == null) return new List<double>();
+            if (values is not IEnumerable entries || values is string)
+                throw new InvalidOperationException("Animation Values is not enumerable");
+            return ParseObservedValues(entries, entry => ReadMember(entry, "Value") ?? entry);
+        }
+
+        internal static double? ReadDefaultValue(object animation)
+        {
+            foreach (var name in new[] { "DefaultValue", "Value", "CurrentValue" })
+            {
+                var value = ReadMember(animation, name);
+                if (value != null && double.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture),
+                        NumberStyles.Float, CultureInfo.InvariantCulture, out double number) && double.IsFinite(number))
+                    return number;
+            }
+            return null;
+        }
+
         // Do not silently omit malformed host entries during keyframe readback.
         // Dropping one Frame or Value can turn a partial native mutation into a
         // seemingly valid collection and cause the API to report false success.

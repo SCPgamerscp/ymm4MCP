@@ -52,6 +52,24 @@ Check(DuckingVoiceGuard.MatchesBaseVolume(100, [], [100.0], null) &&
 Check(!DuckingVoiceGuard.MatchesBaseVolume(100, [15], [100.0, 60.0], null) &&
     !DuckingVoiceGuard.MatchesBaseVolume(100, [], [60.0], null),
     "A manually inserted key or changed baseline must stop ducking at the host");
+var implicitVolume = new { Frames = Array.Empty<int>(), DefaultValue = 100.0 };
+Check(DuckingVoiceGuard.MatchesBaseVolume(100,
+        KeyframeMutationVerification.ReadFrames(implicitVolume),
+        KeyframeMutationVerification.ReadValues(implicitVolume),
+        KeyframeMutationVerification.ReadDefaultValue(implicitVolume)),
+    "A genuinely absent Values list may use the readable default volume");
+var unreadableVolume = new UnreadableVolumeAnimation();
+Check(KeyframeMutationVerification.ReadFrames(unreadableVolume).Count == 0 &&
+      KeyframeMutationVerification.ReadDefaultValue(unreadableVolume) == 100,
+    "The failing Volume fixture must expose empty Frames and a matching default");
+bool volumeReadFailed = false;
+try { KeyframeMutationVerification.ReadValues(unreadableVolume); }
+catch (System.Reflection.TargetInvocationException ex) when
+    (ex.InnerException is InvalidOperationException)
+{
+    volumeReadFailed = true;
+}
+Check(volumeReadFailed, "A throwing Values getter must not be mistaken for an absent Values list");
 static void Reject(string? id, string? frame, string? layer)
 {
     try { KeyframeSelectorSafety.Parse(id, frame, layer); }
@@ -323,3 +341,11 @@ RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
     "unreadable wrapped value must not disappear");
 
 Console.WriteLine("Keyframe selector and mutation readback safety tests passed");
+
+
+sealed class UnreadableVolumeAnimation
+{
+    public int[] Frames => Array.Empty<int>();
+    public double DefaultValue => 100.0;
+    public double[] Values => throw new InvalidOperationException("host Volume values unavailable");
+}

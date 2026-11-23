@@ -185,14 +185,14 @@ namespace YMM4McpPlugin
                 List<double> valuesBefore;
                 try
                 {
-                    framesBefore = ReadFrameList(anim);
-                    valuesBefore = ReadValueList(anim);
+                    framesBefore = KeyframeMutationVerification.ReadFrames(anim);
+                    valuesBefore = KeyframeMutationVerification.ReadValues(anim);
                 }
                 catch (Exception)
                 {
                     // No native edit has started. Never mutate an animation
                     // whose initial state cannot be represented faithfully.
-                    return Failure("KEYFRAME_READBACK_INVALID",
+                    return Failure(voiceGuard != null ? "BGM_DUCKING_GUARD_UNAVAILABLE" : "KEYFRAME_READBACK_INVALID",
                         "変更前のAnimationに読取不能なFrames/Valuesがあります。編集せず中止しました");
                 }
                 // Reject an already malformed or unordered host layout before
@@ -211,7 +211,7 @@ namespace YMM4McpPlugin
                             return Failure("BGM_DUCKING_VOICE_CONFLICT", "発話の位置、長さ、または対象が変更されています");
                         if (expectedBaseVolume.HasValue && !DuckingVoiceGuard.MatchesBaseVolume(
                                 expectedBaseVolume.Value, framesBefore, valuesBefore,
-                                valuesBefore.Count == 0 ? TryGetDefaultValue(anim) : null))
+                                valuesBefore.Count == 0 ? KeyframeMutationVerification.ReadDefaultValue(anim) : null))
                             return Failure("BGM_DUCKING_VOLUME_CONFLICT", "基準音量またはVolumeキーフレームが変更されています");
                     }
                     catch (Exception)
@@ -235,11 +235,11 @@ namespace YMM4McpPlugin
                     else
                         changed = UpsertKeyframe(anim, relativeFrame, value!.Value);
                     // Both readbacks must succeed before a native result is trusted.
-                    framesAfter = ReadFrameList(anim);
-                    valuesAfter = ReadValueList(anim);
+                    framesAfter = KeyframeMutationVerification.ReadFrames(anim);
+                    valuesAfter = KeyframeMutationVerification.ReadValues(anim);
                     // A throwing default getter must invalidate the revision
                     // too: it executes after the host has already mutated.
-                    defaultAfter = action == "set" ? TryGetDefaultValue(anim) : null;
+                    defaultAfter = action == "set" ? KeyframeMutationVerification.ReadDefaultValue(anim) : null;
                 }
                 catch (Exception)
                 {
@@ -438,8 +438,8 @@ namespace YMM4McpPlugin
 
         private static List<object> ReadKeyframes(object anim, int itemStartFrame)
         {
-            var frames = ReadFrameList(anim);
-            var values = ReadValueList(anim);
+            var frames = KeyframeMutationVerification.ReadFrames(anim);
+            var values = KeyframeMutationVerification.ReadValues(anim);
             if (!KeyframeMutationVerification.HasReadableLayout(frames, values))
                 throw new InvalidOperationException(
                     "Animation Frames/Values layout is inconsistent");
@@ -447,7 +447,7 @@ namespace YMM4McpPlugin
             bool valuesHasStart = values.Count == frames.Count + 1;
             if (frames.Count == 0)
             {
-                result.Add(new { at = 0, absolute_frame = itemStartFrame, value = values.Count > 0 ? values[0] : TryGetDefaultValue(anim) });
+                result.Add(new { at = 0, absolute_frame = itemStartFrame, value = values.Count > 0 ? values[0] : KeyframeMutationVerification.ReadDefaultValue(anim) });
                 return result;
             }
             if (valuesHasStart)
@@ -463,43 +463,10 @@ namespace YMM4McpPlugin
             return result;
         }
 
-        private static List<int> ReadFrameList(object anim)
-        {
-            var keyFrames = GetPropObj(anim, "KeyFrames") ?? anim;
-            var framesObj = GetPropObj(keyFrames, "Frames") ??
-                GetPropObj(keyFrames, "FrameList") ?? GetPropEnum(keyFrames, "Frames");
-            if (framesObj == null) return new List<int>();
-            if (framesObj is not IEnumerable enumerable || framesObj is string)
-                throw new InvalidOperationException("Animation Frames is not enumerable");
-            return KeyframeMutationVerification.ParseObservedFrames(enumerable);
-        }
-
-        private static List<double> ReadValueList(object anim)
-        {
-            var valuesObj = GetPropObj(anim, "Values") ?? GetPropEnum(anim, "Values");
-            if (valuesObj == null) return new List<double>();
-            if (valuesObj is not IEnumerable enumerable || valuesObj is string)
-                throw new InvalidOperationException("Animation Values is not enumerable");
-            return KeyframeMutationVerification.ParseObservedValues(
-                enumerable, entry => GetPropObj(entry, "Value") ?? entry);
-        }
-
-        private static double? TryGetDefaultValue(object anim)
-        {
-            foreach (var name in new[] { "DefaultValue", "Value", "CurrentValue" })
-            {
-                var v = GetPropObj(anim, name);
-                if (v != null && double.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out double d)
-                    && double.IsFinite(d))
-                    return d;
-            }
-            return null;
-        }
-
         private static bool UpsertKeyframe(object anim, int frame, double value)
         {
-            var before = ReadFrameList(anim);
-            var valuesBefore = ReadValueList(anim);
+            var before = KeyframeMutationVerification.ReadFrames(anim);
+            var valuesBefore = KeyframeMutationVerification.ReadValues(anim);
             var valueCountBefore = valuesBefore.Count;
             bool isNew = frame > 0 && !before.Contains(frame);
             var keyFrames = GetPropObj(anim, "KeyFrames");
@@ -509,26 +476,26 @@ namespace YMM4McpPlugin
             // look like a valid no-implicit-start layout, and TrySetValueAt
             // would overwrite the *original* start value and claim success.
             bool Complete() => !isNew || KeyframeInsertionSafety.IsComplete(
-                before, valueCountBefore, ReadFrameList(anim), ReadValueList(anim).Count, frame);
+                before, valueCountBefore, KeyframeMutationVerification.ReadFrames(anim), KeyframeMutationVerification.ReadValues(anim).Count, frame);
 
             bool UndoIncomplete(bool force = false)
             {
-                var currentFrames = ReadFrameList(anim);
+                var currentFrames = KeyframeMutationVerification.ReadFrames(anim);
                 if (!isNew) return true;
                 if (!currentFrames.Contains(frame))
                     return currentFrames.SequenceEqual(before)
-                        && ReadValueList(anim).SequenceEqual(valuesBefore);
+                        && KeyframeMutationVerification.ReadValues(anim).SequenceEqual(valuesBefore);
                 if (!force && Complete()) return true;
                 int insertedIndex = currentFrames.IndexOf(frame);
                 int valueIndex = insertedIndex + valueCountBefore - before.Count;
                 if (keyFrames != null)
                     TryInvokeNamed(keyFrames, new[] { "Remove", "RemoveKeyFrame", "RemoveKeyframe" }, frame);
-                if (ReadFrameList(anim).Contains(frame))
+                if (KeyframeMutationVerification.ReadFrames(anim).Contains(frame))
                     TryInvokeNamed(anim, KeyframeRemoveNames, frame);
                 // A host Remove may remove the frame but leave the extra
                 // AnimationValue. Never retry with misaligned collections.
-                if (ReadFrameList(anim).Contains(frame)) return false;
-                if (ReadValueList(anim).Count != valueCountBefore)
+                if (KeyframeMutationVerification.ReadFrames(anim).Contains(frame)) return false;
+                if (KeyframeMutationVerification.ReadValues(anim).Count != valueCountBefore)
                 {
                     if (GetPropObj(anim, "Values") is not IList values
                         || !KeyframeInsertionSafety.TryRemoveInsertedValue(
@@ -537,22 +504,22 @@ namespace YMM4McpPlugin
                 }
                 // A host may also mutate unrelated values or frames. Stop
                 // instead of claiming that a failed edit was rolled back.
-                return ReadFrameList(anim).SequenceEqual(before)
-                    && ReadValueList(anim).SequenceEqual(valuesBefore);
+                return KeyframeMutationVerification.ReadFrames(anim).SequenceEqual(before)
+                    && KeyframeMutationVerification.ReadValues(anim).SequenceEqual(valuesBefore);
             }
 
             if (TrySetValueAt(anim, frame, value) && Complete()) return true;
             if (TryInvokeNamed(anim, KeyframeMethodNames, frame, value) && Complete()) return true;
             if (!UndoIncomplete()) return false;
 
-            if (!ReadFrameList(anim).Contains(frame))
+            if (!KeyframeMutationVerification.ReadFrames(anim).Contains(frame))
                 TryInvokeNamed(anim, KeyframeMethodNames, frame);
             if (Complete() && TrySetValueAt(anim, frame, value)) return true;
             if (!UndoIncomplete(force: true)) return false;
 
             if (keyFrames != null)
             {
-                if (!ReadFrameList(anim).Contains(frame))
+                if (!KeyframeMutationVerification.ReadFrames(anim).Contains(frame))
                     TryInvokeNamed(keyFrames, new[] { "Add", "AddKeyFrame", "Insert" }, frame);
                 if (Complete() && TrySetValueAt(anim, frame, value)) return true;
                 if (!UndoIncomplete(force: true)) return false;
@@ -575,7 +542,7 @@ namespace YMM4McpPlugin
             // Prefer a single verified transaction over a series of removals.
             // Otherwise a failure halfway through leaves an edited animation.
             if (KeyframeCollectionRemoval.TryClear(anim)) return true;
-            var frames = ReadFrameList(anim).OrderByDescending(f => f).ToArray();
+            var frames = KeyframeMutationVerification.ReadFrames(anim).OrderByDescending(f => f).ToArray();
             if (frames.Length == 0)
             {
                 foreach (var name in new[] { "ClearKeyFrames", "Clear", "ResetKeyFrames" })
@@ -594,7 +561,7 @@ namespace YMM4McpPlugin
                 }
                 any = true;
             }
-            if (ReadFrameList(anim).Count != 0)
+            if (KeyframeMutationVerification.ReadFrames(anim).Count != 0)
                 throw new InvalidOperationException(
                     "Native keyframe clear returned success but some frames remain.");
             return any;
@@ -605,7 +572,7 @@ namespace YMM4McpPlugin
             var values = GetPropObj(anim, "Values");
             if (values is IList list && list.Count > 0)
             {
-                var frames = ReadFrameList(anim);
+                var frames = KeyframeMutationVerification.ReadFrames(anim);
                 int index;
                 if (frames.Count + 1 == list.Count)
                 {
