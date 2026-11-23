@@ -547,6 +547,37 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["rolled_back"])
         self.assertNotIn("/items/delete", calls)
 
+    async def test_unverified_add_id_stops_editing_without_deleting_or_saving(self):
+        args = {"plan": {"scenes": [{"id": "intro", "items": [
+            {"id": "a", "type": "text", "text": "a", "length": 10},
+            {"id": "b", "type": "text", "text": "b", "length": 10},
+            {"id": "c", "type": "text", "text": "c", "length": 10},
+        ]}]}, "idempotency_key": "unverified-add-id"}
+        existing = {"item_id": "native:existing", "revision": "r2", "frame": 90,
+                    "layer": 2, "length": 10, "type": "TextItem", "text": "original"}
+        a = {"success": True, "item_id": "native:a", "revision": "r1", "frame": 0,
+             "layer": 1, "length": 10}
+        for invalid_id in ({}, {"item_id": None}, {"item_id": " "}, {"item_id": "native:bad\n"},
+                           {"item_id": "native:existing"}, {"item_id": "native:a"}):
+            with self.subTest(invalid_id=invalid_id):
+                b = {"success": True, "revision": "r1", "frame": 10, "layer": 1, "length": 10,
+                     **invalid_id}
+                snapshots = iter(([existing], []))
+                get, posted = self._patches(lambda: next(snapshots), [], [
+                    a, b, {"success": False}, {"success": True}, {"success": True},
+                ])
+                with get, posted as post:
+                    result = await server.dispatch({"action": "apply_edit", **args})
+                self.assertEqual([entry.args[0] for entry in post.await_args_list],
+                                 ["/items/text", "/items/text"])
+                self.assertEqual(result["error_code"], "EDIT_ADD_ID_UNVERIFIED")
+                self.assertEqual(result["failed_id"], "b")
+                self.assertEqual(result["failure"], b)
+                self.assertTrue(result["outcome_unknown"])
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result["added"], 1)
+                self.assertEqual([item["item_id"] for item in result["details"]], ["native:a"])
+
     async def test_failed_scene_requires_readback_after_delete(self):
         args = {"plan": {"scenes": [{"id": "intro", "items": [
             {"id": "a", "type": "text", "text": "a", "length": 10},

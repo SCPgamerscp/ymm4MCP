@@ -11,7 +11,7 @@ MAX_SNAPSHOT = 10000
 FIELDS = frozenset({"revision", "frame", "layer", "length", "type", "text"})
 
 
-def _valid_id(value):
+def valid_item_id(value):
     return (isinstance(value, str) and 1 <= len(value) <= 512 and
             value == value.strip() and
             all(32 <= ord(c) < 127 or ord(c) >= 160 for c in value) and
@@ -27,7 +27,7 @@ def validate_expected_items(expected):
         if not isinstance(entry, dict) or not set(entry).issubset(FIELDS | {"item_id"}):
             raise ValueError(f"expected[{index}] has unsupported fields")
         item_id = entry.get("item_id")
-        if not _valid_id(item_id):
+        if not valid_item_id(item_id):
             raise ValueError(f"expected[{index}].item_id must be a valid stable ID")
         if item_id in seen:
             raise ValueError(f"expected[{index}].item_id is repeated")
@@ -67,7 +67,7 @@ def read_item_inventory(snapshot, *, max_items=MAX_SNAPSHOT, allow_missing_count
         return None, {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
     ids = []
     for item in items:
-        if not isinstance(item, dict) or not _valid_id(item.get("item_id")):
+        if not isinstance(item, dict) or not valid_item_id(item.get("item_id")):
             return None, {"success": False, "passed": False, "error_code": "ITEMS_SNAPSHOT_INVALID"}
         ids.append(item["item_id"])
     duplicates = [item_id for item_id, n in Counter(ids).items() if n > 1]

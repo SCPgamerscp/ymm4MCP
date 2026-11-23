@@ -32,7 +32,7 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
-from item_verification import read_item_inventory, validate_expected_items, verify_items
+from item_verification import read_item_inventory, valid_item_id, validate_expected_items, verify_items
 from ripple_planning import plan_ripple_delete
 from ripple_verification import verify_ripple_result
 from ripple_evidence import RippleEvidenceStore, project_identity
@@ -2032,6 +2032,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 "conflicts": content_conflicts, "rolled_back": False}
 
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
+    created_item_ids = set()
     gap = plan["gap"]
     cursor = {scene["id"]: scene["start_frame"] for scene in plan["scenes"]}
     atomic = bool(plan.get("atomic_scenes", True))
@@ -2105,11 +2106,21 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                     scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                     scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res},
                     outcome_unknown=outcome_unknown, timeline_changed=timeline_changed)
+            item_id = res.get("item_id")
+            if not valid_item_id(item_id) or item_id in current_by_id or item_id in created_item_ids:
+                # The write may have happened, but its receipt cannot identify
+                # what to roll back or what to persist for a retry.
+                return await _partial_edit_result(
+                    plan, error_code="EDIT_ADD_ID_UNVERIFIED",
+                    error="追加アイテムを一意に特定できません。追加・削除を続けずitemsで確認してください。",
+                    failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
+                    added=added, details=details, bindings=[], committed=committed,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
+                    scene_details=scene_details, extra={"failure": res}, outcome_unknown=True)
             added += 1
             scene_added += 1
-            item_id = res.get("item_id")
-            if isinstance(item_id, str) and item_id:
-                scene_added_ids.append(item_id)
+            created_item_ids.add(item_id)
+            scene_added_ids.append(item_id)
             scene_details.append({"id": op["id"], "op": "add", "item_id": item_id,
                                   "revision": res.get("revision"), "kind": op["kind"],
                                   "scene_id": scene_id, "result": res})
