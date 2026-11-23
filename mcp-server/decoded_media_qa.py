@@ -1382,11 +1382,17 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
         # A new interval can bridge two previously disjoint detections.
         # Expand until the union is stable (transitive overlap).
         while True:
-            additional = [(stored, issue) for stored, issue in records
-                          if stored["stream_ordinal"] == event["stream_ordinal"]
-                          and not any(stored is prior for prior, _ in matches)
-                          and stored["video_start_seconds"] <= end
-                          and start <= stored["video_end_seconds"]]
+            additional = []
+            for stored, issue in records:
+                if (stored["stream_ordinal"] != event["stream_ordinal"]
+                        or any(stored is prior for prior, _ in matches)):
+                    continue
+                overlap = (min(stored["video_end_seconds"], end)
+                           - max(stored["video_start_seconds"], start))
+                # The frame at an FFmpeg freeze_end can also start the next
+                # freeze. Touching timestamps alone do not prove it is the same image.
+                if overlap > 0 or (overlap == 0 and kind != "freeze"):
+                    additional.append((stored, issue))
             if not additional:
                 break
             matches.extend(additional)

@@ -179,6 +179,27 @@ class RealFfmpegExportQaTests(unittest.TestCase):
         self.assertTrue(report["passed"], report)
         self.assertFalse(report["black_frames"], report)
 
+    def test_freeze_limit_counts_different_adjacent_still_scenes_separately(self):
+        video = Path(self.directory.name) / "adjacent-still-scenes.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=64x64:r=10:d=6",
+            "-vf", "drawbox=c=red:t=fill:enable='gte(t,3)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+
+        options = dict(require_audio=False, sample_seconds=1, full_decode=True,
+                       full_signal_scan=True)
+        report = qa.inspect(str(video), max_freeze_seconds=4, **options)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual([(event["video_start_seconds"], event["video_end_seconds"])
+                          for event in report["frozen_frames"]], [(0.0, 3.0), (3.0, 6.0)])
+
+        strict = qa.inspect(str(video), max_freeze_seconds=2.9, **options)
+        self.assertFalse(strict["passed"], strict)
+        self.assertEqual([issue["duration_seconds"] for issue in strict["issues"]
+                          if issue["code"] == "EXPORT_FREEZE_DURATION_EXCEEDED"], [3.0, 3.0])
+
 
 if __name__ == "__main__":
     unittest.main()
