@@ -117,6 +117,14 @@ namespace YMM4McpPlugin
                 (parameter == typeof(string) || parameter == typeof(object)));
         }
 
+        internal static Task? InvokeProjectPathMethod(MethodInfo method, object host, string path)
+        {
+            var task = GetCompletionTask(method.Invoke(host, new object[] { path }));
+            if (task == null && ReturnsCompletionTask(method))
+                throw new InvalidOperationException("YMM4 project operation did not return an observable completion task.");
+            return task;
+        }
+
         // Match the MCP server's idempotency-key contract.  Internal whitespace is
         // allowed, but ASCII control characters must never reach persisted job keys.
         internal static bool IsValidIdempotencyKey(string key) =>

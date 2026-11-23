@@ -658,8 +658,8 @@ namespace YMM4McpPlugin
                                 && m.GetParameters().Length == 1
                                 && m.GetParameters()[0].ParameterType == typeof(string));
                         if (method == null) continue;
-                        var result = method.Invoke(host, new object[] { path });
-                        return (true, method.Name, targetName, result as Task);
+                        return (true, method.Name, targetName,
+                            ExportInvocationPolicy.InvokeProjectPathMethod(method, host, path));
                     }
                     foreach (var name in names.Select(n => n.EndsWith("Command", StringComparison.Ordinal) ? n : n + "Command"))
                     {
@@ -668,6 +668,10 @@ namespace YMM4McpPlugin
                         object? param = cmd.CanExecute(path) ? path : null;
                         if (!cmd.CanExecute(param)) continue;
                         if (param == null) continue;
+                        var executeAsync = ExportInvocationPolicy.FindAwaitableCommand(cmd);
+                        if (executeAsync != null)
+                            return (true, name, targetName,
+                                ExportInvocationPolicy.InvokeProjectPathMethod(executeAsync, cmd, path));
                         cmd.Execute(param);
                         return (true, name, targetName, null);
                     }

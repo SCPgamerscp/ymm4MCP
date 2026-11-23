@@ -67,12 +67,29 @@ Check(ExportInvocationPolicy.FindAwaitableCommand(plain) is null && !plain.Execu
 var asyncCommand = new AsyncExportCommand();
 var execute = ExportInvocationPolicy.FindAwaitableCommand(asyncCommand);
 var nativeTask = execute == null ? null
-    : ExportInvocationPolicy.GetCompletionTask(execute.Invoke(asyncCommand, new object[] { "episode.mp4" }));
+    : ExportInvocationPolicy.InvokeProjectPathMethod(execute, asyncCommand, "episode.ymmp");
 Check(nativeTask == asyncCommand.Completion.Task && !asyncCommand.Executed &&
-      asyncCommand.OutputPath == "episode.mp4" && nativeTask is { IsCompleted: false },
+      asyncCommand.OutputPath == "episode.ymmp" && nativeTask is { IsCompleted: false },
     "A command must use ExecuteAsync with the requested path and track its actual pending task");
 asyncCommand.Completion.SetResult(true);
 await nativeTask!;
+
+var project = new ProjectFileMethods();
+string projectPath = "example.ymmp";
+var openMethod = typeof(ProjectFileMethods).GetMethod(nameof(ProjectFileMethods.OpenProject))!;
+var opening = ExportInvocationPolicy.InvokeProjectPathMethod(openMethod, project, projectPath);
+Check(opening == project.Opening.Task && opening is { IsCompleted: false } && project.LastPath == projectPath,
+    "Opening a project must preserve the pending ValueTask completion");
+project.Opening.SetResult(true);
+await opening!;
+var saveMethod = typeof(ProjectFileMethods).GetMethod(nameof(ProjectFileMethods.SaveProjectAs))!;
+Check(ExportInvocationPolicy.InvokeProjectPathMethod(saveMethod, project, "copy.ymmp") is null &&
+      project.LastPath == "copy.ymmp", "Synchronous project methods must remain usable");
+var brokenMethod = typeof(ProjectFileMethods).GetMethod(nameof(ProjectFileMethods.OpenWithoutCompletion))!;
+bool rejectedMissingTask = false;
+try { ExportInvocationPolicy.InvokeProjectPathMethod(brokenMethod, project, projectPath); }
+catch (InvalidOperationException) { rejectedMissingTask = true; }
+Check(rejectedMissingTask, "An asynchronous project method without a task must not be acknowledged as complete");
 
 // Regression: export jobs persist idempotency keys, so embedded control characters
 // must be rejected before the request is recorded or replayed.
@@ -116,6 +133,21 @@ class ExportMethods
     public void OutputWithOutputFormat(string path, string outputFormat) { }
     public void OutputWithPreset(string path, string presetPath) { }
     public void OutputWithDirectory(string path, string outputDirectory) { }
+}
+
+class ProjectFileMethods
+{
+    public TaskCompletionSource<bool> Opening { get; } = new();
+    public string? LastPath { get; private set; }
+
+    public ValueTask OpenProject(string path)
+    {
+        LastPath = path;
+        return new ValueTask(Opening.Task);
+    }
+
+    public void SaveProjectAs(string path) => LastPath = path;
+    public Task? OpenWithoutCompletion(string path) => null;
 }
 
 class PlainExportCommand : ICommand
