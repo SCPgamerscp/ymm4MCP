@@ -880,16 +880,17 @@ async def set_expression(args: dict) -> dict:
               "expression": expression, "face_path": mapping[expression], "revision": revision}
     if dry_run:
         return result
+    unknown = {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
+               "item_id": item_id, "outcome_unknown": True}
     try:
         changed = await ymm4_post("/items/face/param", {
             "item_id": item_id, "expected_revision": revision, "FacePath": mapping[expression],
             "require_face_path_readback": True})
-    except httpx.HTTPError as exc:
-        return {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
-                "item_id": item_id, "outcome_unknown": True, "error": str(exc)}
+    except (httpx.HTTPError, ValueError) as exc:
+        return {**unknown, "error": str(exc)}
     if (isinstance(changed, dict) and changed.get("success") is False and
-            changed.get("changed") is not True and
-            (changed.get("outcome_unknown") is False or "outcome_unknown" not in changed)):
+            changed.get("changed", False) is False and
+            changed.get("outcome_unknown", False) is False):
         return {"success": False, "error_code": "EXPRESSION_UPDATE_FAILED",
                 "item_id": item_id, "details": changed}
     if (not isinstance(changed, dict) or changed.get("success") is not True or
@@ -900,8 +901,7 @@ async def set_expression(args: dict) -> dict:
             changed.get("results") != ["FacePath=OK"] or
             not ducking.valid_identifier(changed.get("revision"), max_length=256) or
             changed["revision"] == revision):
-        return {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
-                "item_id": item_id, "outcome_unknown": True, "details": changed}
+        return {**unknown, "details": changed}
     return {**result, "dry_run": False, "revision": changed["revision"],
             "verified": True, "host_result": changed}
 

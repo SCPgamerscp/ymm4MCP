@@ -2,6 +2,8 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 import server
 
 
@@ -46,17 +48,37 @@ class ExpressionTests(unittest.IsolatedAsyncioTestCase):
             {**VERIFIED, "error_code": "FACE_PARAM_UNVERIFIED"},
             {**VERIFIED, "changed": False},
             {"success": False, "outcome_unknown": True, "error_code": "FACE_PARAM_UNVERIFIED"},
+            {"success": False, "changed": 1, "error_code": "FACE_PARAM_INVALID"},
+            {"success": False, "changed": None, "error_code": "FACE_PARAM_INVALID"},
         ]
         for reply in replies:
             with self.subTest(reply=reply), \
                  patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)), \
                  patch.object(server, "ymm4_post", AsyncMock(return_value=reply)) as post:
                 result = await server.dispatch({**ARGS, "dry_run": False})
-            self.assertFalse(result["success"])
-            self.assertEqual(result["error_code"], "EXPRESSION_OUTCOME_UNKNOWN")
-            self.assertTrue(result["outcome_unknown"])
-            self.assertNotIn("verified", result)
-            post.assert_awaited_once()
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "EXPRESSION_OUTCOME_UNKNOWN")
+                self.assertTrue(result["outcome_unknown"])
+                self.assertNotIn("verified", result)
+                post.assert_awaited_once()
+
+    async def test_unreadable_http_receipt_reports_unknown_outcome_without_retry(self):
+        base = "http://127.0.0.1:9876/api"
+        url = f"{base}/items/face/param"
+        for body in (b'{"success":', b'\xff{"success":true}'):
+            reply = httpx.Response(200, content=body, request=httpx.Request("POST", url))
+            with self.subTest(body=body), \
+                 patch.object(server, "ymm4_get", AsyncMock(return_value=ITEMS)), \
+                 patch.object(server, "connection_settings", return_value=(base, {})), \
+                 patch.object(server, "_get_http_client") as client:
+                client.return_value.post = AsyncMock(return_value=reply)
+                result = await server.dispatch({**ARGS, "dry_run": False})
+                client.return_value.post.assert_awaited_once()
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "EXPRESSION_OUTCOME_UNKNOWN")
+                self.assertEqual(result["item_id"], "native:face")
+                self.assertTrue(result["outcome_unknown"])
+                self.assertNotIn("verified", result)
 
     async def test_native_tachie_face_can_preview_and_apply_an_expression(self):
         for native_type in ("TachieFaceItem", "YukkuriMovieMaker.Project.Items.TachieFaceItem"):
