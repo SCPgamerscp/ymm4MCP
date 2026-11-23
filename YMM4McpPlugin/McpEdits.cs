@@ -579,12 +579,13 @@ namespace YMM4McpPlugin
                         "YMM4でバックアッププロジェクトを開くメソッドが見つかりません");
                 if (invoked.task != null)
                     await invoked.task;
-                if (!EditCheckpointSafety.SameProject(backup.BackupPath, CurrentProjectPath()))
+                if (!EditCheckpointSafety.IsStableSavedProject(
+                        backup.BackupPath, CurrentProjectPath(), CurrentProjectSaveState()))
                     return (object)new
                     {
                         success = false,
                         error_code = "RESTORE_OUTCOME_UNKNOWN",
-                        error = "バックアップを開く処理を呼びましたが、プロジェクトの切替を確認できません",
+                        error = "バックアップが保存済みプロジェクトとして開かれたことを確認できません",
                         outcome_unknown = true,
                         checkpoint_id = record.Id,
                         backup_path = record.BackupPath

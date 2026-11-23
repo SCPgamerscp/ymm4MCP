@@ -67,6 +67,19 @@ class CheckpointRestoreDispatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result["outcome_unknown"])
             post.assert_awaited_once()
 
+    async def test_only_explicit_false_outcome_unknown_can_confirm_restore(self):
+        for flag in (True, None, 0, "false", False):
+            receipt = {**RESTORED, "outcome_unknown": flag}
+            with self.subTest(flag=flag), \
+                 patch.object(server, "ymm4_post", AsyncMock(return_value=receipt)) as post:
+                result = await server.dispatch(RESTORE)
+                if flag is False:
+                    self.assertEqual(result, receipt)
+                else:
+                    self.assertIs(result["success"], False)
+                    self.assertEqual(result["error_code"], "RESTORE_OUTCOME_UNKNOWN")
+            post.assert_awaited_once()
+
     async def test_restore_timeout_is_indeterminate_and_is_not_retried(self):
         with patch.object(server, "ymm4_post",
                           AsyncMock(side_effect=httpx.ReadTimeout("editing host timed out"))) as post:

@@ -576,6 +576,7 @@ async def restore_checkpoint_backup(checkpoint_id: str) -> dict:
     original = restored.get("original_project_path")
     digest = restored.get("backup_sha256")
     if (restored.get("success") is not True or "error" in restored or "error_code" in restored or
+            restored.get("outcome_unknown", False) is not False or
             restored.get("action") != "restore_backup" or restored.get("checkpoint_id") != checkpoint_id or
             not is_absolute_media_path(backup) or not backup.lower().endswith(".ymmp") or
             not is_absolute_media_path(original) or not original.lower().endswith(".ymmp") or
