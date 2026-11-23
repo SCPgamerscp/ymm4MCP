@@ -123,6 +123,45 @@ class KeyframePersistenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ProbeError, "live timeline changed during snapshot"):
                 verify(client, BASE, HEADERS, self.snapshot)
 
+    def test_atomic_save_between_capture_and_verify_is_allowed(self):
+        self.capture()
+        replacement = self.project.with_suffix(".tmp")
+        replacement.write_bytes(b"updated disposable project")
+        stat = self.project.stat()
+        os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+        replacement.replace(self.project)
+        self.fake.saved = True
+        verify(self.client, BASE, HEADERS, self.snapshot)
+
+    def client_replacing_project_during_readback(self):
+        original = self.project.stat()
+        replacement = self.project.with_suffix(".tmp")
+        replacement.write_bytes(b"x" * original.st_size)
+        os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+        def replace_project(request):
+            response = self.fake(request)
+            if request.url.params.get("prop") == "X":
+                replacement.replace(self.project)
+                self.assertEqual(self.project.stat().st_mtime_ns, original.st_mtime_ns)
+            return response
+
+        return httpx.Client(transport=httpx.MockTransport(replace_project), trust_env=False)
+
+    def test_same_timestamp_project_replacement_during_capture_is_rejected(self):
+        with self.client_replacing_project_during_readback() as client:
+            with self.assertRaisesRegex(ProbeError, "Project changed"):
+                capture(client, BASE, HEADERS, "native:test", 24,
+                        {"Zoom": 1.25, "X": 80.0}, self.snapshot)
+        self.assertFalse(self.snapshot.exists())
+
+    def test_same_timestamp_project_replacement_during_verify_is_rejected(self):
+        self.capture()
+        self.save()
+        with self.client_replacing_project_during_readback() as client:
+            with self.assertRaisesRegex(ProbeError, "Project changed"):
+                verify(client, BASE, HEADERS, self.snapshot)
+
     def test_capture_refuses_preexisting_snapshot(self):
         self.capture()
         with self.assertRaisesRegex(ProbeError, "already exists"):

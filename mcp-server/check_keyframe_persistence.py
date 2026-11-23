@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import stat
 import sys
 
 import httpx
@@ -23,18 +24,26 @@ SCHEMA = 1
 MAX_SNAPSHOT_BYTES = 1_048_576
 
 
-def _project(client: httpx.Client, base: str, headers: dict) -> tuple[str, Path, bool]:
+def _project(client: httpx.Client, base: str, headers: dict) -> tuple[str, os.stat_result, bool]:
     info = api(client, base, headers, "GET", "/project")
     raw = info.get("projectPath")
     if not isinstance(raw, str) or not raw.strip() or not os.path.isabs(raw):
         raise ProbeError("Project must be saved to an absolute .ymmp path")
     path = Path(raw).resolve(strict=True)
-    if path.suffix.lower() != ".ymmp" or not path.is_file() or path.stat().st_size == 0:
+    file_info = path.stat()
+    if path.suffix.lower() != ".ymmp" or not stat.S_ISREG(file_info.st_mode) or file_info.st_size == 0:
         raise ProbeError("Project .ymmp file is missing or empty")
     saved = info.get("isSaved")
     if type(saved) is not bool:
         raise ProbeError("Project save state is unknown")
-    return os.path.normcase(str(path)), path, saved
+    return os.path.normcase(str(path)), file_info, saved
+
+
+def _same_project_file(before: os.stat_result, after: os.stat_result) -> bool:
+    # File replacement can preserve its name, size, and modification time.
+    return (os.path.samestat(before, after)
+            and (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            == (after.st_size, after.st_mtime_ns, after.st_ctime_ns))
 
 
 def _state(client: httpx.Client, base: str, headers: dict,
@@ -61,18 +70,17 @@ def _state(client: httpx.Client, base: str, headers: dict,
 
 def capture(client: httpx.Client, base: str, headers: dict, item_id: str,
             at: int | None, values: dict[str, float], snapshot: Path) -> None:
-    project_name, path, saved = _project(client, base, headers)
+    project_name, project_file, saved = _project(client, base, headers)
     if saved:
         raise ProbeError("Edit the disposable project before capture; isSaved must be false")
-    mtime_ns = path.stat().st_mtime_ns
     last_frame = at is None
     animations, at, timeline_id = _state(client, base, headers, item_id, at, values)
     # Guard against a concurrent project switch or save while reading.
-    second_name, _, second_saved = _project(client, base, headers)
-    if second_name != project_name or second_saved or path.stat().st_mtime_ns != mtime_ns:
+    second_name, second_file, second_saved = _project(client, base, headers)
+    if second_name != project_name or second_saved or not _same_project_file(project_file, second_file):
         raise ProbeError("Project changed or was saved during capture")
     payload = {"schema": SCHEMA, "project_path": project_name,
-               "project_mtime_ns": mtime_ns,
+               "project_mtime_ns": project_file.st_mtime_ns,
                "item_id": item_id, "at": at, "last_frame": last_frame, "values": values,
                "animations": animations}
     if timeline_id is not None:
@@ -110,11 +118,10 @@ def verify(client: httpx.Client, base: str, headers: dict, snapshot: Path) -> No
                    for v in data["values"].values())
             or not isinstance(data.get("animations"), dict)):
         raise ProbeError("Snapshot has an invalid schema")
-    project_name, path, saved = _project(client, base, headers)
+    project_name, project_file, saved = _project(client, base, headers)
     if project_name != data["project_path"] or not saved:
         raise ProbeError("Project path changed or project still has unsaved edits")
-    mtime_ns = path.stat().st_mtime_ns
-    if mtime_ns <= data["project_mtime_ns"]:
+    if project_file.st_mtime_ns <= data["project_mtime_ns"]:
         raise ProbeError("Project file was not saved after capture")
     current, at, timeline_id = _state(client, base, headers, data["item_id"],
                                       None if data.get("last_frame") else data["at"],
@@ -129,8 +136,8 @@ def verify(client: httpx.Client, base: str, headers: dict, snapshot: Path) -> No
         raise ProbeError("Image last frame differs after save/reopen")
     if current != data["animations"]:
         raise ProbeError("Animation inventory differs after save/reopen")
-    second_name, _, second_saved = _project(client, base, headers)
-    if second_name != project_name or not second_saved or path.stat().st_mtime_ns != mtime_ns:
+    second_name, second_file, second_saved = _project(client, base, headers)
+    if second_name != project_name or not second_saved or not _same_project_file(project_file, second_file):
         raise ProbeError("Project changed during save/reopen verification")
     print("PASS verify: saved project and full Zoom/X animation inventory match capture")
     if previous_timeline_id is not None:
