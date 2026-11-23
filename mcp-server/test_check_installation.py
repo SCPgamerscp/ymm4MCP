@@ -338,6 +338,20 @@ class InstallationAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(InstallationError, "changed during"):
             self.inspect()
 
+    def test_store_profile_initialized_during_stdio_blocks_acceptance(self):
+        def probe(_python, _server, *, env, expected_port):
+            self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8766/api"})
+            return {"tool_count": 4, "status_port": expected_port}
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "profiles changed during"):
+            self.inspect()
+        self.assertEqual(self.mcp.call_count, 1)
+        self.assertEqual(self.status.call_count, 1)
+
+        # The subsequent run sees the new profile and rejects its old port.
+        with self.assertRaisesRegex(InstallationError, "differs from the running"):
+            self.inspect()
+
     def test_non_string_claude_env_rejected_before_network(self):
         self.write_config(self.classic, env={"GEMINI_API_KEY": 123})
         with self.assertRaisesRegex(InstallationError, "env is malformed"):

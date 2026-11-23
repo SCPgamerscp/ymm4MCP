@@ -51,7 +51,7 @@ def _same_path(actual, expected):
     return os.path.normcase(os.path.abspath(actual)) == os.path.normcase(os.path.abspath(expected))
 
 
-def _config_paths(local_appdata: Path, appdata: Path):
+def _initialized_config_paths(local_appdata: Path, appdata: Path):
     paths = [appdata / "Claude" / "claude_desktop_config.json"]
     packages = local_appdata / "Packages"
     if packages.is_dir():
@@ -60,7 +60,7 @@ def _config_paths(local_appdata: Path, appdata: Path):
                 path = directory / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json"
                 if path.parent.is_dir():
                     paths.append(path)
-    return paths
+    return [path for path in paths if path.is_file()]
 
 
 def _authenticated_status_for_profile(status_check, profile_env):
@@ -99,8 +99,7 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
     for path in (python, server, root / "requirements.txt"):
         if not path.is_file():
             raise InstallationError(f"Missing persistent installation file: {path.name}")
-    candidates = _config_paths(local_appdata, appdata)
-    configs = [path for path in candidates if path.is_file()]
+    configs = _initialized_config_paths(local_appdata, appdata)
     if not configs:
         raise InstallationError("No initialized Claude Desktop configuration was found")
     configured_ports = set()
@@ -197,6 +196,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
             raise InstallationError("Claude Desktop configuration changed during acceptance check")
         if configured_port is not None and configured_port != status["port"]:
             raise InstallationError("Claude Desktop port differs from the running YMM4 plugin")
+    if set(_initialized_config_paths(local_appdata, appdata)) != snapshots.keys():
+        raise InstallationError("Claude Desktop profiles changed during acceptance check")
     return {"success": True, "persistent_install": True,
             "claude_profiles_checked": len(configs),
             "authenticated_status": "running", "port": status["port"],
