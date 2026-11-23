@@ -150,6 +150,30 @@ try
     File.WriteAllBytes(path, Wave(mostlyClean));
     Check(WavAudioInspector.Inspect(path).Passed,
         "alternating channels must not count as a continuous clipping run");
+
+    // Isolated clips on one channel can exceed 0.1% on that channel even
+    // when they account for less than 0.1% of the interleaved samples.
+    const int sparseFrames = 10_000;
+    for (int channel = 0; channel < 2; channel++)
+    {
+        var sparseClip = Enumerable.Repeat((short)8192, sparseFrames * 2).ToArray();
+        for (int index = 0; index < 10; index++)
+            sparseClip[(100 + index * 20) * 2 + channel] = short.MaxValue;
+        File.WriteAllBytes(path, Wave(sparseClip));
+        Check(WavAudioInspector.Inspect(path).Passed,
+            "an isolated clipped-sample fraction of exactly 0.1% must pass");
+
+        for (int index = 10; index < 15; index++)
+            sparseClip[(100 + index * 20) * 2 + channel] = short.MaxValue;
+        File.WriteAllBytes(path, Wave(sparseClip));
+        var sparseQa = WavAudioInspector.Inspect(path);
+        var sparseIssue = sparseQa.Issues.SingleOrDefault(issue => issue.Code == "AUDIO_CLIPPING");
+        Check(sparseQa.Success && !sparseQa.Passed && sparseIssue != null
+            && sparseIssue.StartSeconds == null && sparseIssue.EndSeconds == null
+            && sparseIssue.Message.Contains($"チャンネル {channel + 1} ", StringComparison.Ordinal),
+            "isolated clipping above 0.1% must fail and identify the affected channel");
+    }
+
     File.WriteAllBytes(path, Wave(new short[8000 * 2]));
     var shortSilence = WavAudioInspector.Inspect(path, 2);
     Check(shortSilence.Success && !shortSilence.Passed &&

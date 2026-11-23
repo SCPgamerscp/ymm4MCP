@@ -121,8 +121,9 @@ namespace YMM4McpPlugin
                 double[] sumSamples = new double[channels];
                 double[] peaksByChannel = new double[channels];
                 long[] clipRuns = new long[channels];
+                long[] clippedSamples = new long[channels];
                 double crossSamples = 0;
-                long clipped = 0, silentStart = -1;
+                long silentStart = -1;
                 long longestClipLength = 0, longestClipEnd = 0;
                 long firstOverRangeFrame = -1;
                 double peak = 0;
@@ -165,7 +166,7 @@ namespace YMM4McpPlugin
                                 firstOverRangeFrame = frame;
                             if (normalized <= -NearFullScale || normalized >= positiveClipThreshold)
                             {
-                                clipped++;
+                                clippedSamples[ch]++;
                                 long runLength = ++clipRuns[ch];
                                 if (runLength > longestClipLength)
                                 {
@@ -204,9 +205,17 @@ namespace YMM4McpPlugin
                     issues.Add(new("AUDIO_CLIPPING", "error",
                         (double)firstOverRangeFrame / rate, (double)(firstOverRangeFrame + 1) / rate,
                         "浮動小数点 WAV でフルスケールを超えた最初のフレームです"));
-                else if (clipped > frames * channels * 0.001)
-                    issues.Add(new("AUDIO_CLIPPING", "error", null, null,
-                        "ファイル全体でフルスケール付近のサンプルが0.1%を超えています"));
+                else
+                {
+                    // Check the 0.1% limit per channel so a clean channel cannot
+                    // dilute the clipped-sample fraction of the other channel.
+                    var clippedChannels = Enumerable.Range(0, channels)
+                        .Where(ch => clippedSamples[ch] > frames / 1000)
+                        .Select(ch => ch + 1).ToArray();
+                    if (clippedChannels.Length > 0)
+                        issues.Add(new("AUDIO_CLIPPING", "error", null, null,
+                            $"チャンネル {string.Join("、", clippedChannels)} でフルスケール付近のサンプルが0.1%を超えています"));
+                }
                 var rmsByChannel = sumSquares.Select(sum => Math.Sqrt(sum / frames)).ToArray();
                 var means = sumSamples.Select(sum => sum / frames).ToArray();
                 for (int ch = 0; ch < channels; ch++)
