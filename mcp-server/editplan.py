@@ -501,12 +501,16 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
     mapped = bindings_map(bindings)
     current_by_id = {item.get("item_id"): item for item in current_items
                      if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
+    desired = flatten_items(plan)
+    # An earlier operation must not claim a later operation's saved item
+    # while trying to recover a missing binding by content.
+    reserved = {mapped[item["id"]]["item_id"] for item in desired if item["id"] in mapped}
     fingerprints = [(current, current_fingerprint(current)) for current in current_items
-                    if isinstance(current, dict) and isinstance(current.get("item_id"), str)]
+                    if isinstance(current, dict) and isinstance(current.get("item_id"), str)
+                    and current["item_id"] not in reserved]
     claimed = set()
     ops = []
     warnings = []
-    desired = flatten_items(plan)
     for item in desired:
         if item["kind"] in {"video", "audio", "image"}:
             if not Path(item["source"]).is_file():

@@ -2068,7 +2068,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
             try:
                 length = integer(res.get("length"), "actual length", 1)
                 actual_frame = integer(res.get("frame"), "actual frame")
-                cursor[scene_id] = integer(actual_frame + length + gap, "next frame")
+                next_frame = integer(actual_frame + length + gap, "next frame")
             except ValueError:
                 if op["kind"] == "voice":
                     return await _partial_edit_result(
@@ -2078,7 +2078,9 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                         added=added, details=details, bindings=bindings, committed=committed,
                         scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
                         scene_details=scene_details, scene_bindings=scene_bindings)
-                cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
+                next_frame = payload.get("frame", 0) + op.get("length", 1) + gap
+            # Explicit overlays can end before an earlier operation in the same scene.
+            cursor[scene_id] = max(cursor[scene_id], next_frame)
         bindings.extend(scene_bindings)
         details.extend(scene_details)
         committed.append(scene_id)

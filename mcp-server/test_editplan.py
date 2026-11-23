@@ -447,14 +447,14 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(applied["error_code"], "PROJECT_SETTINGS_MISMATCH")
         post.assert_not_awaited()
 
-    def _patches(self, items, characters, posts):
+    def _patches(self, items, characters, posts, bindings=None):
         async def get(path):
             if path == "/characters":
                 return {"success": True, "characters": characters}
             if path == "/items":
                 return {"success": True, "items": items() if callable(items) else items}
             if path == "/edits/state":
-                return {"success": True, "bindings": []}
+                return {"success": True, "bindings": bindings or []}
             if path.startswith("/media/info?path="):
                 return {"success": True, "exists": True}
             raise AssertionError(path)
@@ -492,6 +492,68 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
             self.assertEqual(result["conflicts"][0]["candidate_item_ids"],
                              ["native:clip", "native:duplicate"])
+
+    async def test_apply_and_reconcile_preserve_a_later_items_saved_binding(self):
+        request = one_text_plan()
+        planned = request["plan"]["scenes"][0]["items"]
+        planned[0].pop("frame")
+        planned.append({**planned[0], "id": "later-caption", "frame": 20})
+        bound_later = {"id": "later-caption", "item_id": "native:later", "revision": "r1"}
+        record = {"idempotency_key": request["idempotency_key"],
+                  "plan_hash": editplan.plan_hash(editplan.parse_plan(request)),
+                  "items": [bound_later]}
+        for action in ("apply_edit", "reconcile_edit"):
+            with self.subTest(action=action):
+                current = [{"item_id": "native:later", "revision": "r1", "type": "TextItem",
+                            "text": "hello", "frame": 20, "layer": 1, "length": 10}]
+
+                async def post(path, body=None, **unused):
+                    if path == "/items/text":
+                        added = {"success": True, "item_id": "native:first", "revision": "r2",
+                                 **{key: body[key] for key in ("frame", "layer", "length")}}
+                        current.append({**added, "type": "TextItem", "text": body["text"]})
+                        return added
+                    if path == "/edits/bindings":
+                        return {"success": True}
+                    raise AssertionError(path)
+
+                get, patch_post = self._patches(current, [], post, [record])
+                with get, patch_post as posted:
+                    result = await server.dispatch({"action": action, **request})
+                self.assertTrue(result["success"], result)
+                self.assertEqual([(row["id"], row["op"], row["item_id"])
+                                  for row in result["details"]],
+                                 [("caption", "add", "native:first"),
+                                  ("later-caption", "keep", "native:later")])
+                self.assertEqual(sorted(item["frame"] for item in current), [0, 20])
+                self.assertEqual(posted.await_args.args[1]["items"][1], bound_later)
+
+    async def test_explicit_overlay_does_not_move_sequential_frame_before_voice_end(self):
+        request = {"action": "apply_edit", "plan": {"gap": 0, "scenes": [{
+            "id": "scene", "items": [
+                {"id": "voice", "type": "dialogue", "character": "A", "text": "line",
+                 "frame": 0, "layer": 1},
+                {"id": "overlay", "type": "text", "text": "overlay",
+                 "frame": 0, "layer": 2, "length": 10},
+                {"id": "tail", "type": "text", "text": "sequential", "layer": 1, "length": 10},
+            ]}]}}
+        current = []
+
+        async def post(path, body=None, **unused):
+            is_voice = path == "/items/voice"
+            result = {"success": True, "item_id": f"native:{len(current)}", "revision": "r1",
+                      "frame": body["frame"], "layer": body["layer"],
+                      "length": 100 if is_voice else body["length"]}
+            current.append({**result, "type": "VoiceItem" if is_voice else "TextItem",
+                            "text": body["text"]})
+            return result
+
+        get, patch_post = self._patches(current, [{"name": "A"}], post)
+        with get, patch_post:
+            result = await server.dispatch(request)
+        self.assertTrue(result["success"], result)
+        self.assertEqual([(item["text"], item["frame"]) for item in current],
+                         [("line", 0), ("overlay", 0), ("sequential", 100)])
 
     async def test_apply_edit_adds_then_replays(self):
         created = []
