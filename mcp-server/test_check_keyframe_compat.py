@@ -157,6 +157,47 @@ def probe(fake, at=24):
 
 
 class LiveProbeProtocolTests(unittest.TestCase):
+    def test_live_timeline_switch_stops_writes_even_with_matching_revisions(self):
+        for at, switch_after, new_identity in (
+            (24, 0, "timeline:" + "b" * 32),
+            (None, 0, None),
+            (24, 1, "timeline:" + "b" * 32),
+            (None, 2, "timeline:" + "b" * 32),
+        ):
+            with self.subTest(at=at, switch_after=switch_after, new_identity=new_identity):
+                fake = FakeYmm4()
+                initial = "timeline:" + "a" * 32
+                item_reads = 0
+
+                def switched(request):
+                    nonlocal item_reads
+                    response = fake(request)
+                    if request.method == "GET" and request.url.path == "/api/items":
+                        item_reads += 1
+                        identity = (new_identity if item_reads > 1 and len(fake.posts) >= switch_after
+                                    else initial)
+                        payload = response.json()
+                        if identity is not None:
+                            payload["timeline_id"] = identity
+                        return httpx.Response(200, json=payload)
+                    return response
+
+                with self.assertRaisesRegex(ProbeError, "live timeline changed or became unavailable"):
+                    probe(switched, at=at)
+                self.assertEqual([post["action"] for post in fake.posts], ["set"] * switch_after)
+
+    def test_stable_live_timeline_allows_insert_reedit_and_cleanup(self):
+        fake = FakeYmm4()
+
+        def same_timeline(request):
+            response = fake(request)
+            if request.method == "GET" and request.url.path == "/api/items":
+                return httpx.Response(200, json={**response.json(), "timeline_id": "timeline:" + "a" * 32})
+            return response
+
+        probe(same_timeline, at=None)
+        self.assertEqual([post["action"] for post in fake.posts], ["set", "set", "remove"] * 2)
+
     def test_last_frame_uses_live_item_length_for_every_write(self):
         fake = FakeYmm4()
         fake.item_length = 73

@@ -159,11 +159,22 @@ def _unacknowledged_insert_is_isolated(current: dict[str, list[dict]],
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, at: int | None, values: dict[str, float]) -> None:
     last_frame = at is None
-    at, item_revision, _ = validate_test_item(client, base, headers, item_id, at)
+    at, item_revision, timeline_id = validate_test_item(client, base, headers, item_id, at)
+
+    def verify_active_item(prop: str, expected_revision: str) -> None:
+        if not last_frame and timeline_id is None:
+            return
+        current_at, revision, current_timeline_id = validate_test_item(
+            client, base, headers, item_id, None if last_frame else at)
+        if current_timeline_id != timeline_id:
+            raise ProbeError(f"{prop}: live timeline changed or became unavailable")
+        if current_at != at or revision != expected_revision:
+            raise ProbeError(f"{prop}: item length or revision changed; refusing edit")
+
     # Capture every property before writing: YMM4 may share one KeyFrames
     # collection among Zoom, X and other animation properties.
     baseline, baseline_revision = snapshot_all_animations(client, base, headers, item_id)
-    if last_frame and item_revision != baseline_revision:
+    if (last_frame or timeline_id is not None) and item_revision != baseline_revision:
         raise ProbeError("Item length could not be verified against the animation revision; refusing edit")
     for prop in values:
         if prop not in baseline:
@@ -193,13 +204,10 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                 client, base, headers, item_id)
             if current != baseline:
                 raise ProbeError(f"{prop}: animation inventory changed; refusing edit")
-            if last_frame:
-                current_at, item_revision, _ = validate_test_item(client, base, headers, item_id, None)
-                if current_at != at or item_revision != current_revision:
-                    raise ProbeError(f"{prop}: item length or revision changed; refusing last-frame edit")
             _, revision = keyframes(client, base, headers, item_id, prop)
             if revision != current_revision:
                 raise ProbeError(f"{prop}: item changed before write; refusing edit")
+            verify_active_item(prop, revision)
             # Record BEFORE the POST: a failed request might have mutated YMM4.
             touched = True
             result = api(client, base, headers, "POST", "/items/keyframe",
@@ -235,6 +243,7 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             # Use a distinct, finite value without changing the frame. This
             # checks that the host replaces rather than appends a duplicate.
             reedit_value = value * 0.9 if abs(value) >= 1.0 else value + 0.5
+            verify_active_item(prop, cleanup_revision)
             reedit = api(client, base, headers, "POST", "/items/keyframe",
                          {"item_id": item_id, "expected_revision": cleanup_revision,
                           "prop": prop, "action": "set", "at": at,
@@ -282,6 +291,7 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                         elif revision != cleanup_revision:
                             raise ProbeError(
                                 f"{prop}: item changed after readback; refusing cleanup")
+                        verify_active_item(prop, revision)
                         api(client, base, headers, "POST", "/items/keyframe",
                             {"item_id": item_id,
                              "expected_revision": cleanup_revision or revision,
@@ -289,7 +299,8 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                     # Removing a shared frame may silently alter unrelated
                     # Animation values or pre-existing frames. Verify the
                     # entire inventory, including added/removed properties.
-                    restored, _ = snapshot_all_animations(client, base, headers, item_id)
+                    restored, restored_revision = snapshot_all_animations(client, base, headers, item_id)
+                    verify_active_item(prop, restored_revision)
                     if restored != baseline:
                         changed = sorted(set(restored) ^ set(baseline))
                         changed += sorted(name for name in restored.keys() & baseline.keys()
