@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 
 namespace YMM4McpPlugin
 {
@@ -573,12 +575,11 @@ namespace YMM4McpPlugin
                 if (CurrentProjectSaveState() is not true)
                     return (object)Failure("UNSAVED_CHANGES",
                         "保存状態が不明か未保存の変更があります。保存してから復元してください");
-                var invoked = InvokeNamed(OpenMethodHints, backup.BackupPath);
-                if (!invoked.ok)
+                Task? load = StartObservableBackupOpen(backup.BackupPath);
+                if (load == null)
                     return (object)Failure("OPEN_METHOD_UNAVAILABLE",
-                        "YMM4でバックアッププロジェクトを開くメソッドが見つかりません");
-                if (invoked.task != null)
-                    await invoked.task;
+                        "YMM4でバックアップの読み込み完了を確認できるメソッドが見つかりません");
+                await load;
                 if (!EditCheckpointSafety.IsStableSavedProject(
                         backup.BackupPath, CurrentProjectPath(), CurrentProjectSaveState()))
                     return (object)new
@@ -601,6 +602,35 @@ namespace YMM4McpPlugin
                     note = "バックアップを別プロジェクトとして開きました。元のプロジェクトは上書きしていません。チェックポイント領域のコピーは将来整理されるため、編集を続ける前に別の場所へ名前を付けて保存してください。"
                 };
             });
+        }
+
+        private Task? StartObservableBackupOpen(string path)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var main = ResolveTarget("Main");
+            foreach (var host in new[] { main, main == null ? null : GetMainModel(main), ResolveTarget("Project") })
+            {
+                if (host == null) continue;
+                var type = host.GetType();
+                var methods = type.GetMethods(flags);
+                foreach (string name in OpenMethodHints)
+                {
+                    var method = methods.FirstOrDefault(candidate =>
+                        (candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                         candidate.Name.Equals(name + "Async", StringComparison.OrdinalIgnoreCase)) &&
+                        ExportInvocationPolicy.AcceptsObservableProjectOpen(candidate));
+                    if (method != null)
+                        return ExportInvocationPolicy.InvokeProjectPathMethod(method, host, path);
+                }
+                foreach (string name in OpenMethodHints)
+                {
+                    if (type.GetProperty(name + "Command", flags)?.GetValue(host) is ICommand command &&
+                        ExportInvocationPolicy.FindAwaitableCommand(command) is MethodInfo execute &&
+                        command.CanExecute(path))
+                        return ExportInvocationPolicy.InvokeProjectPathMethod(execute, command, path);
+                }
+            }
+            return null;
         }
 
         private bool? CurrentProjectSaveState()

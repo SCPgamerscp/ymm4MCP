@@ -5,6 +5,21 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+Check(!ExportInvocationPolicy.AcceptsObservableProjectOpen(typeof(ObservableBackupOpen).GetMethod(nameof(ObservableBackupOpen.OpenWithoutCompletion))!),
+    "A void path-taking overload must not start a verified restore");
+var openPath = typeof(ObservableBackupOpen).GetMethod(nameof(ObservableBackupOpen.OpenAsync), [typeof(string)])!;
+Check(ExportInvocationPolicy.AcceptsObservableProjectOpen(openPath),
+    "A path-taking ValueTask overload can report when the restore finishes");
+var openDialog = typeof(ObservableBackupOpen).GetMethod(nameof(ObservableBackupOpen.OpenAsync), Type.EmptyTypes)!;
+Check(!ExportInvocationPolicy.AcceptsObservableProjectOpen(openDialog),
+    "An awaitable overload without a project path must not start a restore");
+var observableOpen = new ObservableBackupOpen();
+var openTask = ExportInvocationPolicy.InvokeProjectPathMethod(openPath, observableOpen, "backup.ymmp");
+Check(openTask is { IsCompleted: false } && observableOpen.Path == "backup.ymmp",
+    "Restore should hold its backup handle while the returned load is pending");
+observableOpen.Loaded.SetResult();
+Check(openTask is { IsCompletedSuccessfully: true }, "Completion must come from the selected load");
+
 var seen = new HashSet<string>(StringComparer.Ordinal);
 EditCheckpointSafety.ValidateBinding("scene-1", "native:item-1", seen);
 Check(seen.Count == 1, "valid binding rejected");
@@ -251,14 +266,20 @@ if (OperatingSystem.IsWindows())
         File.Delete(backup);
 
         string target = Path.Combine(restoreDir, "target");
-        Directory.CreateDirectory(target);
-        File.Copy(copy, Path.Combine(target, checkpointId + ".ymmp"));
+        string nested = Path.Combine(target, "nested");
+        Directory.CreateDirectory(nested);
+        string nestedBackup = Path.Combine(nested, checkpointId + ".ymmp");
+        File.Copy(copy, nestedBackup);
+        using (var direct = EditCheckpointSafety.OpenVerifiedBackup(
+                   nestedBackup, nested, checkpointId, project, project, hash))
+            Check(direct != null, "a normal nested backup path should open");
         string linkedDirectory = Path.Combine(restoreDir, "linked");
         Directory.CreateSymbolicLink(linkedDirectory, target);
+        string linkedNested = Path.Combine(linkedDirectory, "nested");
         using var linked = EditCheckpointSafety.OpenVerifiedBackup(
-            Path.Combine(linkedDirectory, checkpointId + ".ymmp"),
-            linkedDirectory, checkpointId, project, project, hash);
-        Check(linked == null, "a backup reached through a linked directory must not be opened");
+            Path.Combine(linkedNested, checkpointId + ".ymmp"),
+            linkedNested, checkpointId, project, project, hash);
+        Check(linked == null, "a backup reached through a linked ancestor must not be opened");
     }
     finally
     {
@@ -295,3 +316,18 @@ finally
     Directory.Delete(root, recursive: true);
 }
 Console.WriteLine("Edit checkpoint safety tests passed");
+
+class ObservableBackupOpen
+{
+    public TaskCompletionSource Loaded { get; } = new();
+    public string? Path { get; private set; }
+
+    public ValueTask OpenAsync(string path)
+    {
+        Path = path;
+        return new ValueTask(Loaded.Task);
+    }
+
+    public Task OpenAsync() => Task.CompletedTask;
+    public void OpenWithoutCompletion(string path) { }
+}

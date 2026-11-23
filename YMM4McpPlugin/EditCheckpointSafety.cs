@@ -183,30 +183,44 @@ namespace YMM4McpPlugin
                 for (string? directory = Path.GetDirectoryName(BackupPath);
                      directory != null && !Path.EndsInDirectorySeparator(directory);
                      directory = Path.GetDirectoryName(directory))
-                    parents.Push(directory);
+                    parents.Push(Path.GetFileName(directory));
 
-                // Validate each directory before resolving its child. Holding the
-                // handle without delete sharing keeps the validated path in place.
-                foreach (string directory in parents)
+                string root = Path.GetPathRoot(BackupPath)!;
+                var handle = CreateFileW(root, FileListDirectory | FileReadAttributes,
+                    FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, OpenExisting,
+                    OpenReparsePoint | BackupSemantics, IntPtr.Zero);
+                directories.Add(handle);
+                if (!IsPlainDirectory(handle)) return false;
+
+                // Resolve each component relative to the actual parent handle.
+                // FileShare alone does not block changes to reparse attributes.
+                foreach (string name in parents)
                 {
-                    var handle = OpenEntry(directory, FileListDirectory | FileReadAttributes, FileShare.ReadWrite,
-                        OpenReparsePoint | BackupSemantics);
+                    handle = OpenChild(handle, name, FileListDirectory | FileReadAttributes,
+                        FileShare.ReadWrite);
                     directories.Add(handle);
-                    if (handle.IsInvalid || (File.GetAttributes(handle) &
-                        (FileAttributes.Directory | FileAttributes.ReparsePoint)) != FileAttributes.Directory)
-                        return false;
+                    if (!IsPlainDirectory(handle)) return false;
                 }
                 return true;
             }
 
+            private static bool IsPlainDirectory(SafeFileHandle handle) =>
+                !handle.IsInvalid && (File.GetAttributes(handle) &
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint)) == FileAttributes.Directory;
+
             internal bool VerifyContents(string expectedSha256)
             {
-                var handle = OpenEntry(BackupPath, GenericRead, FileShare.Read, OpenReparsePoint);
+                var handle = OpenChild(directories[^1], Path.GetFileName(BackupPath), GenericRead,
+                    FileShare.Read);
                 try
                 {
                     if (handle.IsInvalid || (File.GetAttributes(handle) &
                         (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
                         return false;
+                    // The retained child handles keep the directories nonempty.
+                    // Recheck the same ancestors after acquiring the leaf, before
+                    // passing its pathname to the host's path-only open API.
+                    if (!directories.All(IsPlainDirectory)) return false;
                     stream = new FileStream(handle, FileAccess.Read);
                 }
                 finally
@@ -230,21 +244,83 @@ namespace YMM4McpPlugin
         private const uint FileListDirectory = 0x00000001;
         private const uint FileReadAttributes = 0x00000080;
         private const uint GenericRead = 0x80000000;
+        private const uint Synchronize = 0x00100000;
         private const uint OpenExisting = 3;
         private const uint OpenReparsePoint = 0x00200000;
         private const uint BackupSemantics = 0x02000000;
+        private const uint CaseInsensitive = 0x00000040;
+        private const uint FileSynchronousIoNonAlert = 0x00000020;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct UnicodeString
+        {
+            internal ushort Length;
+            internal ushort MaximumLength;
+            internal IntPtr Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ObjectAttributes
+        {
+            internal int Length;
+            internal IntPtr RootDirectory;
+            internal IntPtr ObjectName;
+            internal uint Attributes;
+            internal IntPtr SecurityDescriptor;
+            internal IntPtr SecurityQualityOfService;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoStatusBlock
+        {
+            internal IntPtr Status;
+            internal UIntPtr Information;
+        }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
         private static extern SafeFileHandle CreateFileW(string path, uint access, FileShare share,
             IntPtr security, uint creation, uint flags, IntPtr template);
 
-        private static SafeFileHandle OpenEntry(string path, uint access, FileShare share, uint flags)
+        [DllImport("ntdll.dll", ExactSpelling = true)]
+        private static extern int NtOpenFile(out SafeFileHandle handle, uint access,
+            ref ObjectAttributes attributes, out IoStatusBlock ioStatus, FileShare share, uint options);
+
+        private static SafeFileHandle OpenChild(SafeFileHandle parent, string name,
+            uint access, FileShare share)
         {
-            if (path.Length >= 260 && !path.StartsWith(@"\\?\", StringComparison.Ordinal))
-                path = path.StartsWith(@"\\", StringComparison.Ordinal)
-                    ? @"\\?\UNC\" + path[2..]
-                    : @"\\?\" + path;
-            return CreateFileW(path, access, share, IntPtr.Zero, OpenExisting, flags, IntPtr.Zero);
+            if (name.Length == 0 || name.Length > (ushort.MaxValue - 2) / 2)
+                return new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            IntPtr buffer = Marshal.StringToHGlobalUni(name);
+            IntPtr namePointer = IntPtr.Zero;
+            try
+            {
+                var unicode = new UnicodeString
+                {
+                    Length = (ushort)(name.Length * 2),
+                    MaximumLength = (ushort)((name.Length + 1) * 2),
+                    Buffer = buffer
+                };
+                namePointer = Marshal.AllocHGlobal(Marshal.SizeOf<UnicodeString>());
+                Marshal.StructureToPtr(unicode, namePointer, fDeleteOld: false);
+                var attributes = new ObjectAttributes
+                {
+                    Length = Marshal.SizeOf<ObjectAttributes>(),
+                    RootDirectory = parent.DangerousGetHandle(),
+                    ObjectName = namePointer,
+                    Attributes = CaseInsensitive
+                };
+                int status = NtOpenFile(out var handle, access | Synchronize, ref attributes, out _,
+                    share, FileSynchronousIoNonAlert | OpenReparsePoint);
+                GC.KeepAlive(parent);
+                if (status >= 0) return handle;
+                handle.Dispose();
+                return new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(namePointer);
+                Marshal.FreeHGlobal(buffer);
+            }
         }
 
         // Only restore the checkpoint's own file for the currently open project.
