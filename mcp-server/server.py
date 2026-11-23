@@ -564,7 +564,8 @@ async def create_from_template(args: dict) -> dict:
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
     source = await ymm4_get(f"/media/info?path={quote(template, safe='')}")
-    target = await ymm4_get(f"/media/info?path={quote(destination, safe='')}")
+    destination_info_path = f"/media/info?path={quote(destination, safe='')}"
+    target = await ymm4_get(destination_info_path)
     if source.get("success") is not True or source.get("exists") is not True:
         return {"success": False, "error_code": "TEMPLATE_NOT_FOUND", "details": source}
     if target.get("success") is not True or target.get("exists") is not False:
@@ -623,10 +624,26 @@ async def create_from_template(args: dict) -> dict:
     except Exception as exc:
         return {"success": False, "error_code": "TEMPLATE_VERIFY_OUTCOME_UNKNOWN",
                 "outcome_unknown": True, "error": str(exc), "destination_path": destination}
-    if verified.get("success") is not True or not isinstance(verified.get("projectPath"), str) or \
-            not _same_project_path(verified["projectPath"], destination) or verified.get("isSaved") is not True:
+    if (not isinstance(verified, dict) or verified.get("success") is not True or
+            "error" in verified or "error_code" in verified or
+            not isinstance(verified.get("projectPath"), str) or
+            not _same_project_path(destination, verified["projectPath"]) or verified.get("isSaved") is not True):
         return {"success": False, "error_code": "TEMPLATE_VERIFY_FAILED", "outcome_unknown": True,
                 "details": verified, "destination_path": destination}
+    try:
+        written = await ymm4_get(destination_info_path)
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"success": False, "error_code": "TEMPLATE_VERIFY_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "check": "destination_file",
+                "error": str(exc), "destination_path": destination}
+    if (not isinstance(written, dict) or written.get("success") is not True or
+            "error" in written or "error_code" in written or
+            written.get("exists") is not True or
+            type(written.get("bytes")) is not int or written["bytes"] <= 0 or
+            not isinstance(written.get("path"), str) or
+            not _same_project_path(destination, written["path"])):
+        return {"success": False, "error_code": "TEMPLATE_VERIFY_FAILED", "outcome_unknown": True,
+                "check": "destination_file", "details": written, "destination_path": destination}
     return {"success": True, "dry_run": False, "template_path": template,
             "destination_path": destination, "verified": True}
 

@@ -1,6 +1,7 @@
 """Template creation must guard source and destination before opening YMM4 projects."""
 import unittest
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 import server
 
@@ -26,7 +27,8 @@ class TemplateProjectTests(unittest.IsolatedAsyncioTestCase):
                 {"success": True, "exists": True}, {"success": True, "exists": False},
                 {"success": True, "isSaved": True}, CAPABILITIES,
                 {"success": True, "isSaved": True, "projectPath": "C:/projects/template.ymmp"},
-                {"success": True, "isSaved": True, "projectPath": "c:\\projects\\new.ymmp"}])), \
+                {"success": True, "isSaved": True, "projectPath": "c:\\projects\\new.ymmp"},
+                {"success": True, "exists": True, "bytes": 123, "path": "c:\\projects\\new.ymmp"}])) as get, \
              patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
             result = await server.dispatch(ARGS)
         self.assertTrue(result["verified"])
@@ -34,6 +36,32 @@ class TemplateProjectTests(unittest.IsolatedAsyncioTestCase):
                          ["/project/open", "/project/save-template-as"])
         self.assertEqual(post.await_args_list[-1].args[1], {
             "path": ARGS["path"], "expected_template_path": ARGS["template_path"]})
+        self.assertEqual(get.await_args.args, (f"/media/info?path={quote(ARGS['path'], safe='')}",))
+
+    async def test_saved_ui_state_requires_nonempty_file_at_the_destination(self):
+        found = {"success": True, "exists": True, "bytes": 123, "path": ARGS["path"]}
+        for receipt in ({"success": True, "exists": False, "path": ARGS["path"]},
+                        {**found, "bytes": 0}, {**found, "bytes": True},
+                        {**found, "path": ARGS["template_path"]},
+                        {**found, "error_code": "FILE_UNAVAILABLE"}, None,
+                        ValueError("Unreadable media response")):
+            with self.subTest(receipt=receipt), patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"success": True, "exists": True}, {"success": True, "exists": False},
+                {"success": True, "isSaved": True}, CAPABILITIES,
+                {"success": True, "isSaved": True, "projectPath": ARGS["template_path"]},
+                {"success": True, "isSaved": True, "projectPath": ARGS["path"]}, receipt,
+            ])) as get, patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
+                result = await server.dispatch(ARGS)
+                self.assertFalse(result["success"])
+                expected = ("TEMPLATE_VERIFY_OUTCOME_UNKNOWN" if isinstance(receipt, ValueError)
+                            else "TEMPLATE_VERIFY_FAILED")
+                self.assertEqual(result["error_code"], expected)
+                self.assertEqual(result["check"], "destination_file")
+                self.assertTrue(result["outcome_unknown"])
+                self.assertEqual(result["destination_path"], ARGS["path"])
+                self.assertNotIn("verified", result)
+                self.assertEqual(get.await_count, 7)
+                self.assertEqual(post.await_count, 2)
 
     async def test_existing_destination_and_unsaved_project_do_not_open(self):
         for results, expected in (
