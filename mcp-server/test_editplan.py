@@ -317,6 +317,20 @@ class DiffAndReplayTests(unittest.TestCase):
                 self.assertEqual(preview["added"], 0)
                 self.assertEqual(preview["ops"][0]["item_id"], existing["item_id"])
 
+    def test_implicit_operation_cannot_hide_an_ambiguous_explicit_match(self):
+        request = one_video_plan()
+        planned = request["plan"]["scenes"][0]["items"]
+        planned[0].pop("frame")
+        planned.append({**planned[0], "id": "later-clip", "frame": 20})
+        existing = [video_item("native:one", frame=20), video_item("native:two", frame=20)]
+
+        preview = editplan.diff_plan(editplan.parse_plan(request), existing)
+        conflicts = [warning for warning in preview["warnings"]
+                     if warning["code"] == "CONTENT_STATE_CONFLICT"]
+        self.assertFalse(preview["passed"])
+        self.assertEqual([(warning["id"], warning["candidate_item_ids"]) for warning in conflicts],
+                         [("later-clip", ["native:one", "native:two"])])
+
     def test_added_item_verification_checks_identity_and_revision(self):
         detail = {"id": "caption", "op": "add", "item_id": "native:caption",
                   "result": {"revision": "r1", "frame": 0, "layer": 1, "length": 10}}
@@ -527,6 +541,38 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                                   ("later-caption", "keep", "native:later")])
                 self.assertEqual(sorted(item["frame"] for item in current), [0, 20])
                 self.assertEqual(posted.await_args.args[1]["items"][1], bound_later)
+
+    async def test_apply_and_reconcile_preserve_later_explicit_media_match_without_bindings(self):
+        request = one_video_plan()
+        planned = request["plan"]["scenes"][0]["items"]
+        planned[0].pop("frame")
+        planned.append({**planned[0], "id": "later-clip", "frame": 20})
+        for action in ("plan_edit", "apply_edit", "reconcile_edit"):
+            with self.subTest(action=action):
+                current = [video_item("native:later", frame=20)]
+
+                async def post(path, body=None, **unused):
+                    self.assertEqual(path, "/items/video")
+                    added = video_item("native:first", frame=body["frame"],
+                                       layer=body["layer"], length=body["length"])
+                    current.append(added)
+                    return {"success": True, **added}
+
+                get, patch_post = self._patches(current, [], post)
+                with get, patch_post as posted:
+                    result = await server.dispatch({"action": action, **request})
+                self.assertTrue(result["success"], result)
+                if action == "plan_edit":
+                    self.assertTrue(result["passed"], result)
+                    operations = result["ops"]
+                    posted.assert_not_awaited()
+                else:
+                    operations = result["details"]
+                    self.assertEqual(sorted(item["frame"] for item in current), [0, 20])
+                    posted.assert_awaited_once()
+                self.assertEqual([(row["id"], row["op"]) for row in operations],
+                                 [("clip", "add"), ("later-clip", "keep")])
+                self.assertEqual(operations[1]["item_id"], "native:later")
 
     async def test_explicit_overlay_does_not_move_sequential_frame_before_voice_end(self):
         request = {"action": "apply_edit", "plan": {"gap": 0, "scenes": [{
