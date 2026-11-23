@@ -89,6 +89,8 @@ namespace YMM4McpPlugin
                 return Failure("DIRECTORY_NOT_FOUND", "出力先フォルダがありません: " + parent);
 
             var job = CreateJob("export", request, parsed.key, source, out bool created, out bool conflict);
+            if (job == null)
+                return Failure("JOB_PERSIST_FAILED", "書き出しジョブを保存できなかったため、開始しませんでした");
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
             if (created)
@@ -114,6 +116,8 @@ namespace YMM4McpPlugin
             // original request had no key. A failed successor can itself be resumed.
             var job = CreateJob("export", request, previous.Id + ":resume", source,
                 out bool created, out bool conflict);
+            if (job == null)
+                return Failure("JOB_PERSIST_FAILED", "再開ジョブを保存できなかったため、開始しませんでした");
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "再開キーは別の書き出し要求に使用されています");
             if (created)

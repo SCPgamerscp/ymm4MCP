@@ -175,17 +175,26 @@ namespace YMM4McpPlugin
             // concurrent progress updates can publish older state after newer state.
             lock (_persistJobsLock)
             {
-                try
+                lock (_jobsLock)
                 {
-                    McpSettings.PrepareDirectory();
-                    JobSnapshot[] snapshots;
-                    lock (_jobsLock)
-                    {
-                        snapshots = _jobs.Values.OrderByDescending(j => j.UpdatedAt).Take(30).Select(JobSnapshot.From).ToArray();
-                    }
-                    JobSnapshotSafety.WriteAtomic(JobsFilePath, JsonSerializer.Serialize(snapshots, JobJson));
+                    TryWriteJobsSnapshot(_jobs.Values.OrderByDescending(j => j.UpdatedAt));
                 }
-                catch (Exception ex) { Log("ジョブ保存に失敗: " + ex.Message); }
+            }
+        }
+
+        private bool TryWriteJobsSnapshot(IEnumerable<McpJob> jobs)
+        {
+            try
+            {
+                McpSettings.PrepareDirectory();
+                var snapshots = jobs.Take(30).Select(JobSnapshot.From).ToArray();
+                JobSnapshotSafety.WriteAtomic(JobsFilePath, JsonSerializer.Serialize(snapshots, JobJson));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("ジョブ保存に失敗: " + ex.Message);
+                return false;
             }
         }
 
@@ -200,10 +209,11 @@ namespace YMM4McpPlugin
             return null;
         }
 
-        private McpJob CreateJob(string kind, Dictionary<string, object?> request, string? idempotencyKey,
+        private McpJob? CreateJob(string kind, Dictionary<string, object?> request, string? idempotencyKey,
             ExportProjectIdentity source,
             out bool created, out bool conflict)
         {
+            lock (_persistJobsLock)
             lock (_jobsLock)
             {
                 if (!string.IsNullOrEmpty(idempotencyKey) && _jobKeys.TryGetValue(idempotencyKey, out var existingId)
@@ -225,6 +235,15 @@ namespace YMM4McpPlugin
                     ExportSource = source,
                     Request = request
                 };
+                // Publish only after saving. An idempotent retry may otherwise
+                // return this job before the worker has recorded it on disk.
+                if (!TryWriteJobsSnapshot(_jobs.Values.OrderByDescending(j => j.UpdatedAt).Prepend(job)))
+                {
+                    job.Cts.Dispose();
+                    created = false;
+                    conflict = false;
+                    return null;
+                }
                 _jobs[job.Id] = job;
                 if (!string.IsNullOrEmpty(idempotencyKey))
                     _jobKeys[idempotencyKey] = job.Id;

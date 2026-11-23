@@ -78,6 +78,7 @@ var directory = Path.Combine(Path.GetTempPath(), "ymm4-job-snapshot-test-" + Gui
 Directory.CreateDirectory(directory);
 try
 {
+    McpHttpServer.CheckAcceptance(Path.Combine(directory, "acceptance"), originalExport, Check);
     var path = Path.Combine(directory, "jobs.json");
     JobSnapshotSafety.WriteAtomic(path, "{\"version\":1}");
     JobSnapshotSafety.WriteAtomic(path, "{\"version\":2}");
