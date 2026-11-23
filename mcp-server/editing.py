@@ -207,6 +207,8 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             length = integer(item.get("length"), "length", 1)
             layer = integer(item.get("layer"), "layer")
             end = integer(frame + length, "end frame")
+            if "endFrame" in item and integer(item["endFrame"], "endFrame") != end:
+                raise ValueError("endFrame must equal frame + length")
         except ValueError as exc:
             ids = _item_ids(items, [index])
             problems.append({"code": "INVALID_ITEM", "severity": "error", "index": index,
@@ -279,7 +281,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         for frame, end, index in voices:
             voice_text = items[index].get("text")
             if not isinstance(voice_text, str) or not voice_text.strip():
-                problems.append({"code": "SUBTITLE_CHECK_SKIPPED", "severity": "warning",
+                problems.append({"code": "SUBTITLE_CHECK_SKIPPED", "severity": "error",
                                  "index": index, "item_ids": _item_ids(items, [index]),
                                  "frame_range": [frame, end], "message": "発話テキストを取得できません"})
                 continue

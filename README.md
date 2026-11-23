@@ -437,7 +437,7 @@ expected=[
 結果は `passed`、0〜100の `score`、エラー・警告件数の `summary`、および `issues` を返します。
 各Issueには可能な範囲で `frame_range`、`item_ids`、`suggested_fix` が含まれます。`problems` は既存クライアント互換のための `issues` の別名です。
 先頭フレームより前の空白は警告せず、アイテム同士の内部空白だけを `GAP` として報告します。
-`subtitle_layers` を指定すると、各 VoiceItem の発話と時間が重なる指定レイヤーの TextItem を探し、空白・改行を除いた本文が一致しなければ `SUBTITLE_MISSING` または `SUBTITLE_TEXT_MISMATCH` を返します。テロップ用レイヤーは指定しないでください。発話テキストを取得できない場合は `SUBTITLE_CHECK_SKIPPED` を警告します。同じ本文の字幕の合計区間で発話の全時間を覆わない場合は `SUBTITLE_TIMING_MISMATCH` と空白区間 `uncovered_ranges` を返します。許容する各空白の長さは `subtitle_timing_tolerance_frames`（既定0）で指定できます。
+`subtitle_layers` を指定すると、各 VoiceItem の発話と時間が重なる指定レイヤーの TextItem を探し、空白・改行を除いた本文が一致しなければ `SUBTITLE_MISSING` または `SUBTITLE_TEXT_MISMATCH` を返します。テロップ用レイヤーは指定しないでください。発話テキストを取得できない場合は、対象IDとフレーム範囲を含む `SUBTITLE_CHECK_SKIPPED` エラーを返して不合格にします。同じ本文の字幕の合計区間で発話の全時間を覆わない場合は `SUBTITLE_TIMING_MISMATCH` と空白区間 `uncovered_ranges` を返します。許容する各空白の長さは `subtitle_timing_tolerance_frames`（既定0）で指定できます。
 映像の見切れや音量などはこの検査の対象外なので、`preview` / `watch` と組み合わせて確認してください。
 
 **修正ループの停止判定：** `action="qa_gate"` は同じ検査条件で現在の `validate` を実行し、`qa_history`（過去の `validate` 結果を古い順に並べた配列）と比較します。`decision` は `pass` / `repair` / `stop`、`reason_code` は `QA_PASSED` / `QA_ISSUES_REMAIN` / `QA_REGRESSED` / `QA_STALLED` / `REPAIR_LIMIT_REACHED` / `TIME_LIMIT_REACHED` / `API_LIMIT_REACHED` です。結果の `qa` を次回の `qa_history` に追加してください。既定では修正3回が上限で、同じ問題群が2回連続した場合も停止します。経過時間とAPI回数は呼び出し側が `elapsed_seconds` / `api_calls` を数え、必要に応じて `max_seconds` / `max_api_calls` を指定します。品質悪化時の `suggested_action: consider_checkpoint_rollback` は提案のみで、ロールバックは自動実行されません。映像・音声・完成動画の品質判定は指定した追加チェックに限ります。
@@ -450,7 +450,7 @@ expected=[
 
 追加チェックを行うQAでは検査後にタイムラインを再取得し、開始時のスナップショットと一致することを確認します。変化した場合は `QA_SNAPSHOT_CONFLICT`、再取得できない場合は `QA_ITEMS_UNAVAILABLE` / `QA_SNAPSHOT_VERIFY_UNKNOWN` を返し、履歴に使う `qa` や合格判定を返しません。成功時の `qa.snapshot_hash` は検査したタイムラインの状態を表します。検査条件の `criteria_hash` とは別で、修正後の状態を同条件で比較できます。この確認は楽観的な競合検出であり、ホスト全体をロックするトランザクションではありません。
 
-`/api/items` が返す `count` と実際の一覧件数が一致しない場合、開始時は `ITEMS_INVENTORY_INCOMPLETE`、追加チェック後の再取得時は `QA_ITEMS_INVENTORY_INCOMPLETE` を返し、QAを合格にしません。
+`/api/items` が返す `count` と実際の一覧件数が一致しない場合、開始時は `ITEMS_INVENTORY_INCOMPLETE`、追加チェック後の再取得時は `QA_ITEMS_INVENTORY_INCOMPLETE` を返し、QAを合格にしません。 `endFrame` が返る場合は、整数で `frame + length` に一致することも確認し、矛盾するアイテムは `INVALID_ITEM` として報告します。
 
 追加チェックの前後で `/api/items` のタイムラインIDも照合します。IDが変わると `QA_TIMELINE_CHANGED`、片方だけIDが欠落するか値が不正な場合は `QA_TIMELINE_ID_UNAVAILABLE` を返します。どちらも `qa` や合格判定を返しません。両方でIDフィールドを省略する旧版ではアイテム一覧の比較を行います。
 

@@ -205,7 +205,7 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(mismatch["item_ids"], ["voice:1", "caption:wrong"])
         self.assertEqual(mismatch["actual_texts"], ["別の字幕"])
         self.assertEqual(result["issues"][1]["frame_range"], [50, 100])
-        self.assertEqual(result["summary"], {"errors": 2, "warnings": 1})
+        self.assertEqual(result["summary"], {"errors": 3, "warnings": 0})
         self.assertFalse(result["passed"])
         self.assertTrue(editing.validate_timeline(items, include_gaps=False)["passed"])
 
@@ -596,6 +596,44 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((await server.dispatch({"action": "validate", "subtitle_layers": [9]}))["passed"])
             result = await server.dispatch({"action": "validate", "subtitle_layers": [8]})
             self.assertEqual(result["issues"][0]["code"], "SUBTITLE_MISSING")
+
+    async def test_qa_gate_requires_readable_speech_when_subtitle_check_is_requested(self):
+        voice = {"item_id": "voice:1", "type": "VoiceItem", "frame": 6, "layer": 7, "length": 30}
+        caption = {"item_id": "caption:1", "type": "TextItem", "text": "はい",
+                   "frame": 6, "layer": 9, "length": 30}
+        for unreadable in ({}, {"text": None}, {"text": " \n "}, {"text": 42}):
+            with self.subTest(unreadable=unreadable), patch.object(
+                server, "ymm4_get", AsyncMock(return_value={"items": [{**voice, **unreadable}, caption]}),
+            ):
+                result = await server.dispatch({"action": "qa_gate", "subtitle_layers": [9]})
+                self.assertFalse(result["qa"]["passed"])
+                self.assertEqual(result["decision"], "repair")
+                issue, = result["qa"]["issues"]
+                self.assertEqual(issue["code"], "SUBTITLE_CHECK_SKIPPED")
+                self.assertEqual(issue["severity"], "error")
+                self.assertEqual(issue["item_ids"], ["voice:1"])
+                self.assertEqual(issue["frame_range"], [6, 36])
+                self.assertNotIn("suggested_fix", issue)
+                optional = await server.dispatch({"action": "qa_gate"})
+                self.assertEqual(optional["decision"], "pass")
+
+    async def test_structural_qa_checks_reported_end_frame(self):
+        item = {"item_id": "native:a", "frame": 2, "layer": 0, "length": 8}
+        for metadata, passed in (({}, True), ({"endFrame": 10}, True),
+                                 ({"endFrame": 11}, False), ({"endFrame": 10.0}, False),
+                                 ({"endFrame": None}, False)):
+            with self.subTest(metadata=metadata), patch.object(
+                server, "ymm4_get", AsyncMock(return_value={"items": [{**item, **metadata}]}),
+            ):
+                validation = await server.dispatch({"action": "validate"})
+                result = await server.dispatch({"action": "qa_gate"})
+                self.assertEqual(validation["passed"], passed)
+                self.assertEqual(result["decision"], "pass" if passed else "repair")
+                if not passed:
+                    issue, = result["qa"]["issues"]
+                    self.assertEqual(issue["code"], "INVALID_ITEM")
+                    self.assertEqual(issue["item_ids"], ["native:a"])
+                    self.assertIn("endFrame", issue["message"])
 
     async def test_skills_are_allowlisted_and_roles_consistent(self):
         for name in mcp_skills.SKILLS:
