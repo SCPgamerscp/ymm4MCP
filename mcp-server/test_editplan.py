@@ -557,8 +557,15 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                     "layer": 2, "length": 10, "type": "TextItem", "text": "original"}
         a = {"success": True, "item_id": "native:a", "revision": "r1", "frame": 0,
              "layer": 1, "length": 10}
-        for invalid_id in ({}, {"item_id": None}, {"item_id": " "}, {"item_id": "native:bad\n"},
-                           {"item_id": "native:existing"}, {"item_id": "native:a"}):
+        for invalid_id, issue in (
+            ({}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": None}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": " "}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": "native:bad\n"}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": "\ud800"}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": "native:existing"}, {"error_code": "ITEM_ID_REUSED", "item_id": "native:existing"}),
+            ({"item_id": "native:a"}, {"error_code": "ITEM_ID_REUSED", "item_id": "native:a"}),
+        ):
             with self.subTest(invalid_id=invalid_id):
                 b = {"success": True, "revision": "r1", "frame": 10, "layer": 1, "length": 10,
                      **invalid_id}
@@ -572,7 +579,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                                  ["/items/text", "/items/text"])
                 self.assertEqual(result["error_code"], "EDIT_ADD_ID_UNVERIFIED")
                 self.assertEqual(result["failed_id"], "b")
-                self.assertEqual(result["failure"], b)
+                self.assertEqual(result["verification"], issue)
+                self.assertNotIn("failure", result)
                 self.assertTrue(result["outcome_unknown"])
                 self.assertFalse(result["rolled_back"])
                 self.assertEqual(result["added"], 1)

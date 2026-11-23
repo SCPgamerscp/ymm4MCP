@@ -2107,16 +2107,19 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                     scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res},
                     outcome_unknown=outcome_unknown, timeline_changed=timeline_changed)
             item_id = res.get("item_id")
-            if not valid_item_id(item_id) or item_id in current_by_id or item_id in created_item_ids:
+            id_valid = valid_item_id(item_id)
+            if not id_valid or item_id in current_by_id or item_id in created_item_ids:
                 # The write may have happened, but its receipt cannot identify
                 # what to roll back or what to persist for a retry.
+                verification = ({"error_code": "ITEM_ID_REUSED", "item_id": item_id} if id_valid
+                                else {"error_code": "ITEM_ID_INVALID"})
                 return await _partial_edit_result(
                     plan, error_code="EDIT_ADD_ID_UNVERIFIED",
                     error="追加アイテムを一意に特定できません。追加・削除を続けずitemsで確認してください。",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=[], committed=committed,
                     scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
-                    scene_details=scene_details, extra={"failure": res}, outcome_unknown=True)
+                    scene_details=scene_details, extra={"verification": verification}, outcome_unknown=True)
             added += 1
             scene_added += 1
             created_item_ids.add(item_id)
