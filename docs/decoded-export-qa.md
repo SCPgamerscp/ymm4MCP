@@ -36,7 +36,7 @@ MCPの `get_info/decoded_export_qa` は、Python MCPサーバーが動いてい�
 
 `expected_video_codec` / `expected_audio_codec` を指定すると、全ての映像/音声トラックのFFprobe `codec_name` を照合します。例: `h264`, `hevc`, `aac`, `opus`。未取得なら `EXPORT_VIDEO_CODEC_UNKNOWN` / `EXPORT_AUDIO_CODEC_UNKNOWN`、不一致なら `EXPORT_VIDEO_CODEC_MISMATCH` / `EXPORT_AUDIO_CODEC_MISMATCH`（いずれもerror）です。指定する名前は小文字英数字・アンダースコアのみ（1〜32文字）です。音声コーデックを指定すると音声トラックは必須になります。
 
-`max_black_seconds` / `max_silence_seconds` / `max_freeze_seconds` を指定すると、**実際に観測した**各黒画面・無音・静止区間が閾値を超えた場合、`EXPORT_BLACK_DURATION_EXCEEDED` / `EXPORT_SILENCE_DURATION_EXCEEDED` / `EXPORT_FREEZE_DURATION_EXCEEDED`（error）として不合格にします。閾値は0〜900秒です。未指定時は従来どおり警告のみです。複数のサンプル窓で重複観測した同一区間は結合後に判定します。**サンプル検証だけでは未観測区間の品質を保証できません**。全尺の品質条件を検証したい場合は `full_decode:true` と `full_signal_scan:true` を併用してください。
+`max_black_seconds` / `max_silence_seconds` / `max_freeze_seconds` を指定すると、**実際に観測した**各黒画面・無音・静止区間が閾値を超えた場合、`EXPORT_BLACK_DURATION_EXCEEDED` / `EXPORT_SILENCE_DURATION_EXCEEDED` / `EXPORT_FREEZE_DURATION_EXCEEDED`（error）として不合格にします。閾値は0〜900秒です。未指定時は従来どおり警告のみです。複数のサンプル窓で重複観測した同一区間は結合後に判定します。 `max_black_seconds` 指定時は、黒画面のまま終了した映像について、最後のフレームの表示時間も判定に含めます。**サンプル検証だけでは未観測区間の品質を保証できません**。全尺の品質条件を検証したい場合は `full_decode:true` と `full_signal_scan:true` を併用してください。
 
 さらに `expected_video_frames`（1〜1,000,000,000）を指定すると、全映像トラックのFFprobe `nb_frames` と照合します。フレーム数不明なら `EXPORT_VIDEO_FRAME_COUNT_UNKNOWN`、不一致なら `EXPORT_VIDEO_FRAME_COUNT_MISMATCH`（error）です。VFRやコンテナによっては `nb_frames` が得られないため、必須の場合のみ指定してください。
 

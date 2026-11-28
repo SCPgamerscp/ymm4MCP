@@ -98,6 +98,36 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                                                     for part in call)
                             for call in calls))
 
+    def test_full_signal_budget_expiring_between_video_and_audio_fails(self):
+        metadata = json.dumps({
+            "format": {"duration": "4", "start_time": "0"},
+            "streams": [{"codec_type": kind, "start_time": "0", "duration": "4"}
+                        for kind in ("video", "audio")],
+        })
+        now = 0
+        scanned = []
+
+        def fake(command, timeout):
+            nonlocal now
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            if any("pts=PTS-STARTPTS" in option for option in command):
+                scanned.append(command[command.index("-map") + 1])
+                now = 901
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake), \
+                patch.object(qa, "time") as clock:
+            clock.monotonic.side_effect = lambda: now
+            report = qa.inspect(str(self.video), full_decode=True, full_signal_scan=True,
+                                max_silence_seconds=1)
+
+        self.assertEqual(scanned, ["0:v:0"])
+        self.assertFalse(report["passed"], report)
+        self.assertEqual(report["signal_scope"], "sampled_only")
+        self.assertIn({"code": "EXPORT_FULL_SIGNAL_TIMEOUT", "severity": "error",
+                       "stream_type": "audio", "stream_ordinal": 0}, report["issues"])
+
     def test_subprocess_stdout_requires_utf8_but_stderr_is_diagnostic(self):
         # Metadata must never be silently altered by replacement decoding.
         invalid_stdout = [sys.executable, "-c",
@@ -119,6 +149,21 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                            ".buffer.write(b'A'*1100000);sys." + stream + ".flush()"]
                 with self.assertRaisesRegex(OSError, "exceeded the capture limit"):
                     qa.run(command, 5)
+
+    def test_black_metadata_compaction_preserves_unrelated_stderr_limit(self):
+        command = [sys.executable, "-c",
+                   "import sys;sys.stderr.buffer.write(b'A'*1100000)",
+                   "-vf", qa._BLACK_METADATA_FILTERS]
+        with self.assertRaisesRegex(OSError, "exceeded the capture limit"):
+            qa.run(command, 5)
+
+    def test_malformed_black_metadata_is_rejected_during_capture(self):
+        lines = ("[metadata@ymm4_black_start @ 0x1] lavfi.black_start=2.0\n"
+                 "[metadata@ymm4_black_end @ 0x2] lavfi.black_end=1.0\n")
+        command = [sys.executable, "-c", f"import sys;sys.stderr.write({lines!r})",
+                   "-vf", qa._BLACK_METADATA_FILTERS]
+        with self.assertRaisesRegex(ValueError, "invalid blackdetect frame metadata"):
+            qa.run(command, 5)
 
     def test_subprocess_output_at_caps_remains_usable(self):
         command = [sys.executable, "-c",

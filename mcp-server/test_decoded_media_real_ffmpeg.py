@@ -99,5 +99,107 @@ class RealFfmpegExportQaTests(unittest.TestCase):
                             for event in scanned["black_frames"]), scanned)
 
 
+    def test_strict_black_limit_includes_last_frames_display_time(self):
+        # The final six frames are black. Their timestamps span 0.5s at
+        # 10 FPS, but the last frame remains visible up to the 3.0s EOF.
+        video = Path(self.directory.name) / "black-at-eof.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=64x64:r=10:d=3",
+            "-vf", "drawbox=c=black:t=fill:enable='gte(t,2.4)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+        options = dict(require_audio=False, sample_seconds=1)
+
+        for scan in (False, True):
+            with self.subTest(full_signal_scan=scan):
+                report = qa.inspect(str(video), max_black_seconds=0.55,
+                                    full_decode=scan, full_signal_scan=scan, **options)
+                self.assertFalse(report["passed"], report)
+                errors = [issue for issue in report["issues"]
+                          if issue["code"] == "EXPORT_BLACK_DURATION_EXCEEDED"]
+                self.assertEqual(len(errors), 1, report)
+                self.assertAlmostEqual(errors[0]["video_start_seconds"], 2.4)
+                self.assertAlmostEqual(errors[0]["video_end_seconds"], 3.0)
+                self.assertAlmostEqual(errors[0]["duration_seconds"], 0.6)
+
+        self.assertTrue(qa.inspect(str(video), max_black_seconds=0.6,
+                                   full_decode=True, full_signal_scan=True, **options)["passed"])
+
+    def test_full_scan_detects_trailing_blackout_longer_than_sample(self):
+        video = Path(self.directory.name) / "long-black-at-eof.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=64x64:r=10:d=6",
+            "-vf", "drawbox=c=black:t=fill:enable='gte(t,4.1)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+        options = dict(require_audio=False, sample_seconds=1, max_black_seconds=1.85)
+        sampled = qa.inspect(str(video), **options)
+        self.assertTrue(sampled["passed"], sampled)
+
+        scanned = qa.inspect(str(video), full_decode=True, full_signal_scan=True, **options)
+        self.assertFalse(scanned["passed"], scanned)
+        issue = next(issue for issue in scanned["issues"]
+                     if issue["code"] == "EXPORT_BLACK_DURATION_EXCEEDED")
+        self.assertAlmostEqual(issue["video_start_seconds"], 4.1)
+        self.assertAlmostEqual(issue["video_end_seconds"], 6.0)
+        self.assertAlmostEqual(issue["duration_seconds"], 1.9)
+
+    def test_full_black_scan_keeps_tail_after_many_short_transitions(self):
+        # More than 9,000 short-transition records previously filled the
+        # stderr budget, even though those black frames are below the limit.
+        video = Path(self.directory.name) / "short-transitions-and-black-tail.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=16x16:r=120:d=126",
+            "-vf", "drawbox=c=black:t=fill:enable='not(mod(n,3))+gte(t,124)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+
+        report = qa.inspect(str(video), require_audio=False, sample_seconds=1,
+                            max_black_seconds=3, full_decode=True, full_signal_scan=True)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["signal_scope"], "full")
+        self.assertEqual(len(report["black_frames"]), 1, report)
+        event = report["black_frames"][0]
+        self.assertAlmostEqual(event["video_start_seconds"], 124.0)
+        self.assertAlmostEqual(event["video_end_seconds"], 126.0)
+
+    def test_short_black_interval_that_ends_before_eof_does_not_extend(self):
+        video = Path(self.directory.name) / "black-before-eof.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=64x64:r=10:d=3",
+            "-vf", "drawbox=c=black:t=fill:enable='gte(t,2.4)*lt(t,2.9)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+        report = qa.inspect(str(video), require_audio=False, sample_seconds=1,
+                            max_black_seconds=0.55, full_decode=True, full_signal_scan=True)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(report["black_frames"], report)
+
+    def test_freeze_limit_counts_different_adjacent_still_scenes_separately(self):
+        video = Path(self.directory.name) / "adjacent-still-scenes.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "color=c=white:s=64x64:r=10:d=6",
+            "-vf", "drawbox=c=red:t=fill:enable='gte(t,3)'",
+            "-c:v", "mpeg4", "-q:v", "5", str(video),
+        ], check=True, capture_output=True, timeout=30)
+
+        options = dict(require_audio=False, sample_seconds=1, full_decode=True,
+                       full_signal_scan=True)
+        report = qa.inspect(str(video), max_freeze_seconds=4, **options)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual([(event["video_start_seconds"], event["video_end_seconds"])
+                          for event in report["frozen_frames"]], [(0.0, 3.0), (3.0, 6.0)])
+
+        strict = qa.inspect(str(video), max_freeze_seconds=2.9, **options)
+        self.assertFalse(strict["passed"], strict)
+        self.assertEqual([issue["duration_seconds"] for issue in strict["issues"]
+                          if issue["code"] == "EXPORT_FREEZE_DURATION_EXCEEDED"], [3.0, 3.0])
+
+
 if __name__ == "__main__":
     unittest.main()
