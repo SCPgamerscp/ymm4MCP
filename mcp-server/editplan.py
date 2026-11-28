@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import ntpath
 import re
 from pathlib import Path
 
@@ -63,7 +64,7 @@ def _kind(type_name):
 
 
 def host_kind(type_name):
-    name = (type_name or "").lower()
+    name = type_name.lower() if isinstance(type_name, str) else ""
     for key in ("voice", "video", "audio", "image", "subtitle", "text", "tachie", "face"):
         if key in name:
             return "text" if key == "subtitle" else key
@@ -251,7 +252,8 @@ def snapshot_hash(items):
     """Fingerprint the observable timeline state regardless of item ordering."""
     if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
         raise ValueError("items must be an array of objects")
-    fields = ("item_id", "revision", "frame", "layer", "length", "type", "text", "source_path")
+    fields = ("item_id", "revision", "frame", "layer", "length",
+              "type", "text", "source_path", "character")
     seen_ids = set()
     encoded_rows = []
     for item in items:
@@ -313,7 +315,11 @@ def _fingerprint(kind, layer, text=None, character=None, source=None):
     if kind == "voice":
         return ("voice", layer, character, text)
     if kind in {"video", "audio", "image"}:
-        return (kind, layer, source or text)
+        path = source or text
+        if (isinstance(path, str) and ntpath.splitdrive(path)[0] and
+                is_absolute_media_path(path)):
+            path = ntpath.normcase(path)
+        return (kind, layer, path)
     if kind == "text":
         return ("text", layer, text)
     if kind in {"tachie", "face"}:
@@ -324,7 +330,8 @@ def _fingerprint(kind, layer, text=None, character=None, source=None):
 def current_fingerprint(item):
     kind = host_kind(item.get("type"))
     return _fingerprint(kind, item.get("layer"), text=item.get("text"),
-                        character=item.get("character"), source=item.get("path") or item.get("source"))
+                        character=item.get("character"),
+                        source=item.get("source_path") or item.get("path") or item.get("source"))
 
 
 def desired_fingerprint(item):
@@ -485,6 +492,11 @@ def replay_record(plan, current_items, record):
     }
 
 
+def _placement_mismatches(item, current):
+    return [field for field in ("frame", "length")
+            if item[f"{field}_source"] == "explicit" and current.get(field) != item[field]]
+
+
 def diff_plan(plan, current_items=None, bindings=None, character_names=None):
     if current_items is None:
         current_items = []
@@ -494,10 +506,34 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
     mapped = bindings_map(bindings)
     current_by_id = {item.get("item_id"): item for item in current_items
                      if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
+    desired = flatten_items(plan)
+    # An earlier operation must not claim a later operation's saved item
+    # while trying to recover a missing binding by content.
+    reserved = {mapped[item["id"]]["item_id"] for item in desired if item["id"] in mapped}
+    fingerprints = [(current, current_fingerprint(current)) for current in current_items
+                    if isinstance(current, dict) and isinstance(current.get("item_id"), str)
+                    and current["item_id"] not in reserved]
+    by_frame = {}
+    for current, fingerprint in fingerprints:
+        frame = current.get("frame")
+        if type(frame) is int:
+            by_frame.setdefault(frame, []).append((current, fingerprint))
+    # Protect exact-placement candidates from earlier content-only reuse.
+    # Keep all candidates for an ambiguous slot so it remains a conflict.
+    positioned = {}
+    for item in desired:
+        bound = mapped.get(item["id"], {})
+        if item["frame_source"] != "explicit" or bound.get("item_id") in current_by_id:
+            continue
+        wanted = desired_fingerprint(item)
+        candidates = [current for current, fingerprint in by_frame.get(item["frame"], ())
+                      if fingerprint == wanted and not _placement_mismatches(item, current)]
+        if candidates:
+            positioned[item["id"]] = candidates
+    positioned_ids = {current["item_id"] for candidates in positioned.values() for current in candidates}
     claimed = set()
     ops = []
     warnings = []
-    desired = flatten_items(plan)
     for item in desired:
         if item["kind"] in {"video", "audio", "image"}:
             if not Path(item["source"]).is_file():
@@ -514,23 +550,53 @@ def diff_plan(plan, current_items=None, bindings=None, character_names=None):
             ops.append({**item, "op": "keep", "item_id": bound["item_id"],
                         "revision": current.get("revision"), "reason": "binding"})
             continue
-        match = None
         wanted = desired_fingerprint(item)
-        for current in current_items:
-            if not isinstance(current, dict) or current.get("item_id") in claimed:
+        if item["kind"] == "voice":
+            # Older hosts may only expose the text of an existing voice.
+            # A matching line with an unknown speaker could already satisfy
+            # this operation. Do not silently add another copy.
+            uncertain = []
+            for current, fingerprint in fingerprints:
+                if (current["item_id"] in claimed or fingerprint[0] != "voice"
+                        or fingerprint[1] != item["layer"] or fingerprint[3] != item["text"]):
+                    continue
+                character = fingerprint[2]
+                if isinstance(character, str) and character.strip():
+                    continue
+                frame = current.get("frame")
+                if (item["frame_source"] == "explicit" and type(frame) is int
+                        and frame >= 0 and frame != item["frame"]):
+                    continue
+                uncertain.append(current["item_id"])
+            if uncertain:
+                warnings.append({"code": "CONTENT_STATE_CONFLICT", "severity": "error",
+                                 "reason": "VOICE_CHARACTER_UNAVAILABLE", "id": item["id"],
+                                 "candidate_count": len(uncertain),
+                                 "candidate_item_ids": uncertain[:20],
+                                 "message": "同じレイヤーとセリフの既存音声でキャラ名を確認できません"})
                 continue
-            if current_fingerprint(current) == wanted:
-                if match is not None:
-                    match = None
-                    break
-                match = current
-        if match is not None:
+        fixed_candidates = positioned.get(item["id"])
+        matches = fixed_candidates if fixed_candidates is not None else [
+            current for current, fingerprint in fingerprints
+            if current["item_id"] not in claimed and current["item_id"] not in positioned_ids
+            and fingerprint == wanted]
+        if fixed_candidates is not None or len(matches) > 1:
+            # Explicit coordinates or length can distinguish repeated clips.
+            # Estimated or sequential frames cannot identify a clip.
+            compatible = [current for current in matches
+                          if current["item_id"] not in claimed and not _placement_mismatches(item, current)]
+            if len(compatible) == 1:
+                matches = compatible
+            else:
+                warnings.append({"code": "CONTENT_STATE_CONFLICT", "severity": "error",
+                                 "id": item["id"], "candidate_count": len(matches),
+                                 "candidate_item_ids": [current["item_id"] for current in matches[:20]],
+                                 "message": "同じ内容の既存アイテムを計画内の項目に一意に対応付けられません"})
+                continue
+        if matches:
+            match = matches[0]
             claimed.add(match["item_id"])
-            mismatches = []
-            if item["frame_source"] == "explicit" and match.get("frame") != item["frame"]:
-                mismatches.append("frame")
-            if item["length_source"] == "explicit" and match.get("length") != item["length"]:
-                mismatches.append("length")
+            mismatches = _placement_mismatches(item, match)
             if mismatches:
                 warnings.append({"code": "CONTENT_STATE_CONFLICT", "severity": "error",
                                  "id": item["id"], "item_id": match["item_id"], "fields": mismatches,

@@ -1976,8 +1976,17 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     content_conflicts = [w for w in preview["warnings"] if w.get("code") == "CONTENT_STATE_CONFLICT"]
     if content_conflicts:
         return {"success": False, "error_code": "EDIT_STATE_CONFLICT",
-                "error": "同じ内容の既存アイテムの配置が計画と異なります",
+                "error": "同じ内容の既存アイテムを計画に一意に対応付けられません",
                 "conflicts": content_conflicts, "rolled_back": False}
+
+    if expected_snapshot is not None and any(op["op"] == "add" for op in preview["ops"]):
+        # Binding, media and project lookups may have taken long enough for
+        # the reviewed timeline to change since the first inventory read.
+        conflict = await quality_guard.verify_snapshot(ymm4_get, items, initial_inventory=snapshot)
+        if conflict is not None:
+            if conflict["error_code"] == "SNAPSHOT_CONFLICT":
+                conflict["error_code"] = "SNAPSHOT_HASH_MISMATCH"
+            return {**conflict, "rolled_back": False}
 
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
     gap = plan["gap"]
@@ -2059,7 +2068,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
             try:
                 length = integer(res.get("length"), "actual length", 1)
                 actual_frame = integer(res.get("frame"), "actual frame")
-                cursor[scene_id] = integer(actual_frame + length + gap, "next frame")
+                next_frame = integer(actual_frame + length + gap, "next frame")
             except ValueError:
                 if op["kind"] == "voice":
                     return await _partial_edit_result(
@@ -2069,7 +2078,9 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                         added=added, details=details, bindings=bindings, committed=committed,
                         scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
                         scene_details=scene_details, scene_bindings=scene_bindings)
-                cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
+                next_frame = payload.get("frame", 0) + op.get("length", 1) + gap
+            # Explicit overlays can end before an earlier operation in the same scene.
+            cursor[scene_id] = max(cursor[scene_id], next_frame)
         bindings.extend(scene_bindings)
         details.extend(scene_details)
         committed.append(scene_id)

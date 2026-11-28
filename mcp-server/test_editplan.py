@@ -38,6 +38,31 @@ def one_text_record(revision="r1"):
             {"id": "caption", "item_id": "native:caption", "revision": revision}]}
 
 
+def one_video_plan():
+    return {"plan": {"scenes": [{"id": "scene", "items": [
+        {"id": "clip", "type": "video", "source": "C:/Videos/play.mp4",
+         "frame": 0, "layer": 1, "length": 10}
+    ]}]}}
+
+
+def one_voice_plan(**fields):
+    return {"plan": {"scenes": [{"id": "scene", "items": [
+        {"id": "line", "type": "dialogue", "character": "ゆっくり霊夢",
+         "text": "こんにちは", "layer": 7, **fields}
+    ]}]}}
+
+
+def voice_item(**fields):
+    return {"item_id": "native:existing-line", "revision": "r1", "type": "VoiceItem",
+            "frame": 0, "length": 80, "layer": 7, "text": "こんにちは", **fields}
+
+
+def video_item(item_id="native:clip", **fields):
+    return {"item_id": item_id, "revision": "r1", "type": "VideoItem", "frame": 0,
+            "length": 10, "layer": 1, "source_path": r"c:\VIDEOS\PLAY.MP4",
+            "text": "Visible clip name", **fields}
+
+
 class ParsePlanTests(unittest.TestCase):
     def test_explicit_frames_cannot_escape_their_scene(self):
         text_item = {"id": "b", "type": "text", "text": "b", "layer": 1, "length": 10}
@@ -172,6 +197,26 @@ class DiffAndReplayTests(unittest.TestCase):
         self.assertEqual(matched["added"], 1)
         self.assertEqual(matched["ops"][2]["id"], "cap-1")
 
+    def test_existing_voice_without_character_is_an_explicit_conflict(self):
+        plan = editplan.parse_plan(one_voice_plan(frame=0))
+        for item in (voice_item(), voice_item(character=""), voice_item(character=None)):
+            with self.subTest(item=item):
+                preview = editplan.diff_plan(plan, [item])
+                self.assertFalse(preview["passed"])
+                self.assertEqual(preview["added"], 0)
+                self.assertEqual(preview["warnings"][0]["reason"], "VOICE_CHARACTER_UNAVAILABLE")
+
+    def test_explicitly_repeated_voice_is_allowed_at_a_different_frame(self):
+        preview = editplan.diff_plan(editplan.parse_plan(one_voice_plan(frame=100)), [voice_item()])
+        self.assertTrue(preview["passed"])
+        self.assertEqual(preview["added"], 1)
+
+    def test_known_voice_character_is_checked_in_the_snapshot_hash(self):
+        item = voice_item(character="ゆっくり霊夢")
+        self.assertNotEqual(
+            editplan.snapshot_hash([item]),
+            editplan.snapshot_hash([{**item, "character": "ゆっくり魔理沙"}]))
+
     def test_bindings_and_idempotent_replay(self):
         parsed = editplan.parse_plan(sample_plan())
         record = {
@@ -245,6 +290,47 @@ class DiffAndReplayTests(unittest.TestCase):
         self.assertFalse(preview["passed"])
         self.assertEqual(preview["warnings"][0]["code"], "CONTENT_STATE_CONFLICT")
 
+    def test_windows_source_path_is_reused_despite_slash_case_and_display_text(self):
+        parsed = editplan.parse_plan(one_video_plan())
+        for host_field in ("source_path", "path", "source", "text"):
+            host = video_item()
+            if host_field != "source_path":
+                host[host_field] = host.pop("source_path")
+            with self.subTest(host_field=host_field):
+                preview = editplan.diff_plan(parsed, [host])
+                self.assertTrue(preview["passed"])
+                self.assertEqual(preview["added"], 0)
+                self.assertEqual(preview["ops"][0]["item_id"], "native:clip")
+
+    def test_posix_media_identity_remains_case_sensitive(self):
+        item = video_item(source_path="/tmp/Media/clip.mp4")
+        self.assertNotEqual(editplan.current_fingerprint(item),
+                            editplan.current_fingerprint({**item, "source_path": "/tmp/media/clip.mp4"}))
+
+    def test_repeated_media_is_reused_only_if_explicit_location_selects_one_item(self):
+        parsed = editplan.parse_plan(one_video_plan())
+        existing = video_item()
+        for unrelated in (video_item("native:later", frame=12), video_item("native:longer", length=15)):
+            with self.subTest(unrelated=unrelated["item_id"]):
+                preview = editplan.diff_plan(parsed, [unrelated, existing])
+                self.assertTrue(preview["passed"])
+                self.assertEqual(preview["added"], 0)
+                self.assertEqual(preview["ops"][0]["item_id"], existing["item_id"])
+
+    def test_implicit_operation_cannot_hide_an_ambiguous_explicit_match(self):
+        request = one_video_plan()
+        planned = request["plan"]["scenes"][0]["items"]
+        planned[0].pop("frame")
+        planned.append({**planned[0], "id": "later-clip", "frame": 20})
+        existing = [video_item("native:one", frame=20), video_item("native:two", frame=20)]
+
+        preview = editplan.diff_plan(editplan.parse_plan(request), existing)
+        conflicts = [warning for warning in preview["warnings"]
+                     if warning["code"] == "CONTENT_STATE_CONFLICT"]
+        self.assertFalse(preview["passed"])
+        self.assertEqual([(warning["id"], warning["candidate_item_ids"]) for warning in conflicts],
+                         [("later-clip", ["native:one", "native:two"])])
+
     def test_added_item_verification_checks_identity_and_revision(self):
         detail = {"id": "caption", "op": "add", "item_id": "native:caption",
                   "result": {"revision": "r1", "frame": 0, "layer": 1, "length": 10}}
@@ -282,6 +368,73 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_code"], "SNAPSHOT_HASH_MISMATCH")
         self.assertEqual(get.await_count, 2)
         post.assert_not_awaited()
+
+    async def test_reviewed_snapshot_is_rechecked_after_media_and_project_validation(self):
+        initial_hash = editplan.snapshot_hash([])
+        changed = [video_item()]
+        for action in ("apply_edit", "reconcile_edit"):
+            gets = [{"characters": []}, {"items": []}, {"success": True, "exists": True},
+                    {"success": True, "fps": 30}, {"items": changed}]
+            with self.subTest(action=action), \
+                 patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)) as get, \
+                 patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                result = await server.dispatch({"action": action, **one_video_plan(),
+                                                "check_project_settings": True,
+                                                "expected_snapshot_hash": initial_hash})
+            self.assertEqual(result["error_code"], "SNAPSHOT_HASH_MISMATCH")
+            self.assertEqual(result["expected_snapshot_hash"], initial_hash)
+            self.assertEqual(result["actual_snapshot_hash"], editplan.snapshot_hash(changed))
+            self.assertFalse(result["rolled_back"])
+            self.assertEqual(get.await_args.args, ("/items",))
+            self.assertEqual(get.await_args_list[-2].args, ("/project",))
+            post.assert_not_awaited()
+
+    async def test_reviewed_snapshot_unavailable_after_preflight_stops_apply(self):
+        gets = [{"characters": []}, {"items": []}, {"success": True, "exists": True},
+                {"success": False, "error_code": "ITEMS_UNAVAILABLE"}]
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+             patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_video_plan(),
+                                            "expected_snapshot_hash": editplan.snapshot_hash([])})
+        self.assertEqual(result["error_code"], "ITEMS_UNAVAILABLE")
+        self.assertFalse(result["rolled_back"])
+        post.assert_not_awaited()
+
+    async def test_matching_snapshot_after_preflight_allows_addition(self):
+        item = video_item()
+        gets = [{"characters": []}, {"items": []}, {"success": True, "exists": True},
+                {"items": []}, {"items": [item]}]
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)) as get, \
+             patch.object(server, "ymm4_post", AsyncMock(return_value={**item, "success": True})) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_video_plan(),
+                                            "expected_snapshot_hash": editplan.snapshot_hash([])})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(get.await_count, 5)
+        post.assert_awaited_once()
+
+    async def test_reviewed_snapshot_rejects_incomplete_or_switched_inventory(self):
+        initial = {"items": [], "count": 0, "timeline_id": "timeline:" + "a" * 32}
+        for after, code in (
+            ({**initial, "count": 1}, "ITEMS_INVENTORY_INCOMPLETE"),
+            ({**initial, "timeline_id": "timeline:" + "b" * 32}, "TIMELINE_CHANGED"),
+            ({"items": [], "count": 0}, "TIMELINE_ID_UNAVAILABLE"),
+        ):
+            for action in ("apply_edit", "reconcile_edit"):
+                with self.subTest(action=action, code=code):
+                    expected = video_item()
+                    gets = [{"characters": []}, initial, {"success": True, "exists": True},
+                            after, {**initial, "items": [expected], "count": 1}]
+                    with (
+                        patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),
+                        patch.object(server, "ymm4_post", AsyncMock(return_value={
+                            **expected, "success": True})) as post,
+                    ):
+                        result = await server.dispatch({"action": action, **one_video_plan(),
+                                                        "expected_snapshot_hash": editplan.snapshot_hash([])})
+                    post.assert_not_awaited()
+                    self.assertEqual(result["error_code"], code)
+                    self.assertFalse(result["rolled_back"])
 
     async def test_expected_plan_hash_mismatch_stops_before_host_call(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
@@ -331,14 +484,14 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(applied["error_code"], "PROJECT_SETTINGS_MISMATCH")
         post.assert_not_awaited()
 
-    def _patches(self, items, characters, posts):
+    def _patches(self, items, characters, posts, bindings=None):
         async def get(path):
             if path == "/characters":
                 return {"success": True, "characters": characters}
             if path == "/items":
                 return {"success": True, "items": items() if callable(items) else items}
             if path == "/edits/state":
-                return {"success": True, "bindings": []}
+                return {"success": True, "bindings": bindings or []}
             if path.startswith("/media/info?path="):
                 return {"success": True, "exists": True}
             raise AssertionError(path)
@@ -354,6 +507,122 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             posted.assert_not_awaited()
         self.assertTrue(result["dry_run"])
         self.assertEqual(result["added"], 3)
+
+    async def test_unknown_existing_voice_character_prevents_write_on_apply_and_reconcile(self):
+        get, post = self._patches([voice_item()], [{"name": "ゆっくり霊夢"}], {"success": True})
+        with get, post as posted:
+            for action in ("apply_edit", "reconcile_edit"):
+                with self.subTest(action=action):
+                    result = await server.dispatch({"action": action, "dry_run": False,
+                                                    **one_voice_plan(frame=0)})
+                    self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+                    self.assertEqual(result["conflicts"][0]["reason"], "VOICE_CHARACTER_UNAVAILABLE")
+            posted.assert_not_awaited()
+
+    async def test_ambiguous_media_prevents_new_writes_in_apply_and_reconcile(self):
+        current = [video_item(), video_item("native:duplicate")]
+        for action in ("apply_edit", "reconcile_edit"):
+            get, post = self._patches(current, [], {"success": True})
+            with self.subTest(action=action), get, post as posted:
+                result = await server.dispatch({"action": action, **one_video_plan()})
+                posted.assert_not_awaited()
+            self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+            self.assertEqual(result["conflicts"][0]["candidate_item_ids"],
+                             ["native:clip", "native:duplicate"])
+
+    async def test_apply_and_reconcile_preserve_a_later_items_saved_binding(self):
+        request = one_text_plan()
+        planned = request["plan"]["scenes"][0]["items"]
+        planned[0].pop("frame")
+        planned.append({**planned[0], "id": "later-caption", "frame": 20})
+        bound_later = {"id": "later-caption", "item_id": "native:later", "revision": "r1"}
+        record = {"idempotency_key": request["idempotency_key"],
+                  "plan_hash": editplan.plan_hash(editplan.parse_plan(request)),
+                  "items": [bound_later]}
+        for action in ("apply_edit", "reconcile_edit"):
+            with self.subTest(action=action):
+                current = [{"item_id": "native:later", "revision": "r1", "type": "TextItem",
+                            "text": "hello", "frame": 20, "layer": 1, "length": 10}]
+
+                async def post(path, body=None, **unused):
+                    if path == "/items/text":
+                        added = {"success": True, "item_id": "native:first", "revision": "r2",
+                                 **{key: body[key] for key in ("frame", "layer", "length")}}
+                        current.append({**added, "type": "TextItem", "text": body["text"]})
+                        return added
+                    if path == "/edits/bindings":
+                        return {"success": True}
+                    raise AssertionError(path)
+
+                get, patch_post = self._patches(current, [], post, [record])
+                with get, patch_post as posted:
+                    result = await server.dispatch({"action": action, **request})
+                self.assertTrue(result["success"], result)
+                self.assertEqual([(row["id"], row["op"], row["item_id"])
+                                  for row in result["details"]],
+                                 [("caption", "add", "native:first"),
+                                  ("later-caption", "keep", "native:later")])
+                self.assertEqual(sorted(item["frame"] for item in current), [0, 20])
+                self.assertEqual(posted.await_args.args[1]["items"][1], bound_later)
+
+    async def test_apply_and_reconcile_preserve_later_explicit_media_match_without_bindings(self):
+        request = one_video_plan()
+        planned = request["plan"]["scenes"][0]["items"]
+        planned[0].pop("frame")
+        planned.append({**planned[0], "id": "later-clip", "frame": 20})
+        for action in ("plan_edit", "apply_edit", "reconcile_edit"):
+            with self.subTest(action=action):
+                current = [video_item("native:later", frame=20)]
+
+                async def post(path, body=None, **unused):
+                    self.assertEqual(path, "/items/video")
+                    added = video_item("native:first", frame=body["frame"],
+                                       layer=body["layer"], length=body["length"])
+                    current.append(added)
+                    return {"success": True, **added}
+
+                get, patch_post = self._patches(current, [], post)
+                with get, patch_post as posted:
+                    result = await server.dispatch({"action": action, **request})
+                self.assertTrue(result["success"], result)
+                if action == "plan_edit":
+                    self.assertTrue(result["passed"], result)
+                    operations = result["ops"]
+                    posted.assert_not_awaited()
+                else:
+                    operations = result["details"]
+                    self.assertEqual(sorted(item["frame"] for item in current), [0, 20])
+                    posted.assert_awaited_once()
+                self.assertEqual([(row["id"], row["op"]) for row in operations],
+                                 [("clip", "add"), ("later-clip", "keep")])
+                self.assertEqual(operations[1]["item_id"], "native:later")
+
+    async def test_explicit_overlay_does_not_move_sequential_frame_before_voice_end(self):
+        request = {"action": "apply_edit", "plan": {"gap": 0, "scenes": [{
+            "id": "scene", "items": [
+                {"id": "voice", "type": "dialogue", "character": "A", "text": "line",
+                 "frame": 0, "layer": 1},
+                {"id": "overlay", "type": "text", "text": "overlay",
+                 "frame": 0, "layer": 2, "length": 10},
+                {"id": "tail", "type": "text", "text": "sequential", "layer": 1, "length": 10},
+            ]}]}}
+        current = []
+
+        async def post(path, body=None, **unused):
+            is_voice = path == "/items/voice"
+            result = {"success": True, "item_id": f"native:{len(current)}", "revision": "r1",
+                      "frame": body["frame"], "layer": body["layer"],
+                      "length": 100 if is_voice else body["length"]}
+            current.append({**result, "type": "VoiceItem" if is_voice else "TextItem",
+                            "text": body["text"]})
+            return result
+
+        get, patch_post = self._patches(current, [{"name": "A"}], post)
+        with get, patch_post:
+            result = await server.dispatch(request)
+        self.assertTrue(result["success"], result)
+        self.assertEqual([(item["text"], item["frame"]) for item in current],
+                         [("line", 0), ("overlay", 0), ("sequential", 100)])
 
     async def test_apply_edit_adds_then_replays(self):
         created = []

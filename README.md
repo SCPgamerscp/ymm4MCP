@@ -259,9 +259,13 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 LLMが数百回の低レベルAPIを直接組み立てる代わりに、完成状態を渡して差分だけ適用します。同じ `idempotency_key` の再送は、同じ計画の対象アイテムが変更されずに残っていれば二重追加しません。削除されたアイテムは `reconcile_edit` で補えます。既存の計画外アイテムは削除しません。
 
-`apply_edit` / `reconcile_edit` に `expected_plan_hash` を指定すると、事前に確認した `plan_edit` の SHA-256 と一致しない計画はホストへの通信前に拒否します。`plan_edit` が返す `snapshot_hash` を `expected_snapshot_hash` として渡すと、その後タイムラインの状態が変わっていた場合も編集前に停止します。
+素材を再利用する際は、YMM4が返した素材パスを優先します。Windowsのパスでは大文字小文字と区切り文字の違いを吸収します。同一レイヤーに同じ内容の候補が複数あり、明示したフレームや長さでも特定できない場合は差分の適用を停止します。
+
+`apply_edit` / `reconcile_edit` に `expected_plan_hash` を指定すると、事前に確認した `plan_edit` の SHA-256 と一致しない計画はホストへの通信前に拒否します。`plan_edit` が返す `snapshot_hash` を `expected_snapshot_hash` として渡すと、素材やプロジェクト設定の確認後にもタイムラインを読み直し、変更を検出した場合は最初の追加前に停止します。
 
 `plan_edit` は常にプレビューのみで、`reconcile_edit` は適用します。`reconcile_edit` に `dry_run=true`、`plan_edit` に `dry_run=false` を指定すると入力エラーにして、意図と異なる処理を防ぎます。
+
+既存のボイスと計画のレイヤー・セリフが一致し、既存ボイスのキャラ名を確認できない場合は、`EDIT_STATE_CONFLICT` で追加前に停止します。特定の別フレームに同じセリフを配置する場合は、計画でそのフレームを明示できます。
 
 `apply_edit` はシーンをtransactionにします。あるシーンの追加が失敗すると、**そのシーンで追加したアイテムだけ削除**し、先に完了したシーンは残します。`atomic_scenes=false` で旧来どおり部分追加を残すこともできます。通信失敗（追加できたか不明）では自動削除しません。
 Voice の実際の長さが計画より伸びて次のシーンの開始位置を越えた場合は、`SCENE_BOUNDARY_CONFLICT` で次のシーンを追加せず停止します。先に完了したシーンの `details` と実終端を返すので、計画の区間を調整してから再適用してください。
