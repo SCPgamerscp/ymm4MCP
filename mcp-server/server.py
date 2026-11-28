@@ -1982,7 +1982,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if expected_snapshot is not None and any(op["op"] == "add" for op in preview["ops"]):
         # Binding, media and project lookups may have taken long enough for
         # the reviewed timeline to change since the first inventory read.
-        conflict = await quality_guard.verify_snapshot(ymm4_get, items)
+        conflict = await quality_guard.verify_snapshot(ymm4_get, items, initial_inventory=snapshot)
         if conflict is not None:
             if conflict["error_code"] == "SNAPSHOT_CONFLICT":
                 conflict["error_code"] = "SNAPSHOT_HASH_MISMATCH"

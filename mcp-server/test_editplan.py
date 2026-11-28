@@ -413,6 +413,29 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get.await_count, 5)
         post.assert_awaited_once()
 
+    async def test_reviewed_snapshot_rejects_incomplete_or_switched_inventory(self):
+        initial = {"items": [], "count": 0, "timeline_id": "timeline:" + "a" * 32}
+        for after, code in (
+            ({**initial, "count": 1}, "ITEMS_INVENTORY_INCOMPLETE"),
+            ({**initial, "timeline_id": "timeline:" + "b" * 32}, "TIMELINE_CHANGED"),
+            ({"items": [], "count": 0}, "TIMELINE_ID_UNAVAILABLE"),
+        ):
+            for action in ("apply_edit", "reconcile_edit"):
+                with self.subTest(action=action, code=code):
+                    expected = video_item()
+                    gets = [{"characters": []}, initial, {"success": True, "exists": True},
+                            after, {**initial, "items": [expected], "count": 1}]
+                    with (
+                        patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),
+                        patch.object(server, "ymm4_post", AsyncMock(return_value={
+                            **expected, "success": True})) as post,
+                    ):
+                        result = await server.dispatch({"action": action, **one_video_plan(),
+                                                        "expected_snapshot_hash": editplan.snapshot_hash([])})
+                    post.assert_not_awaited()
+                    self.assertEqual(result["error_code"], code)
+                    self.assertFalse(result["rolled_back"])
+
     async def test_expected_plan_hash_mismatch_stops_before_host_call(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
