@@ -759,6 +759,36 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         bindings = [body for path, body in calls if path == "/edits/bindings"]
         self.assertEqual(bindings[0]["items"][0]["item_id"], "native:intro")
 
+    async def test_missing_live_timeline_after_rollback_blocks_binding_save(self):
+        intro = {"item_id": "native:intro", "revision": "r1", "frame": 0,
+                 "layer": 1, "length": 10, "type": "TextItem", "text": "keep"}
+        body = {**intro, "item_id": "native:body", "frame": 20, "text": "temp"}
+        plan = {"plan": {"scenes": [
+            {"id": "intro", "items": [
+                {"id": "keep", "type": "text", "text": "keep", "layer": 1, "length": 10}]},
+            {"id": "body", "items": [
+                {"id": "temp", "type": "text", "text": "temp", "layer": 1, "frame": 20, "length": 10},
+                {"id": "fail", "type": "text", "text": "fail", "layer": 1, "frame": 40, "length": 10}]},
+        ]}, "idempotency_key": "verify-partial-save"}
+        gets = [{"characters": []}, {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID},
+                {"bindings": []}, {"items": [intro], "count": 1}]
+        posts = [{**intro, "success": True}, {**body, "success": True},
+                 {"success": False, "error": "add failed"},
+                 {"success": True, "removed": 1, "item_ids": ["native:body"]},
+                 {"success": True}]
+        with (
+            patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),
+            patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post,
+        ):
+            result = await server.dispatch({"action": "apply_edit", **plan})
+        self.assertEqual([entry.args[0] for entry in post.await_args_list],
+                         ["/items/text", "/items/text", "/items/text", "/items/delete"])
+        self.assertTrue(result["outcome_unknown"])
+        self.assertFalse(result["rolled_back"])
+        self.assertEqual(result["committed_scenes"], ["intro"])
+        self.assertEqual(result["binding_error"]["error_code"], "TIMELINE_UNAVAILABLE")
+        self.assertEqual(result["rollback"]["verification"]["error_code"], "ROLLBACK_TIMELINE_UNAVAILABLE")
+
     async def test_checkpoint_and_rollback_dispatch(self):
         with patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True, "checkpoint_id": "cp_" + "a" * 32})) as post:
             await server.dispatch({"action": "control", "sub_action": "checkpoint", "reason": "before apply", "backup": True})

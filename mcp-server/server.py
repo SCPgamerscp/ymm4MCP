@@ -1863,11 +1863,16 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
     rolled_back = False
     removed_ids = set()
     remaining_details = list(details)
+    binding_timeline_error = "TIMELINE_CHANGED" if timeline_changed else None
     if atomic and scene_added_ids and not outcome_unknown:
         rollback = await _delete_item_ids(scene_added_ids, timeline_id)
         rolled_back = rollback.get("success") is True
         outcome_unknown = rollback.get("outcome_unknown") is True
-        timeline_changed = rollback.get("verification", {}).get("error_code") == "ROLLBACK_TIMELINE_CHANGED"
+        timeline_error = rollback.get("verification", {}).get("error_code")
+        if timeline_error == "ROLLBACK_TIMELINE_CHANGED":
+            binding_timeline_error = "TIMELINE_CHANGED"
+        elif timeline_error == "ROLLBACK_TIMELINE_UNAVAILABLE" and timeline_id is not None:
+            binding_timeline_error = "TIMELINE_UNAVAILABLE"
         if rolled_back:
             removed_ids.update(scene_added_ids)
         elif "remaining_item_ids" in rollback:
@@ -1879,8 +1884,8 @@ async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_ind
     if not rolled_back and scene_bindings and not (rollback and outcome_unknown):
         persist.extend(row for row in scene_bindings
                        if not isinstance(row["item_id"], str) or row["item_id"] not in removed_ids)
-    if timeline_changed:
-        binding_error = {"error_code": "TIMELINE_CHANGED"} if persist and plan.get("idempotency_key") else None
+    if binding_timeline_error:
+        binding_error = {"error_code": binding_timeline_error} if persist and plan.get("idempotency_key") else None
     else:
         binding_error = await _persist_edit_bindings(plan, persist)
     scenes = list(scenes)
