@@ -191,6 +191,8 @@ TOOLS = [
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
                 "reason": {"type": "string", "description": "control/checkpoint: 操作ログに残す理由"},
                 "backup": {"type": "boolean", "description": "control/checkpoint: 保存済み.ymmpがあればコピーする"},
+                "restore_backup": {"type": "boolean", "description": "control/rollback: 保存済みのバックアップを別プロジェクトとして開く"},
+                "confirm_restore_backup": {"type": "boolean", "description": "control/rollback: バックアップを開くことへの明示的な確認。restore_backup=true の場合は必須"},
                 "expected": {"type": "array", "maxItems": 1000, "items": {"type": "object"}, "description": "validate: 配置期待値。verify_items: 必須item_idと検証対象revision/frame/layer/length/type/textを1つ以上指定（読み取り専用）"},
                 "before_snapshot": {"type": "object", "description": "verify_ripple_delete: 旧方式。呼び出し側提供の編集前スナップショット（真正性は保証されない）"},
                 "capture_evidence": {"type": "boolean", "description": "plan_ripple_delete: trueなら検証済みホストスナップショットをサーバー内に10分保存しplan_idを返す（読み取り専用）"},
@@ -553,6 +555,44 @@ def _same_project_path(a: str, b: str) -> bool:
     if len(a) >= 2 and a[1] == ":" or a.startswith("\\\\"):
         return ntpath.normcase(ntpath.normpath(a)) == ntpath.normcase(ntpath.normpath(b))
     return os.path.normpath(a) == os.path.normpath(b)
+
+
+async def restore_checkpoint_backup(checkpoint_id: str) -> dict:
+    unknown = {"success": False, "error_code": "RESTORE_OUTCOME_UNKNOWN",
+               "checkpoint_id": checkpoint_id, "outcome_unknown": True}
+    try:
+        restored = await ymm4_post("/edits/restore-backup", {
+            "checkpoint_id": checkpoint_id, "confirm_restore_backup": True})
+    except (httpx.HTTPError, ValueError) as exc:
+        return {**unknown, "error": str(exc)}
+    if not isinstance(restored, dict):
+        return {**unknown, "details": restored}
+    if restored.get("success") is False:
+        if restored.get("error_code") == "NOT_FOUND":
+            return {"success": False, "error_code": "CHECKPOINT_RESTORE_UNAVAILABLE",
+                    "checkpoint_id": checkpoint_id, "details": restored}
+        return restored
+    backup = restored.get("backup_path")
+    original = restored.get("original_project_path")
+    digest = restored.get("backup_sha256")
+    if (restored.get("success") is not True or "error" in restored or "error_code" in restored or
+            restored.get("outcome_unknown", False) is not False or
+            restored.get("action") != "restore_backup" or restored.get("checkpoint_id") != checkpoint_id or
+            not is_absolute_media_path(backup) or not backup.lower().endswith(".ymmp") or
+            not is_absolute_media_path(original) or not original.lower().endswith(".ymmp") or
+            _same_project_path(backup, original) or
+            not isinstance(digest, str) or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None):
+        return {**unknown, "details": restored}
+    try:
+        expected_project = project_identity({"success": True, "projectPath": backup})
+        opened = await ymm4_get("/project")
+        opened_project = project_identity(opened)
+    except (httpx.HTTPError, ValueError) as exc:
+        return {**unknown, "backup_path": backup, "error": str(exc)}
+    if opened_project != expected_project or opened.get("isSaved") is not True:
+        return {**unknown, "backup_path": backup, "verification": opened,
+                "error": "指定したバックアップが保存済みプロジェクトとして開かれていることを確認できません"}
+    return restored
 
 
 async def create_from_template(args: dict) -> dict:
@@ -1380,6 +1420,16 @@ async def dispatch(args: dict) -> Any:
                     checkpoint_id = args.get("checkpoint_id")
                     if not editplan.checkpoint_id_ok(checkpoint_id):
                         raise ValueError("checkpoint_id is invalid")
+                    restore_backup = args.get("restore_backup", False)
+                    confirmed = args.get("confirm_restore_backup", False)
+                    if not isinstance(restore_backup, bool) or not isinstance(confirmed, bool):
+                        raise ValueError("restore_backup and confirm_restore_backup must be boolean")
+                    if restore_backup:
+                        if not confirmed:
+                            return {"success": False, "error_code": "RESTORE_CONFIRMATION_REQUIRED"}
+                        return await restore_checkpoint_backup(checkpoint_id)
+                    if confirmed:
+                        raise ValueError("confirm_restore_backup requires restore_backup=true")
                     return await ymm4_post("/edits/rollback", {"checkpoint_id": checkpoint_id})
                 # YMM4内部コマンドをトリガー（UIメニュー限定機能を直接実行）
                 case "undo": return await ymm4_post("/command", {"name": "UndoCommand"})

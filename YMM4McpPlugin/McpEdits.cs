@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 
 namespace YMM4McpPlugin
 {
@@ -62,6 +64,11 @@ namespace YMM4McpPlugin
                 if (!CheckpointIdPattern.IsMatch(id)) throw new ArgumentException("checkpoint id is invalid");
                 if (req.HttpMethod != "GET") throw new ArgumentException("Unsupported checkpoint method");
                 return GetCheckpoint(id);
+            }
+            if (rest.Equals("restore-backup", StringComparison.OrdinalIgnoreCase))
+            {
+                if (req.HttpMethod != "POST") throw new ArgumentException("Unsupported restore-backup method");
+                return await RollbackCheckpoint(req, restoreOnly: true);
             }
             if (rest.Equals("rollback", StringComparison.OrdinalIgnoreCase))
             {
@@ -449,7 +456,7 @@ namespace YMM4McpPlugin
             }
         }
 
-        private async Task<object> RollbackCheckpoint(HttpListenerRequest req)
+        private async Task<object> RollbackCheckpoint(HttpListenerRequest req, bool restoreOnly = false)
         {
             var body = await ReadBody(req);
             string id = GetStr(body, "checkpoint_id", "");
@@ -465,7 +472,10 @@ namespace YMM4McpPlugin
             // restoration opens the original on-disk checkpoint as a separate
             // project, restoring deletions and property changes without writing
             // over the current project file.
-            if (GetBool(body, "restore_backup", false))
+            bool restoreBackup = GetBool(body, "restore_backup", restoreOnly);
+            if (restoreOnly && !restoreBackup)
+                return Failure("INVALID_ARGUMENT", "restore-backup cannot perform an item rollback");
+            if (restoreBackup)
             {
                 if (!GetBool(body, "confirm_restore_backup", false))
                     return Failure("RESTORE_CONFIRMATION_REQUIRED",
@@ -550,37 +560,33 @@ namespace YMM4McpPlugin
 
         private async Task<object> RestoreCheckpointBackup(CheckpointRecord record)
         {
-            if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
-                    record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
+            using var backup = EditCheckpointSafety.OpenVerifiedBackup(record.BackupPath, CheckpointBackupDir,
+                record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256);
+            if (backup == null)
                 return Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
                     "保存済みの同一プロジェクトに属する安全なバックアップがありません");
             return await RunOnUi(async () =>
             {
-                // Recheck the project and the backup immediately before invoking
-                // the host. Never discard unsaved changes, even when confirmed.
+                // The verified backup still denies writes and replacement.
+                // Recheck the live project before invoking the host.
                 if (!EditCheckpointSafety.SameProject(record.ProjectPath, CurrentProjectPath()))
                     return (object)Failure("CHECKPOINT_PROJECT_MISMATCH",
                         "チェックポイント作成時と現在のプロジェクトが異なります");
                 if (CurrentProjectSaveState() is not true)
                     return (object)Failure("UNSAVED_CHANGES",
                         "保存状態が不明か未保存の変更があります。保存してから復元してください");
-                if (!EditCheckpointSafety.IsRestorableBackup(record.BackupPath, CheckpointBackupDir,
-                        record.Id, record.ProjectPath, CurrentProjectPath(), record.BackupSha256))
-                    return (object)Failure("CHECKPOINT_BACKUP_UNAVAILABLE",
-                        "復元用バックアップが存在しないか安全ではありません");
-
-                var invoked = InvokeNamed(OpenMethodHints, record.BackupPath!);
-                if (!invoked.ok)
+                Task? load = StartObservableBackupOpen(backup.BackupPath);
+                if (load == null)
                     return (object)Failure("OPEN_METHOD_UNAVAILABLE",
-                        "YMM4でバックアッププロジェクトを開くメソッドが見つかりません");
-                if (invoked.task != null)
-                    await invoked.task;
-                if (!EditCheckpointSafety.SameProject(record.BackupPath, CurrentProjectPath()))
+                        "YMM4でバックアップの読み込み完了を確認できるメソッドが見つかりません");
+                await load;
+                if (!EditCheckpointSafety.IsStableSavedProject(
+                        backup.BackupPath, CurrentProjectPath(), CurrentProjectSaveState()))
                     return (object)new
                     {
                         success = false,
                         error_code = "RESTORE_OUTCOME_UNKNOWN",
-                        error = "バックアップを開く処理を呼びましたが、プロジェクトの切替を確認できません",
+                        error = "バックアップが保存済みプロジェクトとして開かれたことを確認できません",
                         outcome_unknown = true,
                         checkpoint_id = record.Id,
                         backup_path = record.BackupPath
@@ -596,6 +602,35 @@ namespace YMM4McpPlugin
                     note = "バックアップを別プロジェクトとして開きました。元のプロジェクトは上書きしていません。チェックポイント領域のコピーは将来整理されるため、編集を続ける前に別の場所へ名前を付けて保存してください。"
                 };
             });
+        }
+
+        private Task? StartObservableBackupOpen(string path)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            var main = ResolveTarget("Main");
+            foreach (var host in new[] { main, main == null ? null : GetMainModel(main), ResolveTarget("Project") })
+            {
+                if (host == null) continue;
+                var type = host.GetType();
+                var methods = type.GetMethods(flags);
+                foreach (string name in OpenMethodHints)
+                {
+                    var method = methods.FirstOrDefault(candidate =>
+                        (candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                         candidate.Name.Equals(name + "Async", StringComparison.OrdinalIgnoreCase)) &&
+                        ExportInvocationPolicy.AcceptsObservableProjectOpen(candidate));
+                    if (method != null)
+                        return ExportInvocationPolicy.InvokeProjectPathMethod(method, host, path);
+                }
+                foreach (string name in OpenMethodHints)
+                {
+                    if (type.GetProperty(name + "Command", flags)?.GetValue(host) is ICommand command &&
+                        ExportInvocationPolicy.FindAwaitableCommand(command) is MethodInfo execute &&
+                        command.CanExecute(path))
+                        return ExportInvocationPolicy.InvokeProjectPathMethod(execute, command, path);
+                }
+            }
+            return null;
         }
 
         private bool? CurrentProjectSaveState()

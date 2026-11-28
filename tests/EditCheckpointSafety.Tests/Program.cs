@@ -5,6 +5,21 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+Check(!ExportInvocationPolicy.AcceptsObservableProjectOpen(typeof(ObservableBackupOpen).GetMethod(nameof(ObservableBackupOpen.OpenWithoutCompletion))!),
+    "A void path-taking overload must not start a verified restore");
+var openPath = typeof(ObservableBackupOpen).GetMethod(nameof(ObservableBackupOpen.OpenAsync), [typeof(string)])!;
+Check(ExportInvocationPolicy.AcceptsObservableProjectOpen(openPath),
+    "A path-taking ValueTask overload can report when the restore finishes");
+var openDialog = typeof(ObservableBackupOpen).GetMethod(nameof(ObservableBackupOpen.OpenAsync), Type.EmptyTypes)!;
+Check(!ExportInvocationPolicy.AcceptsObservableProjectOpen(openDialog),
+    "An awaitable overload without a project path must not start a restore");
+var observableOpen = new ObservableBackupOpen();
+var openTask = ExportInvocationPolicy.InvokeProjectPathMethod(openPath, observableOpen, "backup.ymmp");
+Check(openTask is { IsCompleted: false } && observableOpen.Path == "backup.ymmp",
+    "Restore should hold its backup handle while the returned load is pending");
+observableOpen.Loaded.SetResult();
+Check(openTask is { IsCompletedSuccessfully: true }, "Completion must come from the selected load");
+
 var seen = new HashSet<string>(StringComparer.Ordinal);
 EditCheckpointSafety.ValidateBinding("scene-1", "native:item-1", seen);
 Check(seen.Count == 1, "valid binding rejected");
@@ -178,48 +193,98 @@ Check(!EditCheckpointSafety.CanPruneBackup(Path.Combine(pruningDir, "..", "outsi
 // Full rollback requires an owned backup with the exact SHA-256 recorded at
 // checkpoint creation. Replacing the bytes while preserving size/timestamps
 // must never result in a successful restore.
-string restoreDir = Path.Combine(Path.GetTempPath(), "ymm4-restore-" + Guid.NewGuid().ToString("N"));
-Directory.CreateDirectory(restoreDir);
-try
+if (OperatingSystem.IsWindows())
 {
-    const string checkpointId = "cp_12345678";
-    const string project = "C:\\video\\project.ymmp";
-    string backup = Path.Combine(restoreDir, checkpointId + ".ymmp");
-    File.WriteAllText(backup, "original backup payload");
-    string hash = EditCheckpointSafety.ComputeBackupSha256(backup);
-    Check(EditCheckpointSafety.IsValidBackupSha256(hash), "generated SHA-256 is invalid");
-    Check(!EditCheckpointSafety.IsValidBackupSha256(null), "missing digest accepted");
-    Check(!EditCheckpointSafety.IsValidBackupSha256(new string('a', 63)), "short digest accepted");
-    Check(!EditCheckpointSafety.IsValidBackupSha256(new string('g', 64)), "nonhex digest accepted");
-    Check(EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
-        "valid owned hashed backup must be restorable");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, null),
-        "legacy backup without integrity digest must fail closed");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, "cp_87654321", project, project, hash),
-        "a checkpoint must not restore another checkpoint's backup");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project,
-            "C:\\video\\different.ymmp", hash), "backup must not restore into a different project");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, null, project, hash),
-        "unknown source project must reject restore");
-    Check(!EditCheckpointSafety.IsRestorableBackup(
-            Path.Combine(restoreDir, "..", "outside", checkpointId + ".ymmp"),
-            restoreDir, checkpointId, project, project, hash),
-        "restore must reject paths outside the private backup directory");
-    var originalTimestamp = File.GetLastWriteTimeUtc(backup);
-    File.WriteAllText(backup, "modified backup payload");
-    File.SetLastWriteTimeUtc(backup, originalTimestamp);
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
-        "modified backup with identical length and timestamp must fail");
-    File.WriteAllText(backup, "");
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
-        "empty backups must not be opened");
-    File.Delete(backup);
-    Check(!EditCheckpointSafety.IsRestorableBackup(backup, restoreDir, checkpointId, project, project, hash),
-        "missing backups must not be opened");
-}
-finally
-{
-    Directory.Delete(restoreDir, recursive: true);
+    string restoreDir = Path.Combine(Path.GetTempPath(), "ymm4-restore-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(restoreDir);
+    try
+    {
+        const string checkpointId = "cp_12345678";
+        const string project = "C:\\video\\project.ymmp";
+        string backup = Path.Combine(restoreDir, checkpointId + ".ymmp");
+        File.WriteAllText(backup, "original backup payload");
+        string hash = EditCheckpointSafety.ComputeBackupSha256(backup);
+        bool IsRestorable(string path, string id, string? source, string active, string? digest)
+        {
+            using var verified = EditCheckpointSafety.OpenVerifiedBackup(path, restoreDir, id, source, active, digest);
+            return verified != null;
+        }
+        Check(EditCheckpointSafety.IsValidBackupSha256(hash), "generated SHA-256 is invalid");
+        Check(!EditCheckpointSafety.IsValidBackupSha256(null), "missing digest accepted");
+        Check(!EditCheckpointSafety.IsValidBackupSha256(new string('a', 63)), "short digest accepted");
+        Check(!EditCheckpointSafety.IsValidBackupSha256(new string('g', 64)), "nonhex digest accepted");
+        using (var verified = EditCheckpointSafety.OpenVerifiedBackup(
+                   backup, restoreDir, checkpointId, project, project, hash))
+        {
+            Check(verified?.BackupPath == backup, "the verified path must be the owned backup");
+            Check(File.ReadAllText(backup) == "original backup payload",
+                "the host must be able to open a second read handle");
+            bool writeBlocked = false;
+            try { using var writer = File.Open(backup, FileMode.Open, FileAccess.Write, FileShare.Read); }
+            catch (IOException) { writeBlocked = true; }
+            Check(writeBlocked, "an external writer must be refused until the verified handle is disposed");
+            bool renameBlocked = false;
+            try { File.Move(backup, backup + ".moved"); }
+            catch (IOException) { renameBlocked = true; }
+            Check(renameBlocked, "a verified backup must not be renamed during restore");
+            bool directoryRenameBlocked = false;
+            try { Directory.Move(restoreDir, restoreDir + ".moved"); }
+            catch (IOException) { directoryRenameBlocked = true; }
+            if (!directoryRenameBlocked)
+                Directory.Move(restoreDir + ".moved", restoreDir);
+            Check(directoryRenameBlocked, "the backup directory must stay in place during restore");
+        }
+        Check(!IsRestorable(backup, checkpointId, project, project, null),
+            "legacy backup without integrity digest must fail closed");
+        Check(!IsRestorable(backup, "cp_87654321", project, project, hash),
+            "a checkpoint must not restore another checkpoint's backup");
+        Check(!IsRestorable(backup, checkpointId, project,
+                "C:\\video\\different.ymmp", hash), "backup must not restore into a different project");
+        Check(!IsRestorable(backup, checkpointId, null, project, hash),
+            "unknown source project must reject restore");
+        Check(!IsRestorable(
+                Path.Combine(restoreDir, "..", "outside", checkpointId + ".ymmp"),
+                checkpointId, project, project, hash),
+            "restore must reject paths outside the private backup directory");
+        var originalTimestamp = File.GetLastWriteTimeUtc(backup);
+        File.WriteAllText(backup, "modified backup payload");
+        File.SetLastWriteTimeUtc(backup, originalTimestamp);
+        Check(!IsRestorable(backup, checkpointId, project, project, hash),
+            "modified backup with identical length and timestamp must fail");
+        File.WriteAllText(backup, "");
+        Check(!IsRestorable(backup, checkpointId, project, project, hash),
+            "empty backups must not be opened");
+        File.Delete(backup);
+        Check(!IsRestorable(backup, checkpointId, project, project, hash),
+            "missing backups must not be opened");
+
+        string copy = Path.Combine(restoreDir, "ordinary.ymmp");
+        File.WriteAllText(copy, "original backup payload");
+        File.CreateSymbolicLink(backup, copy);
+        Check(!IsRestorable(backup, checkpointId, project, project, hash),
+            "a link to a file with the expected digest must not be opened");
+        File.Delete(backup);
+
+        string target = Path.Combine(restoreDir, "target");
+        string nested = Path.Combine(target, "nested");
+        Directory.CreateDirectory(nested);
+        string nestedBackup = Path.Combine(nested, checkpointId + ".ymmp");
+        File.Copy(copy, nestedBackup);
+        using (var direct = EditCheckpointSafety.OpenVerifiedBackup(
+                   nestedBackup, nested, checkpointId, project, project, hash))
+            Check(direct != null, "a normal nested backup path should open");
+        string linkedDirectory = Path.Combine(restoreDir, "linked");
+        Directory.CreateSymbolicLink(linkedDirectory, target);
+        string linkedNested = Path.Combine(linkedDirectory, "nested");
+        using var linked = EditCheckpointSafety.OpenVerifiedBackup(
+            Path.Combine(linkedNested, checkpointId + ".ymmp"),
+            linkedNested, checkpointId, project, project, hash);
+        Check(linked == null, "a backup reached through a linked ancestor must not be opened");
+    }
+    finally
+    {
+        Directory.Delete(restoreDir, recursive: true);
+    }
 }
 
 string root = Path.Combine(Path.GetTempPath(), "ymm4-checkpoint-" + Guid.NewGuid().ToString("N"));
@@ -251,3 +316,18 @@ finally
     Directory.Delete(root, recursive: true);
 }
 Console.WriteLine("Edit checkpoint safety tests passed");
+
+class ObservableBackupOpen
+{
+    public TaskCompletionSource Loaded { get; } = new();
+    public string? Path { get; private set; }
+
+    public ValueTask OpenAsync(string path)
+    {
+        Path = path;
+        return new ValueTask(Loaded.Task);
+    }
+
+    public Task OpenAsync() => Task.CompletedTask;
+    public void OpenWithoutCompletion(string path) { }
+}

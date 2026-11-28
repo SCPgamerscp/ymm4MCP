@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
 
 namespace YMM4McpPlugin
 {
@@ -167,34 +169,191 @@ namespace YMM4McpPlugin
                 (ch >= 'a' && ch <= 'f') ||
                 (ch >= 'A' && ch <= 'F'));
 
-        // A full restore opens a saved checkpoint backup as a separate project.
-        // Never open an arbitrary path supplied by a persisted checkpoint index,
-        // a backup for a different project, an empty file, or a reparse point.
-        internal static bool IsRestorableBackup(
+        // Keep the verified project path stable until YMM4 finishes opening it.
+        internal sealed class VerifiedBackup(string path) : IDisposable
+        {
+            private readonly List<SafeFileHandle> directories = new();
+            private FileStream? stream;
+
+            internal string BackupPath { get; } = path;
+
+            internal bool LockDirectories()
+            {
+                var parents = new Stack<string>();
+                for (string? directory = Path.GetDirectoryName(BackupPath);
+                     directory != null && !Path.EndsInDirectorySeparator(directory);
+                     directory = Path.GetDirectoryName(directory))
+                    parents.Push(Path.GetFileName(directory));
+
+                string root = Path.GetPathRoot(BackupPath)!;
+                var handle = CreateFileW(root, FileListDirectory | FileReadAttributes,
+                    FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, OpenExisting,
+                    OpenReparsePoint | BackupSemantics, IntPtr.Zero);
+                directories.Add(handle);
+                if (!IsPlainDirectory(handle)) return false;
+
+                // Resolve each component relative to the actual parent handle.
+                // FileShare alone does not block changes to reparse attributes.
+                foreach (string name in parents)
+                {
+                    handle = OpenChild(handle, name, FileListDirectory | FileReadAttributes,
+                        FileShare.ReadWrite);
+                    directories.Add(handle);
+                    if (!IsPlainDirectory(handle)) return false;
+                }
+                return true;
+            }
+
+            private static bool IsPlainDirectory(SafeFileHandle handle) =>
+                !handle.IsInvalid && (File.GetAttributes(handle) &
+                    (FileAttributes.Directory | FileAttributes.ReparsePoint)) == FileAttributes.Directory;
+
+            internal bool VerifyContents(string expectedSha256)
+            {
+                var handle = OpenChild(directories[^1], Path.GetFileName(BackupPath), GenericRead,
+                    FileShare.Read);
+                try
+                {
+                    if (handle.IsInvalid || (File.GetAttributes(handle) &
+                        (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                        return false;
+                    // The retained child handles keep the directories nonempty.
+                    // Recheck the same ancestors after acquiring the leaf, before
+                    // passing its pathname to the host's path-only open API.
+                    if (!directories.All(IsPlainDirectory)) return false;
+                    stream = new FileStream(handle, FileAccess.Read);
+                }
+                finally
+                {
+                    if (stream == null)
+                        handle.Dispose();
+                }
+                return stream.Length != 0 && string.Equals(
+                    Convert.ToHexString(SHA256.HashData(stream)), expectedSha256,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            public void Dispose()
+            {
+                stream?.Dispose();
+                for (int i = directories.Count - 1; i >= 0; --i)
+                    directories[i].Dispose();
+            }
+        }
+
+        private const uint FileListDirectory = 0x00000001;
+        private const uint FileReadAttributes = 0x00000080;
+        private const uint GenericRead = 0x80000000;
+        private const uint Synchronize = 0x00100000;
+        private const uint OpenExisting = 3;
+        private const uint OpenReparsePoint = 0x00200000;
+        private const uint BackupSemantics = 0x02000000;
+        private const uint CaseInsensitive = 0x00000040;
+        private const uint FileSynchronousIoNonAlert = 0x00000020;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct UnicodeString
+        {
+            internal ushort Length;
+            internal ushort MaximumLength;
+            internal IntPtr Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ObjectAttributes
+        {
+            internal int Length;
+            internal IntPtr RootDirectory;
+            internal IntPtr ObjectName;
+            internal uint Attributes;
+            internal IntPtr SecurityDescriptor;
+            internal IntPtr SecurityQualityOfService;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoStatusBlock
+        {
+            internal IntPtr Status;
+            internal UIntPtr Information;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern SafeFileHandle CreateFileW(string path, uint access, FileShare share,
+            IntPtr security, uint creation, uint flags, IntPtr template);
+
+        [DllImport("ntdll.dll", ExactSpelling = true)]
+        private static extern int NtOpenFile(out SafeFileHandle handle, uint access,
+            ref ObjectAttributes attributes, out IoStatusBlock ioStatus, FileShare share, uint options);
+
+        private static SafeFileHandle OpenChild(SafeFileHandle parent, string name,
+            uint access, FileShare share)
+        {
+            if (name.Length == 0 || name.Length > (ushort.MaxValue - 2) / 2)
+                return new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            IntPtr buffer = Marshal.StringToHGlobalUni(name);
+            IntPtr namePointer = IntPtr.Zero;
+            try
+            {
+                var unicode = new UnicodeString
+                {
+                    Length = (ushort)(name.Length * 2),
+                    MaximumLength = (ushort)((name.Length + 1) * 2),
+                    Buffer = buffer
+                };
+                namePointer = Marshal.AllocHGlobal(Marshal.SizeOf<UnicodeString>());
+                Marshal.StructureToPtr(unicode, namePointer, fDeleteOld: false);
+                var attributes = new ObjectAttributes
+                {
+                    Length = Marshal.SizeOf<ObjectAttributes>(),
+                    RootDirectory = parent.DangerousGetHandle(),
+                    ObjectName = namePointer,
+                    Attributes = CaseInsensitive
+                };
+                int status = NtOpenFile(out var handle, access | Synchronize, ref attributes, out _,
+                    share, FileSynchronousIoNonAlert | OpenReparsePoint);
+                GC.KeepAlive(parent);
+                if (status >= 0) return handle;
+                handle.Dispose();
+                return new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(namePointer);
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        // Only restore the checkpoint's own file for the currently open project.
+        internal static VerifiedBackup? OpenVerifiedBackup(
             string? path, string backupDirectory, string? checkpointId,
             string? checkpointProject, string? currentProject, string? expectedSha256)
         {
-            if (string.IsNullOrWhiteSpace(checkpointId) ||
+            if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(checkpointId) ||
                 !IsValidBackupSha256(expectedSha256) ||
                 !IsOwnedBackupPath(path, backupDirectory) ||
                 !SameProject(checkpointProject, currentProject))
-                return false;
+                return null;
+            VerifiedBackup? backup = null;
+            bool verified = false;
             try
             {
-                if (!string.Equals(Path.GetFileName(path),
+                string fullPath = Path.GetFullPath(path!);
+                if (!string.Equals(Path.GetFileName(fullPath),
                         checkpointId + ".ymmp", StringComparison.OrdinalIgnoreCase))
-                    return false;
-                var attributes = File.GetAttributes(path!);
-                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-                    return false;
-                return new FileInfo(path!).Length > 0 &&
-                    string.Equals(ComputeBackupSha256(path!), expectedSha256,
-                        StringComparison.OrdinalIgnoreCase);
+                    return null;
+                backup = new VerifiedBackup(fullPath);
+                verified = backup.LockDirectories() && backup.VerifyContents(expectedSha256!);
+                return verified ? backup : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                        ArgumentException or NotSupportedException)
             {
-                return false;
+                return null;
+            }
+            finally
+            {
+                if (!verified)
+                    backup?.Dispose();
             }
         }
 

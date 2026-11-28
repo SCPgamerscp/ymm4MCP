@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/EditCheckpointSafety.cs" Link="EditCheckpointSafety.cs" />
+    <Compile Include="../../YMM4McpPlugin/ExportInvocationPolicy.cs" Link="ExportInvocationPolicy.cs" />
   </ItemGroup>
 </Project>

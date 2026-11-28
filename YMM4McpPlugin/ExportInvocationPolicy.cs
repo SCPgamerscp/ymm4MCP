@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
+using System.Windows.Input;
 
 namespace YMM4McpPlugin
 {
@@ -46,6 +48,10 @@ namespace YMM4McpPlugin
             return true;
         }
 
+        internal static bool AcceptsObservableProjectOpen(MethodInfo method) =>
+            ReturnsCompletionTask(method) &&
+            method.GetParameters() is [{ ParameterType: var parameter }] && parameter == typeof(string);
+
         internal static bool AcceptsPath(MethodInfo method, string requestedFormat)
         {
             if (!MatchesFormat(method.Name, requestedFormat)) return false;
@@ -58,6 +64,56 @@ namespace YMM4McpPlugin
                     (parameters[1].ParameterType == typeof(string)
                      && new[] { "format", "fileFormat", "outputFormat", "containerFormat", "extension" }
                          .Contains(parameters[1].Name, StringComparer.OrdinalIgnoreCase)));
+        }
+
+        internal static bool ReturnsCompletionTask(MethodInfo method)
+        {
+            Type type = method.ReturnType;
+            return !method.ContainsGenericParameters &&
+                (typeof(Task).IsAssignableFrom(type) || type == typeof(ValueTask) || IsGenericValueTask(type));
+        }
+
+        private static bool IsGenericValueTask(Type type) =>
+            type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>);
+
+        internal static Task? GetCompletionTask(object? result)
+        {
+            if (result is Task task) return task;
+            // Convert a ValueTask exactly once. Some awaitable sources are single-use.
+            try
+            {
+                if (result is ValueTask valueTask) return valueTask.AsTask();
+                if (result != null && IsGenericValueTask(result.GetType()))
+                    return (Task?)result.GetType().GetMethod(nameof(ValueTask.AsTask), Type.EmptyTypes)
+                        ?.Invoke(result, null);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or TargetInvocationException)
+            {
+                // The call may have started the encoder even though its completion cannot be observed.
+            }
+            return null;
+        }
+
+        internal static MethodInfo? FindAwaitableCommand(ICommand command)
+        {
+            // The standard ICommand.Execute returns void. An explicit toolkit
+            // interface or public ExecuteAsync can supply the actual Task.
+            var type = command.GetType();
+            var contract = type.GetInterface("CommunityToolkit.Mvvm.Input.IAsyncRelayCommand");
+            var method = contract?.GetMethod("ExecuteAsync", new[] { typeof(object) });
+            if (method != null && ReturnsCompletionTask(method)) return method;
+            return type.GetMethods(BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(candidate =>
+                candidate.Name == "ExecuteAsync" && ReturnsCompletionTask(candidate) &&
+                candidate.GetParameters() is [{ ParameterType: var parameter }] &&
+                (parameter == typeof(string) || parameter == typeof(object)));
+        }
+
+        internal static Task? InvokeProjectPathMethod(MethodInfo method, object host, string path)
+        {
+            var task = GetCompletionTask(method.Invoke(host, new object[] { path }));
+            if (task == null && ReturnsCompletionTask(method))
+                throw new InvalidOperationException("YMM4 project operation did not return an observable completion task.");
+            return task;
         }
 
         // Match the MCP server's idempotency-key contract.  Internal whitespace is
