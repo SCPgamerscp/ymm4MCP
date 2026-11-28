@@ -37,7 +37,7 @@ def _conflict(code, message, **details):
 
 
 def plan_ripple_delete(snapshot, *, start_frame, end_frame,
-                       layers=None, expected_revisions=None):
+                       layers=None, expected_revisions=None, require_count=False):
     """Preflight [start_frame, end_frame) without mutating the host.
 
     Fully enclosed items are deleted; later items are shifted left. Items
@@ -67,8 +67,8 @@ def plan_ripple_delete(snapshot, *, start_frame, end_frame,
             or "error" in snapshot or "error_code" in snapshot
             or not isinstance(snapshot.get("items"), list)
             or len(snapshot["items"]) > MAX_ITEMS
-            or ("count" in snapshot and
-                (type(snapshot["count"]) is not int
+            or ((require_count or "count" in snapshot) and
+                (type(snapshot.get("count")) is not int
                  or snapshot["count"] != len(snapshot["items"])))):
         return _conflict("RIPPLE_SNAPSHOT_UNAVAILABLE", "Complete timeline inventory is required")
 

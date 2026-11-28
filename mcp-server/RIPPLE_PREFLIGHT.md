@@ -12,7 +12,9 @@ range, and `move` operations for items starting at or after the end.
 An item crossing a cut boundary returns `RIPPLE_SPLIT_REQUIRED` rather than
 silently shortening the source. Missing, stale or ambiguous item IDs/revisions
 return `RIPPLE_CONFLICT` or `RIPPLE_ID_AMBIGUOUS`. Malformed snapshots are
-rejected. Plans are sorted by layer/frame/ID to make review reproducible.
+rejected. A live preflight requires `/api/items` to report an integer `count`
+matching `items`, including `count: 0` for an empty timeline. Plans are sorted
+by layer/frame/ID to make review reproducible.
 Every explicitly supplied `expected_revisions` entry is checked, even if
 the current cut would leave the item untouched. An ID absent from the
 inventory is reported as `expected_item_missing`. A matching revision for

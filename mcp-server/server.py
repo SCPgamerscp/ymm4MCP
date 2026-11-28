@@ -1046,8 +1046,10 @@ async def dispatch(args: dict) -> Any:
                     return {"success": False, "dry_run": True, "executable": False,
                             "error_code": "RIPPLE_PROJECT_UNAVAILABLE"}
             snapshot = await ymm4_get("/items")
+            # Capturing evidence already requires an explicit count in the store.
             plan = plan_ripple_delete(snapshot, start_frame=start, end_frame=end,
-                                      layers=layers, expected_revisions=revisions)
+                                      layers=layers, expected_revisions=revisions,
+                                      require_count=not capture)
             if not capture or not plan["success"]:
                 return plan
             project_after = await ymm4_get("/project")
