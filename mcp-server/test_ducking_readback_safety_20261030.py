@@ -112,9 +112,9 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unchanged_revision_after_set_is_unknown_outcome(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-                 {"success": True, "backup_path": "C:/backup/cp.ymmp"},
+                 {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"},
                  {"success": True, "revision": "r1"}])) as post:
             result = await server.dispatch({
                 "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
@@ -127,7 +127,7 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_checkpoint_timeout_is_reported_without_writing_keyframes(self):
         with (
             patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}])),
             patch.object(server, "ymm4_post", AsyncMock(
                 side_effect=TimeoutError("checkpoint timeout"))) as post,
         ):
@@ -140,9 +140,9 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_timeout_keeps_backup_path_and_prevents_edits(self):
         with (
             patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}])),
             patch.object(server, "ymm4_post", AsyncMock(return_value={
-                "success": True, "backup_path": "C:/backup/cp.ymmp"})) as post,
+                "success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"})) as post,
             patch.object(server.quality_guard, "verify_snapshot",
                          AsyncMock(side_effect=TimeoutError("snapshot timeout"))),
         ):
@@ -158,9 +158,9 @@ class HostStateSafetyTests(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(backup=backup),
                 patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                    ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                    ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}])),
                 patch.object(server, "ymm4_post", AsyncMock(return_value={
-                    "success": True, "backup_path": backup})) as post,
+                    "success": True, "backup_path": backup, "project_path": "C:/Projects/episode.ymmp"})) as post,
             ):
                 result = await server.dispatch({
                     "action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})

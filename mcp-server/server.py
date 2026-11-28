@@ -180,12 +180,13 @@ TOOLS = [
                 "shake_distance": {"type": "number", "exclusiveMinimum": 0, "maximum": 500, "description": "shake_tachie: X座標の左右移動量"},
                 "voice_item_id": {"type": "string", "description": "jump_tachie/shake_tachie: 発話アイテムの開始を at=0 とする安定ID"},
                 "duck_ratio": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "description": "duck_bgm: 元のVolumeに対する発話中の倍率。既定0.3"},
+                "expected_base_volume": {"type": "number", "exclusiveMinimum": 0, "description": "duck_bgm: プレビューのbase_volume。適用時に異なれば編集前に停止"},
                 "attack_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話前の音量変化フレーム。既定5"},
                 "release_frames": {"type": "integer", "minimum": 1, "maximum": 300, "description": "duck_bgm: 発話後の復帰フレーム。既定10"},
                 "template_path": {"type": "string", "description": "create_from_template: YMM4側で開ける既存の .ymmp 絶対パス"},
                 "plan": {"type": "object", "description": "plan_edit/apply_edit/reconcile_edit: 完成状態のEditPlan（scenesとitems）"},
                 "expected_plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit: 確認済みplan_editのplan_hash。異なる場合は編集前に停止"},
-                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit/add_script: 確認済みタイムラインハッシュ。不一致なら編集前に停止"},
+                "expected_snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "apply_edit/reconcile_edit/add_script/duck_bgm: 確認済みタイムラインハッシュ。不一致なら編集前に停止"},
                 "atomic_scenes": {"type": "boolean", "description": "apply_edit: シーン途中の失敗でそのシーンの追加分を削除する。既定true"},
                 "check_project_settings": {"type": "boolean", "description": "plan_edit/apply_edit: 計画のFPS・解像度が現在のYMM4プロジェクトと一致することを確認する"},
                 "checkpoint_id": {"type": "string", "description": "get_info/checkpoints と control/rollback の対象"},
@@ -621,6 +622,41 @@ async def create_from_template(args: dict) -> dict:
             "destination_path": destination, "verified": True}
 
 
+def _bgm_volume_baseline(state: dict, bgm: dict) -> tuple[float | None, dict | None]:
+    if (not isinstance(state, dict) or state.get("success") is not True or
+            "error" in state or "error_code" in state or
+            state.get("revision") != bgm["revision"]):
+        return None, {"error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
+    if ("item_id" in state and state["item_id"] != bgm["item_id"]) or any(
+            field in state and field in bgm and state[field] != bgm[field]
+            for field in ("frame", "layer")):
+        return None, {"error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
+    if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    animations = [a for a in state["animations"]
+                  if isinstance(a, dict) and a.get("prop") == "Volume"]
+    if len(animations) != 1 or not isinstance(animations[0].get("keyframes"), list):
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    keys = animations[0]["keyframes"]
+    if (len(keys) != 1 or not isinstance(keys[0], dict) or
+            type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
+        return None, {"error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
+    if ("absolute_frame" in keys[0] and
+            (type(keys[0]["absolute_frame"]) is not int or
+             keys[0]["absolute_frame"] != bgm.get("frame"))):
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    baseline = keys[0].get("value")
+    if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    try:
+        baseline = finite_number(baseline, "base_volume")
+    except ValueError:
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    if baseline <= 0:
+        return None, {"error_code": "BGM_VOLUME_UNSUPPORTED"}
+    return baseline, None
+
+
 async def run_bgm_ducking(args: dict) -> dict:
     item_id = args.get("bgm_item_id")
     if not ducking.valid_identifier(item_id):
@@ -628,6 +664,17 @@ async def run_bgm_ducking(args: dict) -> dict:
     dry_run = args.get("dry_run", True)
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be boolean")
+    expected_snapshot = args.get("expected_snapshot_hash")
+    if expected_snapshot is not None and (not isinstance(expected_snapshot, str) or
+            re.fullmatch(r"[0-9a-f]{64}", expected_snapshot) is None):
+        raise ValueError("expected_snapshot_hash must be a lowercase SHA-256 hex digest")
+    expected_baseline = args.get("expected_base_volume")
+    if expected_baseline is not None:
+        if isinstance(expected_baseline, bool) or not isinstance(expected_baseline, (int, float)):
+            raise ValueError("expected_base_volume must be a positive finite number")
+        expected_baseline = finite_number(expected_baseline, "expected_base_volume")
+        if expected_baseline <= 0:
+            raise ValueError("expected_base_volume must be positive")
     snapshot = await ymm4_get("/items")
     if (not isinstance(snapshot, dict) or
             ("success" in snapshot and snapshot["success"] is not True) or
@@ -635,10 +682,14 @@ async def run_bgm_ducking(args: dict) -> dict:
             not isinstance(snapshot.get("items"), list) or
             len(snapshot["items"]) > 10000):
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
+    if "count" in snapshot and (type(snapshot["count"]) is not int or
+                                snapshot["count"] != len(snapshot["items"])):
+        return {"success": False, "error_code": "ITEMS_INVENTORY_INCOMPLETE",
+                "reported_count": snapshot["count"], "observed_count": len(snapshot["items"])}
     matches = [i for i in snapshot["items"] if isinstance(i, dict) and i.get("item_id") == item_id]
     if len(matches) > 1:
         return {"success": False, "error_code": "ITEM_ID_AMBIGUOUS", "item_id": item_id}
-    if len(matches) != 1 or not str(matches[0].get("type", "")).lower().endswith("audioitem"):
+    if len(matches) != 1 or not scene_media.is_known_item_type(matches[0].get("type"), ("audioitem",)):
         return {"success": False, "error_code": "BGM_ITEM_NOT_FOUND"}
     bgm = matches[0]
     revision = bgm.get("revision")
@@ -652,7 +703,7 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "REVISION_CONFLICT",
                     "bgm_item_id": item_id}
     voices = [i for i in snapshot["items"] if isinstance(i, dict) and
-              str(i.get("type", "")).lower().endswith("voiceitem")]
+              scene_media.is_known_item_type(i.get("type"), ("voiceitem",))]
     if any(not ducking.valid_identifier(voice.get("item_id")) for voice in voices):
         return {"success": False, "error_code": "VOICE_ITEM_ID_INVALID"}
     # Duplicate host IDs make an explicit selection ambiguous and can also
@@ -697,48 +748,29 @@ async def run_bgm_ducking(args: dict) -> dict:
             if key in seen_ids:
                 return {"success": False, "error_code": "ITEM_ID_AMBIGUOUS", "item_id": key}
             seen_ids.add(key)
-    key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
-    state = await ymm4_get(key_path)
-    if (not isinstance(state, dict) or state.get("success") is not True or
-            "error" in state or "error_code" in state or
-            state.get("revision") != revision):
-        return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
-    # A keyframe response for another item must never authorize a mutation.
-    if ("item_id" in state and state["item_id"] != item_id) or any(
-            field in state and field in bgm and state[field] != bgm[field]
-            for field in ("frame", "layer")):
-        return {"success": False, "error_code": "BGM_KEYFRAMES_UNAVAILABLE", "details": state}
-    if not isinstance(state.get("animations"), list) or len(state["animations"]) > 256:
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    animations = [a for a in state["animations"]
-                  if isinstance(a, dict) and a.get("prop") == "Volume"]
-    if len(animations) != 1 or not isinstance(animations[0].get("keyframes"), list):
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    keys = animations[0]["keyframes"]
-    if (len(keys) != 1 or not isinstance(keys[0], dict) or
-            type(keys[0].get("at")) is not int or keys[0]["at"] != 0):
-        return {"success": False, "error_code": "BGM_HAS_EXISTING_KEYFRAMES"}
-    # The host also reports the absolute position of the initial keyframe.
-    # A mismatch means the curve may belong to a different timeline location.
-    if ("absolute_frame" in keys[0] and
-            (type(keys[0]["absolute_frame"]) is not int or
-             keys[0]["absolute_frame"] != bgm.get("frame"))):
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    baseline = keys[0].get("value")
-    if isinstance(baseline, bool) or not isinstance(baseline, (int, float)):
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
     try:
-        baseline = ducking._finite_input(baseline, "base_volume")
-    except ValueError:
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
-    if baseline <= 0:
-        return {"success": False, "error_code": "BGM_VOLUME_UNSUPPORTED"}
+        snapshot_hash = editplan.snapshot_hash(snapshot["items"])
+    except (ValueError, RecursionError) as exc:
+        return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN", "error": str(exc)}
+    if expected_snapshot is not None and snapshot_hash != expected_snapshot:
+        return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_CONFLICT",
+                "expected_snapshot_hash": expected_snapshot, "actual_snapshot_hash": snapshot_hash,
+                "applied": []}
+    key_path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop=Volume"
+    baseline, error = _bgm_volume_baseline(await ymm4_get(key_path), bgm)
+    if error is not None:
+        return {"success": False, **error}
+    if expected_baseline is not None and baseline != expected_baseline:
+        return {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
+                "expected_base_volume": expected_baseline, "actual_base_volume": baseline,
+                "applied": []}
     points = ducking.plan(bgm, voices, baseline,
                           ratio=args.get("duck_ratio", .3),
                           attack_frames=args.get("attack_frames", 5),
                           release_frames=args.get("release_frames", 10))
     result = {"success": True, "dry_run": dry_run, "bgm_item_id": item_id,
-              "voice_count": len(voices), "keyframes": points, "base_volume": baseline}
+              "voice_count": len(voices), "keyframes": points, "base_volume": baseline,
+              "snapshot_hash": snapshot_hash}
     if dry_run or not points:
         return result
     project = await ymm4_get("/project")
@@ -746,6 +778,11 @@ async def run_bgm_ducking(args: dict) -> dict:
             "error" in project or "error_code" in project or
             project.get("isSaved") is not True):
         return {"success": False, "error_code": "PROJECT_SAVE_REQUIRED", "details": project}
+    try:
+        expected_project = project_identity(project)
+    except ValueError:
+        return {"success": False, "error_code": "BGM_DUCKING_PROJECT_UNAVAILABLE", "applied": []}
+    active_path = project["projectPath"]
     try:
         checkpoint = await ymm4_post("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
     except Exception as exc:
@@ -760,13 +797,21 @@ async def run_bgm_ducking(args: dict) -> dict:
             not backup.lower().endswith(".ymmp")):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED", "details": checkpoint}
     # A backup that aliases the active project is not a recoverable copy.
-    active_path = project.get("projectPath")
-    if (isinstance(active_path, str) and active_path and
-            _same_project_path(backup, active_path)):
+    if _same_project_path(backup, active_path):
         return {"success": False, "error_code": "BGM_BACKUP_REQUIRED",
                 "details": checkpoint}
     try:
-        conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+        backed_up_project = project_identity(
+            {"success": True, "projectPath": checkpoint.get("project_path")})
+    except ValueError:
+        return {"success": False, "error_code": "BGM_DUCKING_PROJECT_UNAVAILABLE",
+                "backup_path": backup, "applied": []}
+    if expected_project != backed_up_project:
+        return {"success": False, "error_code": "BGM_DUCKING_PROJECT_CONFLICT",
+                "backup_path": backup, "applied": []}
+    try:
+        conflict = await quality_guard.verify_snapshot(
+            ymm4_get, snapshot["items"], initial_inventory=snapshot)
     except Exception as exc:
         return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN",
                 "error": str(exc), "backup_path": backup, "applied": []}
@@ -778,11 +823,34 @@ async def run_bgm_ducking(args: dict) -> dict:
                     "backup_path": backup, "applied": [], "outcome_unknown": True}
         return {**conflict, "error_code": "BGM_DUCKING_" + conflict["error_code"],
                 "applied": [], "backup_path": backup}
+    # Manual changes to Volume may leave the timeline item revision unchanged.
+    try:
+        current_state = await ymm4_get(key_path)
+    except Exception as exc:
+        return {"success": False, "error_code": "BGM_DUCKING_VOLUME_UNAVAILABLE",
+                "error": str(exc), "backup_path": backup, "applied": []}
+    current_baseline, error = _bgm_volume_baseline(current_state, bgm)
+    if error is not None:
+        code = ("BGM_DUCKING_VOLUME_CONFLICT" if error["error_code"] == "BGM_HAS_EXISTING_KEYFRAMES"
+                else "BGM_DUCKING_VOLUME_UNAVAILABLE")
+        return {"success": False, "error_code": code, "details": error,
+                "backup_path": backup, "applied": []}
+    if current_baseline != baseline:
+        return {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
+                "expected_base_volume": baseline, "actual_base_volume": current_baseline,
+                "backup_path": backup, "applied": []}
+    voice_timing = {"all_voices": selected is None, "items": [
+        {field: voice[field] for field in ("item_id", "frame", "length")} for voice in voices]}
     applied = []
     seen_revisions = {revision}
     for point in points:
+        # Old hosts reject this action instead of silently ignoring the guard.
         payload = {"item_id": item_id, "expected_revision": revision,
-                   "prop": "Volume", "action": "set", **point}
+                   "prop": "Volume", "action": "set_ducking",
+                   "expected_project_path": active_path,
+                   "expected_ducking_voices": voice_timing, **point}
+        if not applied:
+            payload["expected_base_volume"] = baseline
         try:
             changed = await ymm4_post("/items/keyframe", payload)
         except Exception as exc:
@@ -793,6 +861,12 @@ async def run_bgm_ducking(args: dict) -> dict:
             return {"success": False, "error_code": "BGM_DUCKING_OUTCOME_UNKNOWN",
                     "applied": applied, "details": changed, "backup_path": backup,
                     "outcome_unknown": True}
+        if (isinstance(changed, dict) and changed.get("success") is False and
+                changed.get("outcome_unknown") is False and
+                changed.get("error_code") in ("BGM_DUCKING_VOICE_CONFLICT",
+                    "BGM_DUCKING_PROJECT_CONFLICT", "BGM_DUCKING_VOLUME_CONFLICT",
+                    "BGM_DUCKING_GUARD_UNAVAILABLE")):
+            return {**changed, "applied": applied, "backup_path": backup}
         # A rejected/ill-formed response does not prove that the host made no
         # change. Never retry or apply another point without a fresh snapshot.
         if (not isinstance(changed, dict) or changed.get("success") is not True or

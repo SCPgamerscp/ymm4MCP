@@ -42,6 +42,124 @@ class DuckingPlanTests(unittest.TestCase):
 
 
 class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_apply_rejects_voice_changes_since_the_reviewed_preview(self):
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            preview = await server.dispatch(args)
+        changed = {"items": [ITEMS["items"][0], {**ITEMS["items"][1], "frame": 22}]}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=changed)) as get, \
+                patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({**args, "dry_run": False,
+                                            "expected_snapshot_hash": preview["snapshot_hash"]})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_SNAPSHOT_CONFLICT")
+        self.assertEqual(result["applied"], [])
+        get.assert_awaited_once_with("/items")
+        post.assert_not_awaited()
+
+    async def test_apply_rejects_volume_changes_since_the_reviewed_preview(self):
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            preview = await server.dispatch(args)
+        changed = {**KEYS, "animations": [{"prop": "Volume", "keyframes": [
+            {"at": 0, "value": 60.0}]}]}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, changed])) as get, \
+                patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({
+                **args, "dry_run": False, "expected_snapshot_hash": preview["snapshot_hash"],
+                "expected_base_volume": preview["base_volume"]})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_CONFLICT")
+        self.assertEqual(result["expected_base_volume"], 100.0)
+        self.assertEqual(result["actual_base_volume"], 60.0)
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(get.await_count, 2)
+        post.assert_not_awaited()
+
+    async def test_invalid_expected_volume_is_rejected_before_host_access(self):
+        for value in (True, "100", 0, -1, float("inf"), float("nan"), 10**400):
+            with self.subTest(value=value), \
+                 patch.object(server, "ymm4_get", new_callable=AsyncMock) as get, \
+                 self.assertRaisesRegex(ValueError, "expected_base_volume"):
+                await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                       "expected_base_volume": value})
+            get.assert_not_awaited()
+
+    async def test_volume_changes_during_checkpoint_stop_all_keyframe_writes(self):
+        for keys in ([{"at": 0, "value": 60.0}],
+                     [{"at": 0, "value": 100.0}, {"at": 15, "value": 62.0}]):
+            changed = {**KEYS, "animations": [{"prop": "Volume", "keyframes": keys}]}
+            with self.subTest(keys=keys):
+                result = await self._apply_with_checkpoint_readback(changed)
+                self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_CONFLICT")
+
+    async def test_untrustworthy_checkpoint_readback_stops_all_keyframe_writes(self):
+        for readback in (TimeoutError("Volume read timed out"),
+                         {**KEYS, "item_id": "bgm:other"}, {**KEYS, "revision": "r2"}):
+            with self.subTest(readback=readback):
+                result = await self._apply_with_checkpoint_readback(readback)
+                self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_UNAVAILABLE")
+
+    async def test_active_timeline_is_rechecked_after_checkpoint(self):
+        initial = {**ITEMS, "count": 2, "timeline_id": "timeline:" + "a" * 32}
+        project = {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp",
+                  "project_path": project["projectPath"]}
+        for current, code in (
+            ({**initial, "timeline_id": "timeline:" + "b" * 32}, "BGM_DUCKING_TIMELINE_CHANGED"),
+            ({**ITEMS, "count": 2}, "BGM_DUCKING_TIMELINE_ID_UNAVAILABLE"),
+            ({**initial, "count": 3}, "BGM_DUCKING_ITEMS_INVENTORY_INCOMPLETE"),
+        ):
+            with self.subTest(code=code):
+                gets = [initial, KEYS, project, current, KEYS]
+                with (
+                    patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),
+                    patch.object(server, "ymm4_post", AsyncMock(return_value=backup)) as post,
+                ):
+                    result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                                    "dry_run": False})
+                post.assert_awaited_once_with("/edits/checkpoint", {
+                    "backup": True, "reason": "Before BGM ducking"})
+                self.assertEqual(result["error_code"], code)
+                self.assertEqual(result["applied"], [])
+                self.assertEqual(result["backup_path"], backup["backup_path"])
+
+    async def _apply_with_checkpoint_readback(self, readback):
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, readback]
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+             patch.object(server, "ymm4_post", AsyncMock(return_value=backup)) as post:
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "dry_run": False})
+        post.assert_awaited_once_with("/edits/checkpoint", {"backup": True, "reason": "Before BGM ducking"})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(result["backup_path"], backup["backup_path"])
+        return result
+
+    async def test_incomplete_inventory_cannot_produce_a_ducking_preview(self):
+        for count in (0, 3, True, "2"):
+            with self.subTest(count=count), patch.object(
+                    server, "ymm4_get", AsyncMock(return_value={**ITEMS, "count": count})) as get:
+                result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1"})
+            self.assertEqual(result["error_code"], "ITEMS_INVENTORY_INCOMPLETE")
+            get.assert_awaited_once_with("/items")
+
+    async def test_only_recognized_audio_and_voice_item_types_authorize_ducking(self):
+        bgm, voice = ITEMS["items"]
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value={
+                "items": [{**bgm, "type": "Other.NotAudioItem"}, voice]})) as get:
+            result = await server.dispatch(args)
+        self.assertEqual(result["error_code"], "BGM_ITEM_NOT_FOUND")
+        get.assert_awaited_once_with("/items")
+
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"items": [{**bgm, "type": "YukkuriMovieMaker.Items.AudioItem"},
+                           {**voice, "type": "Other.NotVoiceItem"}]}, KEYS])):
+            result = await server.dispatch(args)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["voice_count"], 0)
+        self.assertEqual(result["keyframes"], [])
+
     async def test_selected_voice_outside_bgm_rejects_before_keyframe_access(self):
         distant = {"items": [ITEMS["items"][0],
                              {**ITEMS["items"][1], "frame": 100}]}
@@ -83,24 +201,29 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_apply_uses_revision_chain_and_verifies(self):
         planned = ducking.plan(ITEMS["items"][0], ITEMS["items"][1:], 100)
+        args = {"action": "duck_bgm", "bgm_item_id": "bgm:1"}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS])):
+            preview = await server.dispatch(args)
         verified = {"success": True, "item_id": "bgm:1", "revision": "r5", "animations": [{"prop": "Volume", "keyframes": [
             {"at": 0, "value": 100, "absolute_frame": 0},
             *[{**point, "absolute_frame": point["at"]} for point in planned]]}]}
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, verified]
-        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS, verified]
+        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post:
-            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+            result = await server.dispatch({**args, "dry_run": False,
+                                            "expected_snapshot_hash": preview["snapshot_hash"],
+                                            "expected_base_volume": preview["base_volume"]})
         self.assertTrue(result["verified"])
         self.assertEqual([call.args[1]["expected_revision"] for call in post.await_args_list[1:]],
                          ["r1", "r2", "r3", "r4"])
 
     async def test_partial_failure_exposes_backup_and_applied_points(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-                 {"success": True, "backup_path": "C:/backup/cp.ymmp"},
+                 {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"},
                  {"success": True, "revision": "r2"},
                  {"success": False, "error_code": "KEYFRAME_METHOD_UNAVAILABLE"}])):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
@@ -109,11 +232,54 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["applied"]), 1)
         self.assertEqual(result["backup_path"], "C:/backup/cp.ymmp")
 
+    async def test_voice_conflict_at_host_stops_writes_and_preserves_backup(self):
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS]
+        expected = {"all_voices": True, "items": [{"item_id": "voice:1", "frame": 20, "length": 10}]}
+        for completed in (0, 1):
+            for code in ("BGM_DUCKING_VOICE_CONFLICT", "BGM_DUCKING_PROJECT_CONFLICT",
+                         "BGM_DUCKING_GUARD_UNAVAILABLE"):
+                conflict = {"success": False, "error_code": code, "outcome_unknown": False}
+                posts = [backup, *([{"success": True, "revision": "r2"}] * completed), conflict]
+                with self.subTest(completed=completed, code=code), \
+                     patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+                     patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post:
+                    result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                                    "dry_run": False})
+                self.assertEqual(result["error_code"], code)
+                self.assertFalse(result["outcome_unknown"])
+                self.assertEqual(result["backup_path"], backup["backup_path"])
+                self.assertEqual(len(result["applied"]), completed)
+                mutations = [c.args[1] for c in post.await_args_list[1:]]
+                self.assertEqual(len(mutations), completed + 1)
+                for i, payload in enumerate(mutations):
+                    self.assertEqual(payload["action"], "set_ducking")
+                    self.assertEqual(payload["expected_ducking_voices"], expected)
+                    self.assertEqual(payload["expected_project_path"], "C:/Projects/episode.ymmp")
+                    self.assertEqual(payload.get("expected_base_volume"), 100.0 if i == 0 else None)
+
+    async def test_native_guard_sends_only_explicit_voice_selection(self):
+        items = {"items": [*ITEMS["items"],
+                           {"item_id": "voice:2", "type": "VoiceItem", "frame": 40, "length": 10}]}
+        gets = [items, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, items, KEYS]
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
+        conflict = {"success": False, "error_code": "BGM_DUCKING_VOLUME_CONFLICT",
+                    "outcome_unknown": False}
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)), \
+             patch.object(server, "ymm4_post", AsyncMock(side_effect=[backup, conflict])) as post:
+            result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                            "voice_item_ids": ["voice:2"], "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_CONFLICT")
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(post.await_args.args[1]["expected_ducking_voices"], {
+            "all_voices": False, "items": [{"item_id": "voice:2", "frame": 40, "length": 10}]})
+
     async def test_verification_failure_preserves_backup_path(self):
-        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp"}] + [
+        posts = [{"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}] + [
             {"success": True, "revision": f"r{i}"} for i in range(2, 6)]
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                 ITEMS, KEYS, {"success": True, "isSaved": True}, ITEMS, TimeoutError("read timed out")])), \
+                 ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, KEYS,
+                 TimeoutError("read timed out")])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
         self.assertEqual(result["error_code"], "BGM_DUCKING_VERIFY_UNKNOWN")

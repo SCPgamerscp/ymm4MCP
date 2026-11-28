@@ -13,7 +13,7 @@ VOICE = {"item_id": "voice:1", "revision": "v1", "type": "VoiceItem",
 ITEMS = {"items": [BGM, VOICE]}
 KEYS = {"success": True, "revision": "r1", "item_id": "bgm:1",
         "animations": [{"prop": "Volume", "keyframes": [{"at": 0, "value": 100.0}]}]}
-BACKUP = {"success": True, "backup_path": "C:/backup/cp.ymmp"}
+BACKUP = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
 
 
 def readback(item_id="bgm:1"):
@@ -153,11 +153,38 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(post.await_count, 1)
         guard.assert_not_awaited()
 
+    async def test_a_backup_from_another_project_cannot_authorize_ducking(self):
+        project = {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}
+        for path, code in (("C:/Projects/other.ymmp", "BGM_DUCKING_PROJECT_CONFLICT"),
+                           (None, "BGM_DUCKING_PROJECT_UNAVAILABLE")):
+            with (self.subTest(path=path),
+                  patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS, project])),
+                  patch.object(server, "ymm4_post", AsyncMock(
+                      return_value={**BACKUP, "project_path": path})) as post,
+                  patch.object(server.quality_guard, "verify_snapshot",
+                               new_callable=AsyncMock) as guard):
+                result = await server.dispatch(
+                    {"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+            self.assertEqual(result["error_code"], code)
+            self.assertEqual(result["applied"], [])
+            self.assertEqual(result["backup_path"], BACKUP["backup_path"])
+            self.assertEqual(post.await_count, 1)
+            guard.assert_not_awaited()
+
+    async def test_saved_project_without_identity_does_not_request_backup(self):
+        project = {"success": True, "isSaved": True}
+        with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[ITEMS, KEYS, project])),
+              patch.object(server, "ymm4_post", new_callable=AsyncMock) as post):
+            result = await server.dispatch(
+                {"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False})
+        self.assertEqual(result["error_code"], "BGM_DUCKING_PROJECT_UNAVAILABLE")
+        post.assert_not_awaited()
+
     async def test_malformed_snapshot_guard_response_stops_mutations(self):
         for conflict in (False, [], {"error_code": None}, {"unexpected": True}):
             with (self.subTest(conflict=repr(conflict)),
                   patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                      ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                      ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}])),
                   patch.object(server, "ymm4_post", AsyncMock(return_value=BACKUP)) as post,
                   patch.object(server.quality_guard, "verify_snapshot",
                                AsyncMock(return_value=conflict))):
@@ -169,7 +196,7 @@ class DuckingHostIdentityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(post.await_count, 1)
 
     async def _apply(self, mutation_responses, *, final_readback=None):
-        gets = [ITEMS, KEYS, {"success": True, "isSaved": True}]
+        gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, KEYS]
         if final_readback is not None:
             gets.append(final_readback)
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),

@@ -11,8 +11,8 @@ ITEMS = {"items": [
 ]}
 KEYS = {"success": True, "revision": "r1", "animations": [
     {"prop": "Volume", "keyframes": [{"at": 0, "value": 100.0}]}]}
-PROJECT = {"success": True, "isSaved": True}
-CHECKPOINT = {"success": True, "backup_path": "C:/backup/bgm.ymmp"}
+PROJECT = {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}
+CHECKPOINT = {"success": True, "backup_path": "C:/backup/bgm.ymmp", "project_path": "C:/Projects/episode.ymmp"}
 ARGS = {"action": "duck_bgm", "bgm_item_id": "bgm:1", "dry_run": False}
 
 
@@ -61,7 +61,7 @@ class BgmHostResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mutation_error_marker_is_reported_as_unknown_outcome(self):
         with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                ITEMS, KEYS, PROJECT, ITEMS])), \
+                ITEMS, KEYS, PROJECT, ITEMS, KEYS])), \
              patch.object(server, "ymm4_post", AsyncMock(side_effect=[
                  CHECKPOINT, {"success": True, "revision": "r2",
                               "error_code": None}])) as post:

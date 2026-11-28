@@ -128,9 +128,9 @@ class HostBoundaryTests(unittest.IsolatedAsyncioTestCase):
                        "C:/backup/" + "x" * 4096 + ".ymmp"):
             with (self.subTest(backup=backup[:50]),
                   patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                      ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                      ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}])),
                   patch.object(server, "ymm4_post", AsyncMock(return_value={
-                      "success": True, "backup_path": backup})) as post):
+                      "success": True, "backup_path": backup, "project_path": "C:/Projects/episode.ymmp"})) as post):
                 result = await server.dispatch({"action": "duck_bgm",
                                                 "bgm_item_id": "bgm:1", "dry_run": False})
                 self.assertEqual(result["error_code"], "BGM_BACKUP_REQUIRED")
@@ -138,9 +138,9 @@ class HostBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
     async def _attempt_mutation(self, response):
         with (patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-                  ITEMS, KEYS, {"success": True, "isSaved": True}])),
+                  ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, KEYS])),
               patch.object(server, "ymm4_post", AsyncMock(side_effect=[
-                  {"success": True, "backup_path": "C:/backup/cp.ymmp"}, response])) as post,
+                  {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}, response])) as post,
               patch.object(server.quality_guard, "verify_snapshot",
                            AsyncMock(return_value=None))):
             result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",

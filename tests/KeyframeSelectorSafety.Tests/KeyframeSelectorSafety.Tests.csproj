@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../YMM4McpPlugin/KeyframeSelectorSafety.cs" Link="KeyframeSelectorSafety.cs" />
+    <Compile Include="../../YMM4McpPlugin/DuckingVoiceGuard.cs" Link="DuckingVoiceGuard.cs" />
     <Compile Include="../../YMM4McpPlugin/KeyframeMutationVerification.cs" Link="KeyframeMutationVerification.cs" />
   </ItemGroup>
 </Project>

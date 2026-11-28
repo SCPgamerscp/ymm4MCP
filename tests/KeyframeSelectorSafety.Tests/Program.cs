@@ -1,9 +1,75 @@
 using YMM4McpPlugin;
+using System.Text.Json;
 
 static void Check(bool condition, string message)
 {
     if (!condition) throw new Exception(message);
 }
+
+static DuckingVoiceGuard ReadVoiceGuard(string json)
+{
+    using var document = JsonDocument.Parse(json);
+    return DuckingVoiceGuard.Parse(document.RootElement);
+}
+
+const string voices = """
+    {"all_voices":true,"items":[{"item_id":"voice:1","frame":20,"length":10},
+                                {"item_id":"voice:2","frame":40,"length":5}]}
+    """;
+var automaticDucking = ReadVoiceGuard(voices);
+var selectedDucking = ReadVoiceGuard(voices.Replace("true", "false"));
+var firstVoice = ("voice:1", (int?)20, (int?)10);
+var secondVoice = ("voice:2", (int?)40, (int?)5);
+var newVoice = ("voice:3", (int?)50, (int?)5);
+Check(automaticDucking.Matches(new[] { secondVoice, firstVoice }),
+    "Ducking guard is independent of timeline enumeration order");
+Check(!automaticDucking.Matches(new[] { firstVoice, secondVoice, newVoice }),
+    "Automatic ducking must reject newly added voice items");
+Check(selectedDucking.Matches(new[] { firstVoice, secondVoice, newVoice }),
+    "Explicitly selected ducking must ignore newly added unselected voices");
+Check(!selectedDucking.Matches(new[] { firstVoice, newVoice }),
+    "A removed voice item must invalidate an explicit selection");
+Check(!selectedDucking.Matches(new[] { firstVoice, secondVoice, firstVoice }),
+    "A duplicate selected ID must invalidate ducking");
+Check(!automaticDucking.Matches(new[] { ("voice:1", (int?)21, (int?)10), secondVoice }),
+    "Moving a voice item must invalidate ducking");
+Check(!automaticDucking.Matches(new[] { firstVoice, ("voice:2", (int?)40, (int?)6) }),
+    "Trimming a voice item must invalidate ducking");
+Check(!automaticDucking.Matches(new[] { firstVoice, ("voice:2", (int?)null, (int?)5) }),
+    "Unreadable voice timing cannot authorize an edit");
+foreach (var invalid in new[] { voices.Replace("voice:2", "voice:1"),
+    voices.Replace("true", "0"), voices.Replace("40", "-1"), voices.Replace("40", "2147483647") })
+{
+    bool rejected = false;
+    try { ReadVoiceGuard(invalid); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "A malformed ducking guard must be rejected");
+}
+Check(DuckingVoiceGuard.MatchesBaseVolume(100, [], [100.0], null) &&
+    DuckingVoiceGuard.MatchesBaseVolume(100, [0], [100.0], null) &&
+    DuckingVoiceGuard.MatchesBaseVolume(100, [], [], 100.0),
+    "Both implicit and explicit frame-zero Volume must remain supported");
+Check(!DuckingVoiceGuard.MatchesBaseVolume(100, [15], [100.0, 60.0], null) &&
+    !DuckingVoiceGuard.MatchesBaseVolume(100, [], [60.0], null),
+    "A manually inserted key or changed baseline must stop ducking at the host");
+var implicitVolume = new { Frames = Array.Empty<int>(), DefaultValue = 100.0 };
+Check(DuckingVoiceGuard.MatchesBaseVolume(100,
+        KeyframeMutationVerification.ReadFrames(implicitVolume),
+        KeyframeMutationVerification.ReadValues(implicitVolume),
+        KeyframeMutationVerification.ReadDefaultValue(implicitVolume)),
+    "A genuinely absent Values list may use the readable default volume");
+var unreadableVolume = new UnreadableVolumeAnimation();
+Check(KeyframeMutationVerification.ReadFrames(unreadableVolume).Count == 0 &&
+      KeyframeMutationVerification.ReadDefaultValue(unreadableVolume) == 100,
+    "The failing Volume fixture must expose empty Frames and a matching default");
+bool volumeReadFailed = false;
+try { KeyframeMutationVerification.ReadValues(unreadableVolume); }
+catch (System.Reflection.TargetInvocationException ex) when
+    (ex.InnerException is InvalidOperationException)
+{
+    volumeReadFailed = true;
+}
+Check(volumeReadFailed, "A throwing Values getter must not be mistaken for an absent Values list");
 static void Reject(string? id, string? frame, string? layer)
 {
     try { KeyframeSelectorSafety.Parse(id, frame, layer); }
@@ -275,3 +341,11 @@ RejectObserved(() => KeyframeMutationVerification.ParseObservedValues(
     "unreadable wrapped value must not disappear");
 
 Console.WriteLine("Keyframe selector and mutation readback safety tests passed");
+
+
+sealed class UnreadableVolumeAnimation
+{
+    public int[] Frames => Array.Empty<int>();
+    public double DefaultValue => 100.0;
+    public double[] Values => throw new InvalidOperationException("host Volume values unavailable");
+}
