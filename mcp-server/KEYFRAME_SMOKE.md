@@ -6,18 +6,20 @@
 
 1. **必ずプロジェクトを別名でコピー・バックアップ**し、コピー側をYMM4で開いてください。保存していない作業のあるプロジェクトには使用しないでください。
 2. コピー側に画像アイテムを1つ置き、YMM4の `GET /api/items` またはMCPの `get_info/items` から `item_id` と長さを取得します。
-3. 対象画像の `Zoom` と `X` の **両方でまだ使用していない、0より大きくアイテム尺未満の相対フレーム** を選びます。
+3. 報告された不具合を再現するには `--last-frame` を使います。開始時に取得した対象画像の長さから `length - 1` を計算します。別の位置は `--at 30` のように指定できます。対象フレームは `Zoom` と `X` の両方で未使用である必要があります。
 4. YMM4 MCPプラグインを起動し、`mcp-server` の依存関係をインストールしたPythonを使用します。接続情報は `YMM4_CONNECTION_FILE` または通常の `%LOCALAPPDATA%\YMM4MCP\connection.json` から自動で読みます。トークンをログに貼らないでください。
 
 PowerShellで（値・ID・フレームはテスト用の実データに置き換えます）:
 
 ```powershell
-python mcp-server/check_keyframe_compat.py --item-id "native:YOUR-TEST-IMAGE" --at 30 --zoom 1.25 --x 80 --confirm-test-project
+python mcp-server/check_keyframe_compat.py --item-id "native:YOUR-TEST-IMAGE" --last-frame --zoom 1.25 --x 80 --confirm-test-project
 ```
 
 **スクリプトの動作:** 編集前に対象画像の**全Animationプロパティ**（Zoom/X以外も含む）のキーフレーム一覧を取得して保全し、ZoomとXが利用可能で指定フレームに既存キーがないことを確認します。その後、各プロパティで順番に**新規追加→API読戻し→同じフレームを異なる値で再編集→再読戻し→削除**し、**全プロパティのキーフレームが元どおりか**確認します。変更を伴うため、`--confirm-test-project` がないと実行できません。プロジェクトは自動保存しません。失敗時も安全と確認できる範囲で削除を試みます。ただし、書き込みが失敗した／応答が失われた場合に他の編集者による変更や共有Animationへの影響が見つかったときは、**他人のキーフレームを消さないため自動削除を拒否**します。削除APIの失敗や変更元を特定できない場合は **CLEANUP FAILED** と表示するため、バックアップから復元してください。キーフレーム追加APIが成功を返しても **mutation revision が欠落**していれば、後続の読戻しrevisionを編集の証拠として採用せず、スモークテストは失敗扱いにします。この場合も、全Animationの差分から追加したキーだけを特定できるときに限り後片付けし、並行編集の可能性があれば削除を拒否します。
 
 ## 受け入れ条件の残り（手動確認）
+
+書き込みを伴う検証には、ライブタイムラインIDを返し、キーフレーム更新で `expected_timeline_id` を照合するプラグインが必要です。追加・再編集・削除にはタイムラインIDとリビジョンを送信し、プラグインは対象を特定する処理の中で照合します。タイムラインの切り替わり、IDの取得不能、プラグインの機能不足を検出すると中断します。
 
 スモークテストはZoom/Xの新規追加・同一フレームの値の再編集・削除を実行します。再編集値は元の値の90%（絶対値1以上）または元の値+0.5（絶対値1未満）です。**途中で失敗した場合は、同じプロジェクトを使い続けずバックアップから復元してください。** PASSした後も、コピー側プロジェクトで**プレビューの移動・ズーム、Zoom/Xのキーを追加して同一フレームで値を再編集した後の保存→YMM4で再読込後の再編集値の維持、clearを含む手動確認**を行ってください。これらがすべて成功し、関連PRがmainにマージされた場合にのみ #140 を完了扱いにします。
 
@@ -28,20 +30,20 @@ python mcp-server/check_keyframe_compat.py --item-id "native:YOUR-TEST-IMAGE" --
 
 従来の `check_keyframe_compat.py` は追加→読戻し→削除までで、**保存後にキーが残るかは確認しません**。次の二段階検証は **YMM4にGETだけを送り、編集・保存・再読込は自動実行しません**。
 
-1. バックアップ済みの**使い捨て** `.ymmp` をYMM4で開き、画像アイテムのZoomとXに同じ相対フレーム（例: 30）でキーを追加し、**同じフレームで両方の値を再編集**します。再編集後のZoom/X値を控え、以下の `--zoom` と `--x` にその最終値を指定します。**まだ保存しない**でください。 `GET /api/items` の `identity_persistent=true` な `item_id` が必要です。
+1. バックアップ済みの**使い捨て** `.ymmp` をYMM4で開き、画像アイテムの最終フレームにZoomとXのキーを追加し、**同じフレームで両方の値を再編集**します。別の位置を検査するには `--at 30` のように指定できます。再編集後のZoom/X値を控え、以下の `--zoom` と `--x` にその最終値を指定します。**まだ保存しない**でください。 `GET /api/items` の `identity_persistent=true` な `item_id` が必要です。
 2. 編集が未保存の状態（`GET /api/project` の `isSaved=false`）で、次を実行します。
 
 ```powershell
-python mcp-server/check_keyframe_persistence.py capture --snapshot "$env:TEMP\\ymm4-keyframe-capture.json" --item-id "native:YOUR-TEST-IMAGE" --at 30 --zoom 1.25 --x 80 --confirm-test-project
+python mcp-server/check_keyframe_persistence.py capture --snapshot "$env:TEMP\\ymm4-keyframe-capture.json" --item-id "native:YOUR-TEST-IMAGE" --last-frame --zoom 1.25 --x 80 --confirm-test-project
 ```
 
-3. **YMM4のUIから**使い捨てプロジェクトを保存し、いったん閉じて同じ `.ymmp` を開き直します。再読込はAPIで証明できないため、操作者が確認してください。
+3. **YMM4のUIから**使い捨てプロジェクトを保存し、いったん閉じて同じ `.ymmp` を開き直します。操作者が閉じて開き直したことを確認してください。プラグインがライブタイムラインIDを返す場合は、検証時にIDが切り替わったことも確認します。
 4. 同じPCで次を実行します。
 
 ```powershell
 python mcp-server/check_keyframe_persistence.py verify --snapshot "$env:TEMP\\ymm4-keyframe-capture.json" --confirm-test-project --confirm-reopened
 ```
 
-`verify` はプロジェクトパスの一致・保存済み状態・ファイル更新時刻の前進・画像の永続ID・Zoom/Xの期待値・**全Animationのキーフレーム一覧**を比較します。スナップショットはローカルのプロジェクトパスとキー値を含むため公開しないでください。既存スナップショットを上書きせず、接続トークンも保存しません。
+`verify` はプロジェクトパスの一致・保存済み状態・ファイル更新時刻の前進・画像の永続ID・Zoom/Xの期待値・**全Animationのキーフレーム一覧**を比較します。`--last-frame` で採取した場合は画像の最終フレームも照合し、検査中にプロジェクトや画像が切り替わった場合は停止します。採取・検証の各処理中は、更新時刻が同じでも `.ymmp` が別のファイルに置き換わった場合は停止します。採取の完了後に別ファイルへ置き換える方式で保存する場合は検証できます。採取時にライブタイムラインIDを取得できた場合は、保存しただけで元のタイムラインが開いたままの場合や、検証時にIDを取得できない場合も失敗です。スナップショットはローカルのプロジェクトパスとキー値を含むため公開しないでください。既存スナップショットを上書きせず、接続トークンも保存しません。
 
-**限界:** APIだけではYMM4のUIで実際に閉じて開き直した事実や、プレビュー表示の正しさは検証できません。テストのPASSだけでIssue #140をクローズせず、プレビュー・再編集・削除の実機確認とPRマージも必要です。CIの `test_check_keyframe_persistence.py` はHTTPモックであり、YMM4実機を使用しません。
+**限界:** 操作者による再読込の確認とプレビューの目視確認は必要です。ライブタイムラインIDを返さない旧プラグインや旧スナップショットでは、再読込の判定に操作者の確認を使います。テストのPASSだけでIssue #140をクローズせず、プレビュー・再編集・削除の実機確認とPRマージも必要です。CIの `test_check_keyframe_persistence.py` はHTTPモックであり、YMM4実機を使用しません。

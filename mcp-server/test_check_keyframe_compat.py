@@ -9,6 +9,8 @@ from check_keyframe_compat import ProbeError, run_probe
 
 BASE = "http://127.0.0.1:8765/api"
 HEADERS = {"X-Ymm4-Token": "fake-test-token"}
+TIMELINE_ID = "timeline:" + "a" * 32
+ITEM_ID = "native:test/with spaces"
 
 
 class FakeYmm4:
@@ -36,6 +38,7 @@ class FakeYmm4:
         self.item_length = 100
         self.item_type = "ImageItem"
         self.item_count = 1
+        self.timeline_id = TIMELINE_ID
         self.inventory_complete = True
         self.force_revision_conflict = False
         self.external_change_before_cleanup = None
@@ -49,15 +52,18 @@ class FakeYmm4:
         assert request.url.host == "127.0.0.1"
         if request.method == "GET":
             if request.url.path == "/api/items":
-                return httpx.Response(200, json={"items": [
-                    {"item_id": "native:test/with spaces",
-                     "length": self.item_length, "type": self.item_type}
+                return httpx.Response(200, json={"timeline_id": self.timeline_id, "items": [
+                    {"item_id": ITEM_ID,
+                     "length": self.item_length, "type": self.item_type,
+                     "revision": f"r{self.revision}"}
                     for _ in range(self.item_count)]})
             prop = request.url.params.get("prop")
             if prop is None:
                 assert request.url.params.get("strict_inventory") == "1"
                 return httpx.Response(200, json={"success": True,
+                                                 "item_id": ITEM_ID,
                                                  "inventory_complete": self.inventory_complete,
+                                                 "supports_expected_timeline_id": True,
                                                  "animations": [
                     {"prop": name, "keyframes": [dict(f) for f in frames]}
                     for name, frames in self.frames.items()],
@@ -80,13 +86,16 @@ class FakeYmm4:
                 self.frames[prop][-1]["value"] += 50
                 self.revision += 1
             if prop not in self.frames:
-                return httpx.Response(200, json={"success": True, "animations": [],
+                return httpx.Response(200, json={"success": True, "item_id": ITEM_ID, "animations": [],
                                                   "revision": f"r{self.revision}"})
-            return httpx.Response(200, json={"success": True, "animations": [
+            return httpx.Response(200, json={"success": True, "item_id": ITEM_ID, "animations": [
                 {"prop": prop, "keyframes": [dict(f) for f in self.frames[prop]]}],
                 "revision": f"r{self.revision}"})
         body = json.loads(request.content)
         self.posts.append(body)
+        if body.get("expected_timeline_id", self.timeline_id) != self.timeline_id:
+            return httpx.Response(200, json={"success": False,
+                                              "error_code": "KEYFRAME_TIMELINE_CHANGED"})
         prop, at, action = body["prop"], body["at"], body["action"]
         if body["expected_revision"] != f"r{self.revision}":
             return httpx.Response(200, json={"success": False,
@@ -149,13 +158,189 @@ class FakeYmm4:
                                           "revision": f"r{self.revision}"})
 
 
-def probe(fake):
+def probe(fake, at=24):
     with httpx.Client(transport=httpx.MockTransport(fake), trust_env=False) as client:
-        run_probe(client, BASE, HEADERS, "native:test/with spaces", 24,
+        run_probe(client, BASE, HEADERS, ITEM_ID, at,
                   {"Zoom": 1.25, "X": 80.0})
 
 
 class LiveProbeProtocolTests(unittest.TestCase):
+    def test_missing_timeline_identity_prevents_writes(self):
+        fake = FakeYmm4()
+
+        def old_host(request):
+            response = fake(request)
+            if request.url.path == "/api/items":
+                payload = response.json()
+                payload.pop("timeline_id")
+                return httpx.Response(200, json=payload)
+            return response
+
+        with self.assertRaisesRegex(ProbeError, "requires a live timeline identity"):
+            probe(old_host)
+        self.assertEqual(fake.posts, [])
+
+    def test_timeline_identity_without_host_write_guard_prevents_writes(self):
+        fake = FakeYmm4()
+
+        def host_without_write_guard(request):
+            response = fake(request)
+            if request.url.params.get("strict_inventory") == "1":
+                payload = response.json()
+                payload.pop("supports_expected_timeline_id")
+                return httpx.Response(200, json=payload)
+            return response
+
+        with self.assertRaisesRegex(ProbeError, "requires host support for timeline-bound keyframe writes"):
+            probe(host_without_write_guard)
+        self.assertEqual(fake.posts, [])
+
+    def test_timeline_switch_at_insert_reedit_or_cleanup_is_rejected_by_host(self):
+        for switch_at in (0, 1, 2):
+            with self.subTest(switch_at=switch_at):
+                fake = FakeYmm4()
+                active_before = None
+
+                def switched_at_post(request):
+                    nonlocal active_before
+                    if request.method == "POST" and len(fake.posts) == switch_at:
+                        # A different timeline has the same item ID, animation
+                        # state and revision when the queued write arrives.
+                        fake.timeline_id = "timeline:" + "b" * 32
+                        active_before = json.dumps(fake.frames)
+                    return fake(request)
+
+                with self.assertRaisesRegex(ProbeError, "KEYFRAME_TIMELINE_CHANGED"):
+                    probe(switched_at_post)
+                self.assertEqual(len(fake.posts), switch_at + 1)
+                self.assertEqual([post["expected_timeline_id"] for post in fake.posts],
+                                 [TIMELINE_ID] * (switch_at + 1))
+                self.assertEqual(json.dumps(fake.frames), active_before)
+
+    def test_incomplete_item_inventory_stops_before_keyframe_writes(self):
+        for invalid in (
+            {"count": 2},
+            {"count": True},
+            {"success": False},
+            {"error": "timeline unavailable"},
+            {"error_code": "TIMELINE_UNAVAILABLE"},
+        ):
+            with self.subTest(invalid=invalid):
+                fake = FakeYmm4()
+
+                def incomplete_inventory(request):
+                    response = fake(request)
+                    if request.url.path == "/api/items":
+                        return httpx.Response(200, json={**response.json(), **invalid})
+                    return response
+
+                with self.assertRaisesRegex(ProbeError, "Malformed timeline item inventory"):
+                    probe(incomplete_inventory, at=None)
+                self.assertEqual(fake.posts, [])
+
+    def test_missing_or_mismatched_readback_id_stops_before_keyframe_writes(self):
+        for property_read, returned_id in ((False, None), (True, None),
+                                           (False, "native:other"), (True, "native:other")):
+            with self.subTest(property_read=property_read, returned_id=returned_id):
+                fake = FakeYmm4()
+
+                def mismatched_readback(request):
+                    response = fake(request)
+                    if (request.method == "GET" and request.url.path == "/api/items/keyframes"
+                            and ("prop" in request.url.params) == property_read):
+                        payload = response.json()
+                        if returned_id is None:
+                            payload.pop("item_id", None)
+                        else:
+                            payload["item_id"] = returned_id
+                        return httpx.Response(200, json=payload)
+                    return response
+
+                with self.assertRaisesRegex(ProbeError, "Keyframe readback did not identify the requested item"):
+                    probe(mismatched_readback, at=None)
+                self.assertEqual(fake.posts, [])
+
+    def test_live_timeline_switch_stops_writes_even_with_matching_revisions(self):
+        for at, switch_after, new_identity in (
+            (24, 0, "timeline:" + "b" * 32),
+            (None, 0, None),
+            (24, 1, "timeline:" + "b" * 32),
+            (None, 2, "timeline:" + "b" * 32),
+        ):
+            with self.subTest(at=at, switch_after=switch_after, new_identity=new_identity):
+                fake = FakeYmm4()
+                initial = "timeline:" + "a" * 32
+                item_reads = 0
+
+                def switched(request):
+                    nonlocal item_reads
+                    response = fake(request)
+                    if request.method == "GET" and request.url.path == "/api/items":
+                        item_reads += 1
+                        identity = (new_identity if item_reads > 1 and len(fake.posts) >= switch_after
+                                    else initial)
+                        payload = response.json()
+                        if identity is None:
+                            payload.pop("timeline_id")
+                        else:
+                            payload["timeline_id"] = identity
+                        return httpx.Response(200, json=payload)
+                    return response
+
+                with self.assertRaisesRegex(ProbeError, "live timeline changed or became unavailable"):
+                    probe(switched, at=at)
+                self.assertEqual([post["action"] for post in fake.posts], ["set"] * switch_after)
+
+    def test_stable_live_timeline_allows_insert_reedit_and_cleanup(self):
+        fake = FakeYmm4()
+
+        def same_timeline(request):
+            response = fake(request)
+            if request.method == "GET" and request.url.path == "/api/items":
+                return httpx.Response(200, json={**response.json(), "count": 1,
+                                                 "timeline_id": "timeline:" + "a" * 32})
+            return response
+
+        probe(same_timeline, at=None)
+        self.assertEqual([post["action"] for post in fake.posts], ["set", "set", "remove"] * 2)
+        self.assertEqual([post["expected_timeline_id"] for post in fake.posts], [TIMELINE_ID] * 6)
+
+    def test_last_frame_uses_live_item_length_for_every_write(self):
+        fake = FakeYmm4()
+        fake.item_length = 73
+        probe(fake, at=None)
+        self.assertEqual([p["at"] for p in fake.posts], [72] * 6)
+        self.assertEqual([f["at"] for f in fake.frames["Zoom"]], [0])
+        self.assertEqual([f["at"] for f in fake.frames["X"]], [0])
+
+    def test_last_frame_refuses_existing_frame_and_one_frame_item(self):
+        for length, existing in ((1, False), (73, True)):
+            with self.subTest(length=length):
+                fake = FakeYmm4()
+                fake.item_length = length
+                if existing:
+                    fake.frames["X"].append({"at": length - 1, "value": 2.0})
+                with self.assertRaises(ProbeError):
+                    probe(fake, at=None)
+                self.assertEqual(fake.posts, [])
+
+    def test_last_frame_refuses_resize_after_preflight(self):
+        fake = FakeYmm4()
+        item_reads = 0
+
+        def resized(request):
+            nonlocal item_reads
+            if request.url.path == "/api/items":
+                item_reads += 1
+                if item_reads == 2:
+                    fake.item_length += 10
+                    fake.revision += 1
+            return fake(request)
+
+        with self.assertRaisesRegex(ProbeError, "item length or revision changed"):
+            probe(resized, at=None)
+        self.assertEqual(fake.posts, [])
+
     def test_success_sets_reads_and_removes_both_properties(self):
         fake = FakeYmm4()
         probe(fake)

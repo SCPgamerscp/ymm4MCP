@@ -337,30 +337,32 @@ namespace YMM4McpPlugin
                 if (vm == null) return (object)new { error = "MainViewModel取得失敗", items = Array.Empty<object>() };
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
                 if (tvm == null) return (object)new { error = "TimelineVM取得失敗", items = Array.Empty<object>() };
+                var timelineModel = GetTimelineModel(tvm);
                 var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return Failure("ITEMS_UNAVAILABLE", "タイムライン項目を取得できません");
                 var items = new List<object>();
-                if (rawItems != null)
+                foreach (var iv in rawItems)
                 {
-                    foreach (var iv in rawItems)
+                    var info = ReadItemInfo(iv);
+                    var identity = GetItemIdentity(info.item);
+                    items.Add(new
                     {
-                        var info = ReadItemInfo(iv);
-                        var identity = GetItemIdentity(info.item);
-                        items.Add(new
-                        {
-                            item_id = identity.id,
-                            revision = GetItemRevision(info.item),
-                            identity_persistent = identity.persistent,
-                            layer = info.layer,
-                            frame = info.frame,
-                            length = info.length,
-                            endFrame = (long)info.frame + info.length,
-                            type = info.type,
-                            text = info.text,
-                            source_path = GetPropObj(info.item, "FilePath")?.ToString(),
-                        });
-                    }
+                        item_id = identity.id,
+                        revision = GetItemRevision(info.item),
+                        identity_persistent = identity.persistent,
+                        layer = info.layer,
+                        frame = info.frame,
+                        length = info.length,
+                        endFrame = (long)info.frame + info.length,
+                        type = info.type,
+                        text = info.text,
+                        source_path = GetPropObj(info.item, "FilePath")?.ToString(),
+                    });
                 }
-                return (object)new { items, count = items.Count };
+                var timelineId = ReferenceEquals(timelineModel, GetTimelineModel(tvm))
+                    ? GetTimelineId(timelineModel) : null;
+                return (object)new { items, count = items.Count,
+                    timeline_id = timelineId };
             });
         }
 

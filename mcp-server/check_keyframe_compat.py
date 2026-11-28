@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import sys
 from urllib.parse import quote
 
@@ -17,7 +18,9 @@ from ymm4_connection import connection_settings
 
 
 class ProbeError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 def api(client: httpx.Client, base: str, headers: dict[str, str],
@@ -30,14 +33,23 @@ def api(client: httpx.Client, base: str, headers: dict[str, str],
         raise ProbeError(f"{method} {path}: HTTP/JSON failure: {exc}") from exc
     if not isinstance(result, dict) or result.get("success") is not True:
         code = result.get("error_code") if isinstance(result, dict) else "INVALID_RESPONSE"
-        raise ProbeError(f"{method} {path}: plugin rejected request ({code})")
+        raise ProbeError(f"{method} {path}: plugin rejected request ({code})",
+                         code if isinstance(code, str) else None)
+    return result
+
+
+def _read_item_keyframes(client: httpx.Client, base: str, headers: dict[str, str],
+                         item_id: str, query: str) -> dict:
+    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&{query}"
+    result = api(client, base, headers, "GET", path)
+    if result.get("item_id") != item_id:
+        raise ProbeError("Keyframe readback did not identify the requested item")
     return result
 
 
 def keyframes(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, prop: str) -> tuple[list[dict], str]:
-    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop={quote(prop, safe='')}"
-    result = api(client, base, headers, "GET", path)
+    result = _read_item_keyframes(client, base, headers, item_id, f"prop={quote(prop, safe='')}")
     animations = result.get("animations")
     if not isinstance(animations, list):
         raise ProbeError(f"{prop}: malformed animation response")
@@ -60,15 +72,17 @@ def has_frame(frames: list[dict], at: int) -> bool:
 
 
 def snapshot_all_animations(client: httpx.Client, base: str,
-                            headers: dict[str, str], item_id: str) -> tuple[dict[str, list[dict]], str]:
+                            headers: dict[str, str], item_id: str, *,
+                            require_timeline_guard: bool = False) -> tuple[dict[str, list[dict]], str]:
     """Snapshot every animation, not only Zoom/X, before any write.
 
     YMM4 may share one KeyFrames collection across multiple properties.
     Removing a test key can alter unrelated animations; a successful cleanup
     must restore the complete observable item state.
     """
-    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&strict_inventory=1"
-    result = api(client, base, headers, "GET", path)
+    result = _read_item_keyframes(client, base, headers, item_id, "strict_inventory=1")
+    if require_timeline_guard and result.get("supports_expected_timeline_id") is not True:
+        raise ProbeError("Probe requires host support for timeline-bound keyframe writes")
     if result.get("inventory_complete") is not True:
         raise ProbeError("Incomplete animation inventory; refusing edit")
     animations = result.get("animations")
@@ -92,27 +106,48 @@ def snapshot_all_animations(client: httpx.Client, base: str,
     return snapshot, revision
 
 
+def valid_timeline_id(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"timeline:[0-9a-f]{32}", value) is not None
+
+
 def validate_test_item(client: httpx.Client, base: str,
-                       headers: dict[str, str], item_id: str, at: int) -> None:
-    """Fail before writing if the selected image or relative frame is unsafe."""
+                       headers: dict[str, str], item_id: str, at: int | None,
+                       *, require_persistent: bool = False) -> tuple[int, str | None, str | None]:
+    """Resolve the relative frame, item revision, and live timeline from one inventory."""
     try:
         response = client.get(base + "/items", headers=headers)
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise ProbeError(f"Cannot inspect target timeline item: {exc}") from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+    if (not isinstance(payload, dict) or payload.get("success", True) is not True
+            or "error" in payload or "error_code" in payload
+            or not isinstance(payload.get("items"), list)):
         raise ProbeError("Malformed timeline item inventory; refusing edit")
-    matches = [item for item in payload["items"]
+    items = payload["items"]
+    count = payload.get("count", len(items))
+    if type(count) is not int or count != len(items):
+        raise ProbeError("Malformed timeline item inventory; reported count does not match")
+    matches = [item for item in items
                if isinstance(item, dict) and item.get("item_id") == item_id]
     if len(matches) != 1:
         raise ProbeError("Target item must exist exactly once; refusing edit")
     item = matches[0]
+    if require_persistent and item.get("identity_persistent") is not True:
+        raise ProbeError("Test item must have a unique persistent ID across project reloads")
     if "image" not in str(item.get("type", "")).lower():
         raise ProbeError("Target item is not an image; refusing edit")
     length = item.get("length")
-    if type(length) is not int or length <= at:
+    if type(length) is not int or not 1 <= length <= 2_147_483_647:
         raise ProbeError(f"Frame {at} is outside the target item length; refusing edit")
+    frame = length - 1 if at is None else at
+    if type(frame) is not int or not 0 < frame < length:
+        raise ProbeError(f"Frame {frame} is outside the target item length; refusing edit")
+    revision = item.get("revision")
+    timeline_id = payload.get("timeline_id")
+    if "timeline_id" in payload and not valid_timeline_id(timeline_id):
+        raise ProbeError("Live timeline identity is unavailable")
+    return frame, revision if isinstance(revision, str) else None, timeline_id
 
 
 
@@ -141,11 +176,32 @@ def _unacknowledged_insert_is_isolated(current: dict[str, list[dict]],
 
 
 def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
-              item_id: str, at: int, values: dict[str, float]) -> None:
-    validate_test_item(client, base, headers, item_id, at)
+              item_id: str, at: int | None, values: dict[str, float]) -> None:
+    last_frame = at is None
+    at, item_revision, timeline_id = validate_test_item(client, base, headers, item_id, at)
+    if timeline_id is None:
+        raise ProbeError("Probe requires a live timeline identity; refusing edit")
+
+    def verify_active_item(prop: str, expected_revision: str) -> None:
+        current_at, revision, current_timeline_id = validate_test_item(
+            client, base, headers, item_id, None if last_frame else at)
+        if current_timeline_id != timeline_id:
+            raise ProbeError(f"{prop}: live timeline changed or became unavailable")
+        if current_at != at or revision != expected_revision:
+            raise ProbeError(f"{prop}: item length or revision changed; refusing edit")
+
+    def mutate(prop: str, revision: str, action: str, **parameters: float) -> dict:
+        return api(client, base, headers, "POST", "/items/keyframe",
+                   {"item_id": item_id, "expected_revision": revision,
+                    "expected_timeline_id": timeline_id, "prop": prop,
+                    "action": action, "at": at, **parameters})
+
     # Capture every property before writing: YMM4 may share one KeyFrames
     # collection among Zoom, X and other animation properties.
-    baseline, baseline_revision = snapshot_all_animations(client, base, headers, item_id)
+    baseline, baseline_revision = snapshot_all_animations(
+        client, base, headers, item_id, require_timeline_guard=True)
+    if item_revision != baseline_revision:
+        raise ProbeError("Item length could not be verified against the animation revision; refusing edit")
     for prop in values:
         if prop not in baseline:
             raise ProbeError(f"{prop}: Animation or keyframes unavailable")
@@ -177,11 +233,10 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             _, revision = keyframes(client, base, headers, item_id, prop)
             if revision != current_revision:
                 raise ProbeError(f"{prop}: item changed before write; refusing edit")
+            verify_active_item(prop, revision)
             # Record BEFORE the POST: a failed request might have mutated YMM4.
             touched = True
-            result = api(client, base, headers, "POST", "/items/keyframe",
-                         {"item_id": item_id, "expected_revision": revision,
-                          "prop": prop, "action": "set", "at": at, "value": value})
+            result = mutate(prop, revision, "set", value=value)
             # Prefer the revision returned by the mutation itself: another
             # caller may edit the item before the next readback.
             returned_revision = result.get("revision")
@@ -212,10 +267,8 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             # Use a distinct, finite value without changing the frame. This
             # checks that the host replaces rather than appends a duplicate.
             reedit_value = value * 0.9 if abs(value) >= 1.0 else value + 0.5
-            reedit = api(client, base, headers, "POST", "/items/keyframe",
-                         {"item_id": item_id, "expected_revision": cleanup_revision,
-                          "prop": prop, "action": "set", "at": at,
-                          "value": reedit_value})
+            verify_active_item(prop, cleanup_revision)
+            reedit = mutate(prop, cleanup_revision, "set", value=reedit_value)
             new_revision = reedit.get("revision")
             if not isinstance(new_revision, str) or not new_revision:
                 # Keep the last acknowledged revision. If the host actually
@@ -236,9 +289,9 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
             print(f"PASS {prop}: re-edited frame={at} value={actual}")
         except Exception as exc:
             failure = exc
-            # The plugin's revision guard rejects the write before mutation.
-            # Removing a pre-existing frame after that rejection is unsafe.
-            if "REVISION_CONFLICT" in str(exc):
+            # These guards reject the request before mutation. A cleanup
+            # cannot use a revision or timeline the host already rejected.
+            if isinstance(exc, ProbeError) and exc.code in {"REVISION_CONFLICT", "KEYFRAME_TIMELINE_CHANGED"}:
                 touched = False
         finally:
             if touched:
@@ -259,14 +312,13 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
                         elif revision != cleanup_revision:
                             raise ProbeError(
                                 f"{prop}: item changed after readback; refusing cleanup")
-                        api(client, base, headers, "POST", "/items/keyframe",
-                            {"item_id": item_id,
-                             "expected_revision": cleanup_revision or revision,
-                             "prop": prop, "action": "remove", "at": at})
+                        verify_active_item(prop, revision)
+                        mutate(prop, cleanup_revision or revision, "remove")
                     # Removing a shared frame may silently alter unrelated
                     # Animation values or pre-existing frames. Verify the
                     # entire inventory, including added/removed properties.
-                    restored, _ = snapshot_all_animations(client, base, headers, item_id)
+                    restored, restored_revision = snapshot_all_animations(client, base, headers, item_id)
+                    verify_active_item(prop, restored_revision)
                     if restored != baseline:
                         changed = sorted(set(restored) ^ set(baseline))
                         changed += sorted(name for name in restored.keys() & baseline.keys()
@@ -287,16 +339,18 @@ def run_probe(client: httpx.Client, base: str, headers: dict[str, str],
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--item-id", required=True, help="ID of an image in a disposable project")
-    parser.add_argument("--at", type=int, required=True, help="unused relative frame, > 0 and < item length")
+    frames = parser.add_mutually_exclusive_group(required=True)
+    frames.add_argument("--at", type=int, help="unused relative frame, > 0 and < item length")
+    frames.add_argument("--last-frame", action="store_true", help="use the target image's current length minus one")
     parser.add_argument("--zoom", type=float, required=True, help="safe test Zoom value for this YMM4 build")
     parser.add_argument("--x", type=float, required=True, help="safe test X position for this YMM4 build")
     parser.add_argument("--confirm-test-project", action="store_true",
                         help="I have backed up and opened a disposable test project")
     args = parser.parse_args(argv)
     if (not args.confirm_test_project or not args.item_id.strip()
-            or not 0 < args.at <= 2_147_483_647
+            or (not args.last_frame and not 0 < args.at <= 2_147_483_647)
             or not math.isfinite(args.zoom) or not math.isfinite(args.x)):
-        parser.error("requires --confirm-test-project, valid item-id, at>0, and finite values")
+        parser.error("requires --confirm-test-project, a valid item ID, a positive frame, and finite values")
     try:
         base, headers = connection_settings()
         # Never send the local auth token to an HTTP(S) proxy.
