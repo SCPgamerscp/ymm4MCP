@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,11 +25,51 @@ namespace YMM4McpPlugin
             { "OpenProject", "Open", "LoadProject", "Load", "OpenFile" };
         private static readonly string[] SaveAsMethodHints =
             { "SaveAsProject", "SaveProjectAs", "SaveAs", "SaveProject" };
+        private static readonly Guid ExportSessionId = Guid.NewGuid();
+        // The HTTP listener can restart while a native export is still alive.
+        private static readonly NativeExportTaskTracker NativeExports = new();
+        private static readonly ConditionalWeakTable<object, ExportTimelineToken> ExportTimelines = new();
+
+        private sealed class ExportTimelineToken
+        {
+            public Guid Id { get; } = Guid.NewGuid();
+        }
+
+        private static Guid? ReadNativeExportTimelineId(object timeline)
+        {
+            // The Timeline.ID GUID is stored in the .ymmp file.
+            var value = GetPropObj(timeline, "ID");
+            if (value is Guid id && id != Guid.Empty) return id;
+            if (value is string text && Guid.TryParse(text, out Guid parsed) && parsed != Guid.Empty)
+                return parsed;
+            return null;
+        }
+
+        private ExportProjectIdentity? CaptureExportProject()
+        {
+            var vm = GetMainViewModel();
+            if (vm == null) return null;
+            var timelineViewModel = GetPropObj(vm, "ActiveTimelineViewModel");
+            var timeline = timelineViewModel == null ? null : GetPropObj(timelineViewModel, "timeline");
+            if (timeline == null) return null;
+            var model = GetMainModel(vm);
+            string? path = GetPropValue(vm, "ProjectFilePath")?.ToString() ??
+                (model == null ? null : GetPropObj(model, "ProjectFilePath")?.ToString());
+            var saved = GetPropValue(vm, "IsSaved") ?? (model == null ? null : GetPropValue(model, "IsSaved"));
+            var identity = new ExportProjectIdentity(ExportSessionId,
+                ExportTimelines.GetValue(timeline, static _ => new ExportTimelineToken()).Id,
+                string.IsNullOrWhiteSpace(path) ? null : path, saved is true,
+                ReadNativeExportTimelineId(timeline));
+            return identity.IsKnown ? identity : null;
+        }
 
         private async Task<object> EnqueueExport(HttpListenerRequest req)
         {
             var body = await ReadBody(req);
             var parsed = ParseExportRequest(body);
+            var source = Application.Current.Dispatcher.Invoke(CaptureExportProject);
+            if (source == null)
+                return Failure("EXPORT_PROJECT_UNAVAILABLE", "書き出し元のタイムラインを確認できません");
             var request = new Dictionary<string, object?>
             {
                 ["output_path"] = parsed.path,
@@ -38,7 +79,7 @@ namespace YMM4McpPlugin
             };
             var existing = FindIdempotentJob(parsed.key);
             if (existing != null)
-                return SameJobRequest(existing, "export", request)
+                return SameJobRequest(existing, "export", request, source)
                     ? DescribeJob(existing)
                     : Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
             if (File.Exists(parsed.path) && !parsed.overwrite)
@@ -47,7 +88,9 @@ namespace YMM4McpPlugin
             if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
                 return Failure("DIRECTORY_NOT_FOUND", "出力先フォルダがありません: " + parent);
 
-            var job = CreateJob("export", request, parsed.key, out bool created, out bool conflict);
+            var job = CreateJob("export", request, parsed.key, source, out bool created, out bool conflict);
+            if (job == null)
+                return Failure("JOB_PERSIST_FAILED", "書き出しジョブを保存できなかったため、開始しませんでした");
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key は別の書き出し要求に使用されています");
             if (created)
@@ -57,6 +100,11 @@ namespace YMM4McpPlugin
 
         private object RestartExport(McpJob previous)
         {
+            var source = previous.ExportSource;
+            if (source == null || !source.IsKnown)
+                return Failure("EXPORT_PROJECT_UNVERIFIED", "書き出し元の記録がないため、新しいジョブとして投入してください");
+            if (source.SessionId != ExportSessionId && !source.CanResumeAfterRestart)
+                return Failure("EXPORT_PROJECT_UNVERIFIED", "再起動前のタイムラインを特定できないため、新しいジョブとして投入してください");
             string path = RequestString(previous.Request, "output_path");
             string format = RequestString(previous.Request, "format");
             if (string.IsNullOrEmpty(format)) format = "mp4";
@@ -66,8 +114,10 @@ namespace YMM4McpPlugin
             var request = new Dictionary<string, object?>(previous.Request);
             // The predecessor ID makes repeated resume calls idempotent even when the
             // original request had no key. A failed successor can itself be resumed.
-            var job = CreateJob("export", request, previous.Id + ":resume",
+            var job = CreateJob("export", request, previous.Id + ":resume", source,
                 out bool created, out bool conflict);
+            if (job == null)
+                return Failure("JOB_PERSIST_FAILED", "再開ジョブを保存できなかったため、開始しませんでした");
             if (conflict)
                 return Failure("IDEMPOTENCY_KEY_CONFLICT", "再開キーは別の書き出し要求に使用されています");
             if (created)
@@ -85,30 +135,78 @@ namespace YMM4McpPlugin
             // overwrite=true may leave the previous export at this path until the new encode starts.
             // A stable old file must never be reported as this job's completed output.
             (long length, DateTime lastWriteUtc)? previousOutput = null;
-            if (File.Exists(outputPath))
+            bool overwrite = RequestBool(job.Request, "overwrite");
+            ExportDiscovery? discovery = null;
+            string? startErrorCode = null;
+            bool completionUnavailable = false;
+            var start = Application.Current.Dispatcher.Invoke<(bool invoked, string method, string target, Task? task)?>(() =>
             {
-                var oldFile = new FileInfo(outputPath);
-                previousOutput = (oldFile.Length, oldFile.LastWriteTimeUtc);
+                token.ThrowIfCancellationRequested();
+                discovery = DiscoverExportSurface();
+                if (job.ExportSource?.Matches(CaptureExportProject()) != true)
+                {
+                    startErrorCode = "EXPORT_PROJECT_CHANGED";
+                    return null;
+                }
+                // A queued or resumed job may have missed the enqueue-time
+                // check. Read the path before invoking the native exporter.
+                if (!ExportInvocationPolicy.TryCaptureOutputBaseline(outputPath, overwrite, out previousOutput))
+                {
+                    startErrorCode = "FILE_EXISTS";
+                    return null;
+                }
+                var invocation = NativeExports.TryStart(() =>
+                    StartNativeExport(discovery, outputPath, format, token, out completionUnavailable),
+                    token);
+                if (invocation is null)
+                    startErrorCode = NativeExports.CompletionUnknown
+                        ? "EXPORT_COMPLETION_UNAVAILABLE" : "EXPORT_NATIVE_BUSY";
+                return invocation;
+            });
+            if (start is null)
+            {
+                string message = startErrorCode switch
+                {
+                    "EXPORT_PROJECT_CHANGED" => "書き出し元のプロジェクトを確認できないため開始しませんでした",
+                    "EXPORT_NATIVE_BUSY" => "前回のYMM4書き出しが実行中です。完了後に再開してください",
+                    "EXPORT_COMPLETION_UNAVAILABLE" => "前回のYMM4書き出しの終了を確認できません",
+                    _ => "出力先が既に存在するため書き出しを開始しませんでした"
+                };
+                UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
+                    errorCode: startErrorCode, result: new { output_path = outputPath, format });
+                return;
             }
-            var discovery = Application.Current.Dispatcher.Invoke(() => DiscoverExportSurface());
-            var started = Application.Current.Dispatcher.Invoke(() => StartNativeExport(discovery, outputPath, format));
+            var started = start.Value;
             if (!started.invoked)
             {
                 bool dialogRequired = ExportInvocationPolicy.HasDialogOnlyMethod(
-                    discovery.Methods.Select(m => m.method), format);
-                UpdateJob(job, "failed", phase: "failed", progress: 0,
-                    message: dialogRequired ? "保存先を指定できる書き出し方法がありません" : "プログラムからの書き出し方法が見つかりません",
-                    error: dialogRequired ? "YMM4の出力ダイアログはMCPから自動入力できません" : "YMM4の出力コマンド/メソッドを実行できませんでした",
-                    errorCode: dialogRequired ? "EXPORT_DIALOG_REQUIRED" : "EXPORT_METHOD_UNAVAILABLE",
+                    discovery!.Methods.Select(m => m.method), format);
+                string code = completionUnavailable ? "EXPORT_COMPLETION_UNAVAILABLE" :
+                    dialogRequired ? "EXPORT_DIALOG_REQUIRED" : "EXPORT_METHOD_UNAVAILABLE";
+                string message = code switch
+                {
+                    "EXPORT_COMPLETION_UNAVAILABLE" => "このYMM4では完了を確認できる書き出し方法がありません",
+                    "EXPORT_DIALOG_REQUIRED" => "保存先を指定できる書き出し方法がありません",
+                    _ => "プログラムからの書き出し方法が見つかりません"
+                };
+                UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
+                    errorCode: code,
                     result: new { discovered = discovery.Describe(), output_path = outputPath, format });
+                return;
+            }
+            if (started.task == null)
+            {
+                const string message = "YMM4の書き出しを呼びましたが、完了を確認するタスクが返りませんでした";
+                UpdateJob(job, "failed", phase: "failed", progress: 0, message: message, error: message,
+                    errorCode: "EXPORT_COMPLETION_UNAVAILABLE",
+                    result: new { output_path = outputPath, invoked = started.method, outcome_unknown = true });
                 return;
             }
             UpdateJob(job, "running", phase: "render", progress: 15,
                 message: "書き出しを開始しました: " + started.method,
                 checkpoint: new { output_path = outputPath, method = started.method, target = started.target });
 
-            if (started.task != null &&
-                !await ExportTaskDeadline.WaitForCompletion(started.task, deadline, token))
+            if (!await ExportTaskDeadline.WaitForCompletion(started.task, deadline, token))
             {
                 UpdateJob(job, "failed", phase: "timeout",
                     message: "書き出し処理が制限時間内に完了しませんでした",
@@ -117,44 +215,45 @@ namespace YMM4McpPlugin
                 return;
             }
 
-            long lastSize = -1;
-            int stable = 0;
+            var stability = new ExportOutputStability();
             bool outputWasRemoved = false;
             while (DateTime.UtcNow < deadline)
             {
                 token.ThrowIfCancellationRequested();
-                var outputInfo = File.Exists(outputPath) ? new FileInfo(outputPath) : null;
-                if (outputInfo == null) outputWasRemoved = true;
-                if (outputInfo != null && (previousOutput == null || outputWasRemoved ||
-                    outputInfo.Length != previousOutput.Value.length ||
-                    outputInfo.LastWriteTimeUtc != previousOutput.Value.lastWriteUtc))
+                var observed = ExportInvocationPolicy.ReadOutputSnapshot(outputPath);
+                if (observed == null) outputWasRemoved = true;
+                var candidate = outputWasRemoved || observed != previousOutput ? observed : null;
+                bool stable = stability.Observe(candidate);
+                if (candidate is { } output)
                 {
-                    long size = outputInfo.Length;
-                    if (size > 0 && size == lastSize) stable++;
-                    else stable = 0;
-                    lastSize = size;
+                    long size = output.length;
                     int progress = (int)Math.Clamp(20 + (DateTime.UtcNow - (deadline - TimeSpan.FromSeconds(timeoutSeconds))).TotalSeconds / timeoutSeconds * 70, 20, 90);
                     UpdateJob(job, "running", phase: "render", progress: progress,
                         message: "出力ファイルを検出: " + size + " bytes",
                         checkpoint: new { output_path = outputPath, bytes = size });
-                    if (stable >= 3 && size >= 32)
+                    if (stable)
                     {
                         var verify = VerifyMediaFile(outputPath, format);
-                        if (!verify.ok)
+                        // Discard verification if the file changed while it was inspected.
+                        var afterVerification = ExportInvocationPolicy.ReadOutputSnapshot(outputPath);
+                        if (afterVerification != candidate)
+                        {
+                            if (afterVerification == null) outputWasRemoved = true;
+                            stability.Observe(null);
+                        }
+                        else if (!verify.ok)
                         {
                             UpdateJob(job, "failed", phase: "verify", progress: 95,
                                 message: verify.error, error: verify.error, errorCode: verify.errorCode, result: verify.payload);
                             return;
                         }
-                        UpdateJob(job, "completed", phase: "verify", progress: 100,
-                            message: "書き出し完了", result: verify.payload);
-                        return;
+                        else
+                        {
+                            UpdateJob(job, "completed", phase: "verify", progress: 100,
+                                message: "書き出し完了", result: verify.payload);
+                            return;
+                        }
                     }
-                }
-                else
-                {
-                    stable = 0;
-                    lastSize = -1;
                 }
                 await Task.Delay(1000, token);
             }
@@ -429,8 +528,10 @@ namespace YMM4McpPlugin
             return raw is JsonElement element && element.ValueKind == JsonValueKind.True;
         }
 
-        private static bool SameJobRequest(McpJob existing, string kind, Dictionary<string, object?> request)
+        private static bool SameJobRequest(McpJob existing, string kind, Dictionary<string, object?> request,
+            ExportProjectIdentity source)
             => existing.Kind == kind
+               && existing.ExportSource?.Matches(source) == true
                && StringComparer.OrdinalIgnoreCase.Equals(RequestString(existing.Request, "output_path"), RequestString(request, "output_path"))
                && StringComparer.OrdinalIgnoreCase.Equals(RequestString(existing.Request, "format"), RequestString(request, "format"))
                && RequestBool(existing.Request, "overwrite") == RequestBool(request, "overwrite")
@@ -498,38 +599,49 @@ namespace YMM4McpPlugin
         }
 
         private static (bool invoked, string method, string target, Task? task) StartNativeExport(
-            ExportDiscovery discovery, string outputPath, string format)
+            ExportDiscovery discovery, string outputPath, string format, CancellationToken token,
+            out bool completionUnavailable)
         {
+            completionUnavailable = false;
             foreach (var (target, method, obj) in discovery.Methods)
             {
                 if (!ExportInvocationPolicy.AcceptsPath(method, format)) continue;
-                var parameters = method.GetParameters();
-                object?[] args;
-                if (parameters.Length == 1)
-                    args = new object?[] { outputPath };
-                else if (parameters.Length == 2)
-                    args = new object?[] { outputPath, format };
-                else continue;
-                try
+                if (!ExportInvocationPolicy.ReturnsCompletionTask(method))
                 {
-                    var result = method.Invoke(obj, args);
-                    Task? task = result as Task;
-                    return (true, method.Name, target, task);
+                    completionUnavailable = true;
+                    continue;
                 }
-                catch { }
+                object[] args = method.GetParameters().Length == 1
+                    ? new object[] { outputPath } : new object[] { outputPath, format };
+                // A thrown host call may have already started work. Do not
+                // also invoke a fallback exporter for this job.
+                token.ThrowIfCancellationRequested();
+                var result = method.Invoke(obj, args);
+                return (true, method.Name, target, ExportInvocationPolicy.GetCompletionTask(result));
             }
 
             foreach (var (target, name, obj) in discovery.Commands)
             {
+                if (!ExportInvocationPolicy.MatchesFormat(name, format)
+                    || GetPropObj(obj, name) is not ICommand command)
+                    continue;
+                var execute = ExportInvocationPolicy.FindAwaitableCommand(command);
+                if (execute == null)
+                {
+                    completionUnavailable = true;
+                    continue;
+                }
                 try
                 {
-                    var prop = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (prop?.GetValue(obj) is not ICommand cmd) continue;
-                    if (!ExportInvocationPolicy.MatchesFormat(name, format) || !cmd.CanExecute(outputPath)) continue;
-                    cmd.Execute(outputPath);
-                    return (true, name, target, null);
+                    if (!command.CanExecute(outputPath)) continue;
                 }
-                catch { }
+                catch (Exception ex) when (ex is ArgumentException or InvalidCastException)
+                {
+                    continue;
+                }
+                token.ThrowIfCancellationRequested();
+                var result = execute.Invoke(command, new object[] { outputPath });
+                return (true, name, target, ExportInvocationPolicy.GetCompletionTask(result));
             }
             return (false, "", "", null);
         }
@@ -551,8 +663,8 @@ namespace YMM4McpPlugin
                                 && m.GetParameters().Length == 1
                                 && m.GetParameters()[0].ParameterType == typeof(string));
                         if (method == null) continue;
-                        var result = method.Invoke(host, new object[] { path });
-                        return (true, method.Name, targetName, result as Task);
+                        return (true, method.Name, targetName,
+                            ExportInvocationPolicy.InvokeProjectPathMethod(method, host, path));
                     }
                     foreach (var name in names.Select(n => n.EndsWith("Command", StringComparison.Ordinal) ? n : n + "Command"))
                     {
@@ -561,6 +673,10 @@ namespace YMM4McpPlugin
                         object? param = cmd.CanExecute(path) ? path : null;
                         if (!cmd.CanExecute(param)) continue;
                         if (param == null) continue;
+                        var executeAsync = ExportInvocationPolicy.FindAwaitableCommand(cmd);
+                        if (executeAsync != null)
+                            return (true, name, targetName,
+                                ExportInvocationPolicy.InvokeProjectPathMethod(executeAsync, cmd, path));
                         cmd.Execute(param);
                         return (true, name, targetName, null);
                     }
