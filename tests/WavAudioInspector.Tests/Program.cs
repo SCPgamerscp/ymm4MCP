@@ -310,6 +310,25 @@ try
     Check(oneBitSilence.Success && oneBitSilence.Issues.Any(i => i.Code == "AUDIO_SILENT")
         && !oneBitSilence.Issues.Any(i => i.Code == "AUDIO_CLIPPING"),
         "one-bit silence must not be counted as clipping");
+
+    foreach (int bits in new[] { 8, 16, 24, 32 })
+    {
+        const int precision = 4;
+        int lowBits = (1 << (bits - precision)) - 1;
+        File.WriteAllBytes(path, PcmWave(Enumerable.Repeat(lowBits, 80).ToArray(),
+            bits, extensible: true, validBits: precision));
+        var paddedSilence = WavAudioInspector.Inspect(path);
+        Check(paddedSilence.Success && !paddedSilence.Passed && paddedSilence.Peak == 0
+            && paddedSilence.Issues.Any(i => i.Code == "AUDIO_SILENT"),
+            $"PCM {precision}/{bits} unused bits must not turn silence into signal");
+
+        int halfScale = 1 << (bits - 2);
+        File.WriteAllBytes(path, PcmWave(new[] { halfScale | lowBits, -halfScale | lowBits },
+            bits, extensible: true, validBits: precision));
+        var paddedSignal = WavAudioInspector.Inspect(path);
+        Check(paddedSignal.Passed && paddedSignal.Peak == 0.5 && paddedSignal.Rms == 0.5,
+            $"PCM {precision}/{bits} peak and RMS must use only the declared PCM bits");
+    }
     var floatSamples = new float[8000 * 2];
     Array.Fill(floatSamples, 0.25f);
     foreach (bool extensible in new[] { false, true })

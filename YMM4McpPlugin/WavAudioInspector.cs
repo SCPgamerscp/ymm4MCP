@@ -111,6 +111,10 @@ namespace YMM4McpPlugin
                 long frames = dataSize / align;
                 long minSilenceFrames = (long)Math.Ceiling(minSilenceSeconds * rate);
                 long minClipFrames = Math.Max(2, (long)Math.Ceiling(MinContinuousClipSeconds * rate));
+                // WAVE_FORMAT_EXTENSIBLE stores valid PCM bits at the high end
+                // of each sample container. Padding must not affect measurements.
+                int pcmMask = -1 << (bits - validBits);
+                double pcmScale = 1L << (bits - 1);
                 // Left-aligned PCM may reach its positive endpoint below the common
                 // threshold. One-bit PCM has no positive code above silence.
                 double positiveClipThreshold = pcm && validBits > 1
@@ -144,14 +148,17 @@ namespace YMM4McpPlugin
                             double normalized;
                             int offset = i * align + ch * (bits / 8);
                             if (pcm)
-                                normalized = bits switch
+                            {
+                                int sample = bits switch
                                 {
-                                    8 => (buffer[offset] - 128) / 128.0,
-                                    16 => BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(offset, 2)) / 32768.0,
+                                    8 => buffer[offset] - 128,
+                                    16 => BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(offset, 2)),
                                     24 => (buffer[offset] | buffer[offset + 1] << 8 |
-                                        (sbyte)buffer[offset + 2] << 16) / 8388608.0,
-                                    _ => BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(offset, 4)) / 2147483648.0
+                                        (sbyte)buffer[offset + 2] << 16),
+                                    _ => BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(offset, 4))
                                 };
+                                normalized = (sample & pcmMask) / pcmScale;
+                            }
                             else
                             {
                                 normalized = BitConverter.Int32BitsToSingle(
