@@ -364,16 +364,26 @@ class FeatureTests(unittest.IsolatedAsyncioTestCase):
         post.assert_not_awaited()
 
     async def test_script_verification_unavailable_does_not_retry_voice(self):
-        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
-            {"characters": [{"name": "A"}]}, httpx.ReadTimeout(""),
-        ])), patch.object(server, "ymm4_post", AsyncMock(return_value={
-            "success": True, "item_id": "native:one", "revision": "r1",
-            "frame": 0, "layer": 0, "length": 30,
-        })) as post:
-            result = await server.add_script({"lines": [{"character": "A", "text": "one"}]})
-            self.assertEqual(result["error_code"], "SCRIPT_VERIFY_FAILED")
-            self.assertTrue(result["outcome_unknown"])
-            post.assert_awaited_once()
+        added = {"success": True, "item_id": "native:one", "revision": "r1",
+                 "frame": 0, "layer": 0, "length": 30}
+        responses = [
+            httpx.ReadTimeout(""),
+            json.JSONDecodeError("invalid inventory", "{", 1),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte"),
+            {"success": True, "count": 2, "items": [added]},
+            {"success": True, "count": True, "items": [added]},
+            {"success": None, "count": 1, "items": [added]},
+            {"success": True, "error_code": "ITEMS_UNAVAILABLE", "items": [added]},
+        ]
+        for response in responses:
+            with self.subTest(response=response), patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"characters": [{"name": "A"}]}, response,
+            ])), patch.object(server, "ymm4_post", AsyncMock(return_value=added)) as post:
+                result = await server.add_script({"lines": [{"character": "A", "text": "one"}]})
+                self.assertEqual(result["error_code"], "SCRIPT_VERIFY_FAILED")
+                self.assertTrue(result["outcome_unknown"])
+                self.assertEqual(result["added"], 1)
+                post.assert_awaited_once()
 
     async def test_partial_failure_and_unknown_length_stop(self):
         for failure in ({"success": False, "error": "failed"}, {"success": True, "frame": 10, "length": -1}, httpx.ReadTimeout("")):

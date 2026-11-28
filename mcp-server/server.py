@@ -1743,10 +1743,9 @@ async def add_script(args: dict, *, expected_snapshot: str | None = None) -> dic
                     "outcome_unknown": True, "rolled_back": False}
     try:
         snapshot = await ymm4_get("/items")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         snapshot = {"error": str(exc)}
-    if (not isinstance(snapshot, dict) or snapshot.get("success") is False
-            or "error" in snapshot or not isinstance(snapshot.get("items"), list)):
+    if quality_guard.timeline_inventory_error(snapshot) is not None:
         return {"success": False, "error_code": "SCRIPT_VERIFY_FAILED",
                 "error": "追加後のタイムラインを確認できません。itemsを確認してから再実行してください",
                 "added": len(results), "details": results, "verification": snapshot,
