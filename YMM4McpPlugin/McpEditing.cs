@@ -19,6 +19,29 @@ namespace YMM4McpPlugin
         private readonly SemaphoreSlim _editGate = new(1, 1);
         private static readonly ConditionalWeakTable<object, RuntimeItemIdentity> RuntimeItemIdentities = new();
         private static readonly ConditionalWeakTable<object, RuntimeItemRevision> RuntimeItemRevisions = new();
+        private static readonly ConditionalWeakTable<object, string> RuntimeTimelineIds = new();
+
+        private static object? GetTimelineModel(object timelineViewModel)
+            => timelineViewModel.GetType().GetField("timeline", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.GetValue(timelineViewModel);
+
+        private static string? GetTimelineId(object? timelineModel)
+            => timelineModel == null ? null : RuntimeTimelineIds.GetValue(timelineModel,
+                static _ => "timeline:" + Guid.NewGuid().ToString("N"));
+
+        private static string? GetExpectedTimelineId(Dictionary<string, JsonElement> body)
+        {
+            if (!body.ContainsKey("expected_timeline_id")) return null;
+            string id = GetStr(body, "expected_timeline_id", "");
+            if (!id.StartsWith("timeline:", StringComparison.Ordinal) ||
+                !Guid.TryParseExact(id[9..], "N", out _))
+                throw new ArgumentException("expected_timeline_id must be a live timeline identifier");
+            return id;
+        }
+
+        private static bool IsCurrentTimeline(object vm, object timeline, string expectedId)
+            => ReferenceEquals(GetPropObj(vm, "ActiveTimelineViewModel"), timeline)
+                && GetTimelineId(GetTimelineModel(timeline)) == expectedId;
 
         private sealed class RuntimeItemIdentity
         {
@@ -239,8 +262,9 @@ namespace YMM4McpPlugin
         private async Task<object> AddNativeItem(HttpListenerRequest request, string kind)
         {
             var body = await ReadBody(request);
-            var supported = new HashSet<string> { "frame", "layer", "length", "path", "text", "character" };
+            var supported = new HashSet<string> { "frame", "layer", "length", "path", "text", "character", "expected_timeline_id" };
             if (body.Keys.Any(k => !supported.Contains(k))) throw new ArgumentException("Unsupported item parameter");
+            string? expectedTimelineId = GetExpectedTimelineId(body);
             int frame = NonNegative(body, "frame"), layer = NonNegative(body, "layer");
             int? length = body.ContainsKey("length") ? NonNegative(body, "length") : null;
             if (length == 0 || (length.HasValue && (long)frame + length > int.MaxValue))
@@ -279,8 +303,17 @@ namespace YMM4McpPlugin
             {
                 object? pending = Application.Current.Dispatcher.Invoke(() =>
                 {
-                    vm = GetMainViewModel() ?? throw new InvalidOperationException("MainViewModel unavailable");
-                    timeline = GetPropObj(vm, "ActiveTimelineViewModel") ?? throw new InvalidOperationException("No timeline");
+                    vm = GetMainViewModel();
+                    if (vm == null)
+                    {
+                        if (expectedTimelineId != null)
+                            return Failure("TIMELINE_CHANGED", "編集開始時のタイムラインを確認できません");
+                        throw new InvalidOperationException("MainViewModel unavailable");
+                    }
+                    timeline = GetPropObj(vm, "ActiveTimelineViewModel");
+                    if (expectedTimelineId != null && (timeline == null || !IsCurrentTimeline(vm, timeline, expectedTimelineId)))
+                        return Failure("TIMELINE_CHANGED", "編集開始時のタイムラインがアクティブではありません");
+                    if (timeline == null) throw new InvalidOperationException("No timeline");
                     model = GetMainModel(vm) ?? throw new InvalidOperationException("MainModel unavailable");
                     before = new HashSet<object>(TimelineObjects(timeline), ReferenceEqualityComparer.Instance);
                     object third = characterItem ? FindCharacter(timeline, character) : value;
@@ -293,6 +326,8 @@ namespace YMM4McpPlugin
                         method = FindAddMethod(model, name, voice, characterItem);
                         if (method != null) break;
                     }
+                    if (expectedTimelineId != null && !IsCurrentTimeline(vm, timeline, expectedTimelineId))
+                        return Failure("TIMELINE_CHANGED", "編集開始時のタイムラインがアクティブではありません");
                     invoked = true;
                     if (method != null)
                         return method.Invoke(model, BuildAddParameters(method, frame, layer, third, voice || kind == "text" ? value : null, voice));
@@ -300,8 +335,10 @@ namespace YMM4McpPlugin
                         throw new NotSupportedException("Add method signature unavailable for " + typeName);
                     return null;
                 });
+                if (!invoked) return pending!;
                 if (pending is Task task) await task;
-                return Application.Current.Dispatcher.Invoke(() => FinishAdd(vm!, timeline!, model!, before!, typeName, length, frame, layer, characterItem ? character : null));
+                return Application.Current.Dispatcher.Invoke(() => FinishAdd(vm!, timeline!, model!, before!, typeName,
+                    length, frame, layer, characterItem ? character : null, expectedTimelineId));
             }
             catch (Exception ex)
             {
@@ -314,7 +351,8 @@ namespace YMM4McpPlugin
                             if (vm == null || timeline == null || before == null)
                                 return Failure("ADD_OUTCOME_UNKNOWN",
                                     "追加処理の途中で失敗しました。再試行せず items で確認してください: " + (ex.InnerException?.Message ?? ex.Message), true);
-                            return FinishAdd(vm, timeline, model ?? vm, before, typeName, length, frame, layer, characterItem ? character : null, ex);
+                            return FinishAdd(vm, timeline, model ?? vm, before, typeName, length, frame, layer,
+                                characterItem ? character : null, expectedTimelineId, ex);
                         });
                     }
                     catch (Exception inspectEx)
@@ -329,8 +367,11 @@ namespace YMM4McpPlugin
         }
 
         private object FinishAdd(object vm, object timeline, object model, HashSet<object> before, string typeName,
-            int? length, int requestedFrame, int requestedLayer, string? character, Exception? postAddError = null)
+            int? length, int requestedFrame, int requestedLayer, string? character,
+            string? expectedTimelineId, Exception? postAddError = null)
         {
+            if (expectedTimelineId != null && !IsCurrentTimeline(vm, timeline, expectedTimelineId))
+                return Failure("TIMELINE_CHANGED", "処理中にタイムラインが変更されました。再試行せず結果を確認してください", true);
             if (!ReferenceEquals(GetPropObj(vm, "ActiveTimelineViewModel"), timeline))
             {
                 var moved = TryDescribeNewcomers(timeline, before, typeName, length, requestedFrame, requestedLayer, character, model,

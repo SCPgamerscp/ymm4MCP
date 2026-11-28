@@ -1,10 +1,13 @@
 """Declarative EditPlan validation, diff, idempotency, and MCP dispatch. No YMM4 required."""
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import httpx
 import editplan
 import server
+
+
+ROLLBACK_TIMELINE_ID = "timeline:" + "a" * 32
 
 
 def sample_plan(**overrides):
@@ -336,7 +339,9 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
             if path == "/characters":
                 return {"success": True, "characters": characters}
             if path == "/items":
-                return {"success": True, "items": items() if callable(items) else items}
+                current = items() if callable(items) else items
+                return {"success": True, "items": current, "count": len(current),
+                        "timeline_id": ROLLBACK_TIMELINE_ID}
             if path == "/edits/state":
                 return {"success": True, "bindings": []}
             if path.startswith("/media/info?path="):
@@ -381,6 +386,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["added"], 3)
         self.assertEqual([path for path, _ in created], ["/items/video", "/items/voice", "/items/text"])
         self.assertEqual(created[1][1]["character"], "ゆっくり霊夢")
+        self.assertEqual([body.get("expected_timeline_id") for _, body in created],
+                         [ROLLBACK_TIMELINE_ID] * 3)
 
         record = {
             "idempotency_key": "episode-1",
@@ -443,6 +450,59 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 await server.dispatch({"action": "apply_edit", **sample_plan()})
             posted.assert_not_awaited()
 
+    async def test_apply_does_not_write_when_host_cannot_identify_timeline(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+            {"characters": []}, {"items": [], "count": 0, "timeline_id": None},
+        ])), patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+        post.assert_not_awaited()
+        self.assertEqual(result["error_code"], "TIMELINE_UNAVAILABLE")
+
+    async def test_initial_edit_inventory_must_be_complete_before_any_write(self):
+        for snapshot, code in (
+            ({"items": [], "count": 1}, "ITEMS_SNAPSHOT_INVALID"),
+            ({"items": [], "timeline_id": ROLLBACK_TIMELINE_ID}, "ITEMS_SNAPSHOT_INVALID"),
+            ({"items": [], "count": 0, "error_code": "ITEMS_UNAVAILABLE"}, "ITEMS_UNAVAILABLE"),
+            ({"items": [], "count": 0, "success": 1}, "ITEMS_UNAVAILABLE"),
+        ):
+            with self.subTest(snapshot=snapshot), patch.object(
+                    server, "ymm4_get", AsyncMock(side_effect=[{"characters": []}, snapshot])), \
+                    patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            post.assert_not_awaited()
+            self.assertEqual(result["error_code"], code)
+
+    async def test_incomplete_edit_readback_does_not_save_bindings(self):
+        item = {"item_id": "native:caption", "revision": "r1", "frame": 0,
+                "layer": 1, "length": 10, "type": "TextItem", "text": "hello"}
+        initial = {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID}
+        for extra, code in (({"count": 2}, "ITEMS_SNAPSHOT_INVALID"),
+                            ({"count": 1, "error_code": "ITEMS_UNAVAILABLE"}, "ITEMS_UNAVAILABLE")):
+            snapshot = {"items": [item], "timeline_id": ROLLBACK_TIMELINE_ID, **extra}
+            get = AsyncMock(side_effect=[{"characters": []}, initial, {"bindings": []}, snapshot])
+            post = AsyncMock(return_value={"success": True, **item})
+            with self.subTest(snapshot=snapshot), patch.object(server, "ymm4_get", get), \
+                    patch.object(server, "ymm4_post", post):
+                result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+            self.assertEqual([entry.args[0] for entry in post.await_args_list], ["/items/text"])
+            self.assertEqual(result["error_code"], "EDIT_VERIFY_FAILED")
+            self.assertEqual(result["verification"]["error_code"], code)
+            self.assertTrue(result["outcome_unknown"])
+
+    async def test_readback_from_a_different_timeline_does_not_save_bindings(self):
+        item = {"item_id": "native:caption", "revision": "r1", "frame": 0,
+                "layer": 1, "length": 10, "type": "TextItem", "text": "hello"}
+        get = AsyncMock(side_effect=[
+            {"characters": []}, {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID},
+            {"bindings": []}, {"items": [item], "count": 1, "timeline_id": "timeline:" + "b" * 32},
+        ])
+        with patch.object(server, "ymm4_get", get), patch.object(
+                server, "ymm4_post", AsyncMock(return_value={"success": True, **item})) as post:
+            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+        self.assertEqual([entry.args[0] for entry in post.await_args_list], ["/items/text"])
+        self.assertEqual(result["error_code"], "EDIT_VERIFY_FAILED")
+        self.assertTrue(result["outcome_unknown"])
+
     async def test_partial_failure_rolls_back_the_failed_scene(self):
         calls = []
 
@@ -466,7 +526,8 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["added"], 0)
         self.assertEqual(result["failed_scene"], "intro")
         self.assertEqual(result["committed_scenes"], [])
-        self.assertEqual(calls[-1], ("/items/delete", {"item_ids": ["native:bg"]}))
+        self.assertEqual(calls[-1], ("/items/delete", {"item_ids": ["native:bg"],
+                                                       "expected_timeline_id": ROLLBACK_TIMELINE_ID}))
 
     async def test_unknown_add_outcome_does_not_delete(self):
         calls = []
@@ -485,6 +546,158 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["outcome_unknown"])
         self.assertFalse(result["rolled_back"])
         self.assertNotIn("/items/delete", calls)
+
+    async def test_unverified_add_id_stops_editing_without_deleting_or_saving(self):
+        args = {"plan": {"scenes": [{"id": "intro", "items": [
+            {"id": "a", "type": "text", "text": "a", "length": 10},
+            {"id": "b", "type": "text", "text": "b", "length": 10},
+            {"id": "c", "type": "text", "text": "c", "length": 10},
+        ]}]}, "idempotency_key": "unverified-add-id"}
+        existing = {"item_id": "native:existing", "revision": "r2", "frame": 90,
+                    "layer": 2, "length": 10, "type": "TextItem", "text": "original"}
+        a = {"success": True, "item_id": "native:a", "revision": "r1", "frame": 0,
+             "layer": 1, "length": 10}
+        for invalid_id, issue in (
+            ({}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": None}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": " "}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": "native:bad\n"}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": "\ud800"}, {"error_code": "ITEM_ID_INVALID"}),
+            ({"item_id": "native:existing"}, {"error_code": "ITEM_ID_REUSED", "item_id": "native:existing"}),
+            ({"item_id": "native:a"}, {"error_code": "ITEM_ID_REUSED", "item_id": "native:a"}),
+        ):
+            with self.subTest(invalid_id=invalid_id):
+                b = {"success": True, "revision": "r1", "frame": 10, "layer": 1, "length": 10,
+                     **invalid_id}
+                snapshots = iter(([existing], []))
+                get, posted = self._patches(lambda: next(snapshots), [], [
+                    a, b, {"success": False}, {"success": True}, {"success": True},
+                ])
+                with get, posted as post:
+                    result = await server.dispatch({"action": "apply_edit", **args})
+                self.assertEqual([entry.args[0] for entry in post.await_args_list],
+                                 ["/items/text", "/items/text"])
+                self.assertEqual(result["error_code"], "EDIT_ADD_ID_UNVERIFIED")
+                self.assertEqual(result["failed_id"], "b")
+                self.assertEqual(result["verification"], issue)
+                self.assertNotIn("failure", result)
+                self.assertTrue(result["outcome_unknown"])
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result["added"], 1)
+                self.assertEqual([item["item_id"] for item in result["details"]], ["native:a"])
+
+    async def test_failed_scene_requires_readback_after_delete(self):
+        args = {"plan": {"scenes": [{"id": "intro", "items": [
+            {"id": "a", "type": "text", "text": "a", "length": 10},
+            {"id": "b", "type": "text", "text": "b", "length": 10},
+            {"id": "c", "type": "text", "text": "c", "length": 10},
+        ]}]}, "idempotency_key": "rollback-readback"}
+        a = {"item_id": "native:a", "revision": "r1", "frame": 0, "length": 10}
+        b = {"item_id": "native:b", "revision": "r1", "frame": 10, "length": 10}
+        for readback, expected_added, expected_ids, unknown in (
+            ({"items": [b], "count": 1, "timeline_id": ROLLBACK_TIMELINE_ID}, 1, ["native:b"], False),
+            ({"items": [], "count": 1, "timeline_id": ROLLBACK_TIMELINE_ID}, 2, [], True),
+            ({"items": [], "count": 0, "timeline_id": "timeline:" + "b" * 32}, 2, [], True),
+            ({"items": [], "count": 0}, 2, [], True),
+            ({"success": False, "error_code": "ITEMS_UNAVAILABLE"}, 2, [], True),
+            ({"items": [], "count": 0, "error_code": "ITEMS_UNAVAILABLE"}, 2, [], True),
+            (httpx.ConnectError("readback disconnected"), 2, [], True),
+        ):
+            with self.subTest(readback=readback):
+                get = AsyncMock(side_effect=[
+                    {"characters": []}, {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID},
+                    {"bindings": []}, readback,
+                ])
+                post = AsyncMock(side_effect=[
+                    {"success": True, **a}, {"success": True, **b}, {"success": False},
+                    {"success": True, "removed": 2, "item_ids": ["native:a", "native:b"]},
+                    {"success": True},
+                ])
+                with patch.object(server, "ymm4_get", get), patch.object(server, "ymm4_post", post):
+                    result = await server.dispatch({"action": "apply_edit", **args})
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result["added"], expected_added)
+                self.assertEqual(result.get("outcome_unknown", False), unknown)
+                self.assertEqual(result["rollback"]["error_code"], "ROLLBACK_VERIFY_FAILED")
+                self.assertIn(call("/items/delete", {"item_ids": ["native:a", "native:b"],
+                                                     "expected_timeline_id": ROLLBACK_TIMELINE_ID}),
+                              post.await_args_list)
+                binding_posts = [call.args[1] for call in post.await_args_list
+                                 if call.args[0] == "/edits/bindings"]
+                self.assertEqual([item["item_id"] for body in binding_posts
+                                  for item in body["items"]], expected_ids)
+
+    async def test_uncertain_add_after_prior_success_keeps_scene_for_inspection(self):
+        for failure, expected_code, saves_bindings in (
+            ({"success": False, "error_code": "ADD_OUTCOME_UNKNOWN", "outcome_unknown": True},
+             "EDIT_PARTIAL_FAILURE", True),
+            ({"success": False, "error_code": "TIMELINE_CHANGED", "outcome_unknown": True},
+             "EDIT_PARTIAL_FAILURE", False),
+            (None, "EDIT_PARTIAL_FAILURE", True),
+            (ValueError("invalid JSON"), "EDIT_REQUEST_FAILED", True),
+        ):
+            with self.subTest(failure=failure):
+                async def post(path, body=None, timeout=10.0):
+                    if path == "/items/video":
+                        return {"success": True, "item_id": "native:bg", "revision": "r1",
+                                "frame": 0, "length": 300}
+                    if path == "/items/voice":
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return {"success": True}
+
+                get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], post)
+                with get, posted as mock_post:
+                    result = await server.dispatch({"action": "apply_edit", **sample_plan()})
+                self.assertEqual(result["error_code"], expected_code)
+                self.assertTrue(result["outcome_unknown"])
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result["added"], 1)
+                self.assertEqual(result["details"][0]["item_id"], "native:bg")
+                calls = ["/items/video", "/items/voice"]
+                if saves_bindings:
+                    calls.append("/edits/bindings")
+                else:
+                    self.assertEqual(result["binding_error"]["error_code"], "TIMELINE_CHANGED")
+                self.assertEqual([entry.args[0] for entry in mock_post.await_args_list], calls)
+
+    async def test_rollback_skips_delete_without_original_timeline(self):
+        with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+            result = await server._delete_item_ids(["native:a"], None)
+        post.assert_not_awaited()
+        self.assertTrue(result["outcome_unknown"])
+        self.assertEqual(result["verification"]["error_code"], "ROLLBACK_TIMELINE_UNAVAILABLE")
+
+    async def test_rollback_stops_when_delete_reports_a_timeline_switch(self):
+        refused = {"success": False, "error_code": "ROLLBACK_TIMELINE_CHANGED"}
+        with patch.object(server, "ymm4_post", AsyncMock(return_value=refused)), \
+             patch.object(server, "ymm4_get", new_callable=AsyncMock) as get:
+            result = await server._delete_item_ids(["native:a"], ROLLBACK_TIMELINE_ID)
+        get.assert_not_awaited()
+        self.assertTrue(result["outcome_unknown"])
+        self.assertEqual(result["verification"], refused)
+
+    async def test_failed_scene_saves_bindings_only_if_delete_failure_is_known(self):
+        for unknown in (True, False):
+            with self.subTest(unknown=unknown):
+                added = {"success": True, "item_id": "native:bg", "revision": "r1",
+                         "frame": 0, "length": 300}
+                refusal = {"success": False, "error": "delete failed", "outcome_unknown": unknown}
+                get, posted = self._patches([], [{"name": "ゆっくり霊夢"}],
+                                            [added, {"success": False}, refusal, {"success": True}])
+                with get, posted as post:
+                    result = await server.dispatch({"action": "apply_edit", **sample_plan()})
+                self.assertFalse(result["rolled_back"])
+                self.assertEqual(result.get("outcome_unknown", False), unknown)
+                self.assertEqual(result["rollback"]["failure"], refusal)
+                self.assertIn(call("/items/delete", {"item_ids": ["native:bg"],
+                                                     "expected_timeline_id": ROLLBACK_TIMELINE_ID}),
+                              post.await_args_list)
+                binding_posts = [entry.args[1] for entry in post.await_args_list
+                                 if entry.args[0] == "/edits/bindings"]
+                binding_ids = [item["item_id"] for body in binding_posts for item in body["items"]]
+                self.assertEqual(binding_ids, [] if unknown else ["native:bg"])
 
     async def test_atomic_scenes_false_keeps_partial_adds(self):
         async def post(path, body=None, timeout=10.0):
@@ -541,9 +754,40 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["added"], 1)
         self.assertEqual(result["details"][0]["item_id"], "native:intro")
         deletes = [body for path, body in calls if path == "/items/delete"]
-        self.assertEqual(deletes, [{"item_ids": ["native:body"]}])
+        self.assertEqual(deletes, [{"item_ids": ["native:body"],
+                                   "expected_timeline_id": ROLLBACK_TIMELINE_ID}])
         bindings = [body for path, body in calls if path == "/edits/bindings"]
         self.assertEqual(bindings[0]["items"][0]["item_id"], "native:intro")
+
+    async def test_missing_live_timeline_after_rollback_blocks_binding_save(self):
+        intro = {"item_id": "native:intro", "revision": "r1", "frame": 0,
+                 "layer": 1, "length": 10, "type": "TextItem", "text": "keep"}
+        body = {**intro, "item_id": "native:body", "frame": 20, "text": "temp"}
+        plan = {"plan": {"scenes": [
+            {"id": "intro", "items": [
+                {"id": "keep", "type": "text", "text": "keep", "layer": 1, "length": 10}]},
+            {"id": "body", "items": [
+                {"id": "temp", "type": "text", "text": "temp", "layer": 1, "frame": 20, "length": 10},
+                {"id": "fail", "type": "text", "text": "fail", "layer": 1, "frame": 40, "length": 10}]},
+        ]}, "idempotency_key": "verify-partial-save"}
+        gets = [{"characters": []}, {"items": [], "count": 0, "timeline_id": ROLLBACK_TIMELINE_ID},
+                {"bindings": []}, {"items": [intro], "count": 1}]
+        posts = [{**intro, "success": True}, {**body, "success": True},
+                 {"success": False, "error": "add failed"},
+                 {"success": True, "removed": 1, "item_ids": ["native:body"]},
+                 {"success": True}]
+        with (
+            patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),
+            patch.object(server, "ymm4_post", AsyncMock(side_effect=posts)) as post,
+        ):
+            result = await server.dispatch({"action": "apply_edit", **plan})
+        self.assertEqual([entry.args[0] for entry in post.await_args_list],
+                         ["/items/text", "/items/text", "/items/text", "/items/delete"])
+        self.assertTrue(result["outcome_unknown"])
+        self.assertFalse(result["rolled_back"])
+        self.assertEqual(result["committed_scenes"], ["intro"])
+        self.assertEqual(result["binding_error"]["error_code"], "TIMELINE_UNAVAILABLE")
+        self.assertEqual(result["rollback"]["verification"]["error_code"], "ROLLBACK_TIMELINE_UNAVAILABLE")
 
     async def test_checkpoint_and_rollback_dispatch(self):
         with patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True, "checkpoint_id": "cp_" + "a" * 32})) as post:

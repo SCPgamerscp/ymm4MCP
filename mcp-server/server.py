@@ -32,7 +32,7 @@ from urllib.parse import quote
 import httpx
 from ymm4_connection import connection_settings, advanced_enabled
 from editing import MAX_FRAME, integer, plan_script, validate_timeline, evaluate_qa_gate, combine_qa_reports, finite_number
-from item_verification import validate_expected_items, verify_items
+from item_verification import read_item_inventory, valid_item_id, validate_expected_items, verify_items
 from ripple_planning import plan_ripple_delete
 from ripple_verification import verify_ripple_result
 from ripple_evidence import RippleEvidenceStore, project_identity
@@ -1780,22 +1780,63 @@ async def _load_edit_binding(key: str | None) -> dict | None:
     return editplan.pick_binding(state.get("bindings"), key)
 
 
-async def _delete_item_ids(item_ids: list[str]) -> dict:
+def _valid_timeline_id(value):
+    return isinstance(value, str) and re.fullmatch(r"timeline:[0-9a-f]{32}", value) is not None
+
+
+def _edit_plan_inventory_error(snapshot):
+    # A host that reports a live timeline ID also reports a complete count.
+    legacy = isinstance(snapshot, dict) and "timeline_id" not in snapshot
+    _, error = read_item_inventory(snapshot, max_items=quality_guard.MAX_SNAPSHOT_ITEMS,
+                                   allow_missing_count=legacy)
+    return error
+
+
+def _rollback_unverified(item_ids, verification):
+    return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
+            "error": "ロールバック対象と同じタイムラインで削除結果を確認できませんでした",
+            "verification": verification, "outcome_unknown": True, "item_ids": item_ids}
+
+
+async def _delete_item_ids(item_ids: list[str], timeline_id: str | None) -> dict:
     ids = [item_id for item_id in item_ids if isinstance(item_id, str) and item_id]
     if not ids:
         return {"success": True, "removed": 0, "item_ids": []}
+    if not _valid_timeline_id(timeline_id):
+        return _rollback_unverified(ids, {"error_code": "ROLLBACK_TIMELINE_UNAVAILABLE"})
     try:
-        res = await ymm4_post("/items/delete", {"item_ids": ids})
-    except httpx.HTTPError:
+        res = await ymm4_post("/items/delete", {"item_ids": ids, "expected_timeline_id": timeline_id})
+    except (httpx.HTTPError, ValueError):
         return {"success": False, "error_code": "ROLLBACK_REQUEST_FAILED",
                 "error": "ロールバック削除の通信に失敗しました。itemsで確認してください。",
                 "outcome_unknown": True, "item_ids": ids}
+    if isinstance(res, dict) and res.get("error_code") in ("ROLLBACK_TIMELINE_CHANGED", "ITEMS_UNAVAILABLE"):
+        return _rollback_unverified(ids, res)
     if not isinstance(res, dict) or res.get("success") is not True:
         return {"success": False, "error_code": "ROLLBACK_FAILED",
                 "error": "失敗シーンの追加分を削除できませんでした",
-                "failure": res, "item_ids": ids}
+                "failure": res, "item_ids": ids,
+                "outcome_unknown": isinstance(res, dict) and res.get("outcome_unknown") is True}
+    try:
+        snapshot = await ymm4_get("/items")
+        inventory, error = read_item_inventory(snapshot,
+                                               max_items=quality_guard.MAX_SNAPSHOT_ITEMS)
+    except (httpx.HTTPError, ValueError):
+        error = {"error_code": "ITEMS_UNAVAILABLE"}
+    if error:
+        return _rollback_unverified(ids, error)
+    observed_id = snapshot.get("timeline_id")
+    if observed_id != timeline_id:
+        return _rollback_unverified(ids, {"error_code": "ROLLBACK_TIMELINE_CHANGED" if observed_id
+                                          else "ROLLBACK_TIMELINE_UNAVAILABLE"})
+    remaining = [item_id for item_id in ids if item_id in inventory]
+    if remaining:
+        return {"success": False, "error_code": "ROLLBACK_VERIFY_FAILED",
+                "error": "失敗シーンの追加アイテムが削除後も残っています",
+                "item_ids": ids, "remaining_item_ids": remaining}
     return {"success": True, "removed": res.get("removed", len(ids)),
-            "item_ids": res.get("item_ids", ids), "missing": res.get("missing") or []}
+            "item_ids": res.get("item_ids", ids), "missing": res.get("missing") or [],
+            "verified": True}
 
 
 async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | None:
@@ -1816,35 +1857,47 @@ async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | Non
 
 async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_index, failed_scene,
                                added, details, bindings, committed, scenes, scene_added_ids,
-                               atomic, scene_details=None, scene_bindings=None, extra=None,
-                               outcome_unknown=False):
+                               atomic, timeline_id, scene_details=None, scene_bindings=None, extra=None,
+                               outcome_unknown=False, timeline_changed=False):
     rollback = None
     rolled_back = False
-    remaining_added = added
+    removed_ids = set()
     remaining_details = list(details)
+    binding_timeline_error = "TIMELINE_CHANGED" if timeline_changed else None
     if atomic and scene_added_ids and not outcome_unknown:
-        rollback = await _delete_item_ids(scene_added_ids)
+        rollback = await _delete_item_ids(scene_added_ids, timeline_id)
         rolled_back = rollback.get("success") is True
+        outcome_unknown = rollback.get("outcome_unknown") is True
+        timeline_error = rollback.get("verification", {}).get("error_code")
+        if timeline_error == "ROLLBACK_TIMELINE_CHANGED":
+            binding_timeline_error = "TIMELINE_CHANGED"
+        elif timeline_error == "ROLLBACK_TIMELINE_UNAVAILABLE" and timeline_id is not None:
+            binding_timeline_error = "TIMELINE_UNAVAILABLE"
         if rolled_back:
-            remaining_added = max(0, added - len(scene_added_ids))
-        elif scene_details:
-            remaining_details = remaining_details + scene_details
-    elif scene_details:
-        remaining_details = remaining_details + scene_details
+            removed_ids.update(scene_added_ids)
+        elif "remaining_item_ids" in rollback:
+            removed_ids = set(scene_added_ids).difference(rollback["remaining_item_ids"])
+    if not rolled_back and scene_details:
+        remaining_details.extend(row for row in scene_details
+                                 if not isinstance(row["item_id"], str) or row["item_id"] not in removed_ids)
     persist = list(bindings)
-    if not rolled_back and scene_bindings:
-        persist.extend(scene_bindings)
-    binding_error = await _persist_edit_bindings(plan, persist)
+    if not rolled_back and scene_bindings and not (rollback and outcome_unknown):
+        persist.extend(row for row in scene_bindings
+                       if not isinstance(row["item_id"], str) or row["item_id"] not in removed_ids)
+    if binding_timeline_error:
+        binding_error = {"error_code": binding_timeline_error} if persist and plan.get("idempotency_key") else None
+    else:
+        binding_error = await _persist_edit_bindings(plan, persist)
     scenes = list(scenes)
     scenes.append({
         "id": failed_scene, "status": "rolled_back" if rolled_back else "partial",
-        "added": 0 if rolled_back else len(scene_added_ids),
+        "added": len(scene_added_ids) - len(removed_ids),
         "failed_id": failed_id,
     })
     result = {
         "success": False, "error_code": error_code, "error": error,
         "failed_id": failed_id, "failed_index": failed_index, "failed_scene": failed_scene,
-        "added": remaining_added, "details": remaining_details, "committed_scenes": committed,
+        "added": max(0, added - len(removed_ids)), "details": remaining_details, "committed_scenes": committed,
         "scenes": scenes, "rolled_back": rolled_back, "atomic_scenes": atomic,
         "plan_hash": editplan.plan_hash(plan), "idempotency_key": plan.get("idempotency_key"),
         "item_count": plan["item_count"],
@@ -1888,15 +1941,19 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
     if isinstance(characters, dict) and characters.get("success") is not False and "error" not in characters:
         names = [c["name"] for c in characters.get("characters", []) if isinstance(c, dict) and "name" in c]
     snapshot = await ymm4_get("/items")
-    if not isinstance(snapshot, dict):
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("items"), list):
+        if isinstance(snapshot, dict) and snapshot.get("success") is False:
+            return snapshot
         return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
                 "error": "タイムラインの状態を取得できません。編集せず停止しました"}
-    if snapshot.get("success") is False or "error" in snapshot:
-        return snapshot
-    items = snapshot.get("items")
-    if not isinstance(items, list):
-        return {"success": False, "error_code": "ITEMS_UNAVAILABLE",
-                "error": "タイムラインの状態を取得できません。編集せず停止しました"}
+    inventory_error = _edit_plan_inventory_error(snapshot)
+    if inventory_error is not None:
+        return {**inventory_error, "rolled_back": False}
+    items = snapshot["items"]
+    timeline_id = snapshot.get("timeline_id")
+    if not dry_run and "timeline_id" in snapshot and not _valid_timeline_id(timeline_id):
+        return {"success": False, "error_code": "TIMELINE_UNAVAILABLE",
+                "error": "編集対象のタイムラインを識別できなかったため停止しました", "rolled_back": False}
     current_snapshot_hash = editplan.snapshot_hash(items)
     if expected_snapshot is not None and expected_snapshot != current_snapshot_hash:
         return {"success": False, "error_code": "SNAPSHOT_HASH_MISMATCH",
@@ -1980,6 +2037,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 "conflicts": content_conflicts, "rolled_back": False}
 
     current_by_id = {item.get("item_id"): item for item in items if isinstance(item, dict)}
+    created_item_ids = set()
     gap = plan["gap"]
     cursor = {scene["id"]: scene["start_frame"] for scene in plan["scenes"]}
     atomic = bool(plan.get("atomic_scenes", True))
@@ -2029,29 +2087,48 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
             payload = dict(op["payload"])
             if op.get("frame_source") == "sequential":
                 payload["frame"] = cursor.get(scene_id, payload.get("frame", 0))
+            if timeline_id is not None:
+                payload["expected_timeline_id"] = timeline_id
             try:
                 res = await ymm4_post(f"/items/{op['kind']}", payload, timeout=120.0)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError):
                 return await _partial_edit_result(
                     plan, error_code="EDIT_REQUEST_FAILED",
-                    error="通信失敗。追加された可能性があるためitemsで確認してください。自動再試行なし。",
+                    error="追加結果を取得できませんでした。追加された可能性があるためitemsで確認してください。自動再試行なし。",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=bindings, committed=committed,
-                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                     scene_details=scene_details, scene_bindings=scene_bindings, outcome_unknown=True)
             if not isinstance(res, dict) or res.get("success") is not True:
+                timeline_changed = isinstance(res, dict) and res.get("error_code") == "TIMELINE_CHANGED"
+                outcome_unknown = (timeline_changed or not isinstance(res, dict) or res.get("success") is not False
+                                   or res.get("outcome_unknown", False) is not False)
                 return await _partial_edit_result(
                     plan, error_code="EDIT_PARTIAL_FAILURE",
                     error="EditPlanの適用に失敗したため停止しました",
                     failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                     added=added, details=details, bindings=bindings, committed=committed,
-                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
-                    scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res})
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
+                    scene_details=scene_details, scene_bindings=scene_bindings, extra={"failure": res},
+                    outcome_unknown=outcome_unknown, timeline_changed=timeline_changed)
+            item_id = res.get("item_id")
+            id_valid = valid_item_id(item_id)
+            if not id_valid or item_id in current_by_id or item_id in created_item_ids:
+                # The write may have happened, but its receipt cannot identify
+                # what to roll back or what to persist for a retry.
+                verification = ({"error_code": "ITEM_ID_REUSED", "item_id": item_id} if id_valid
+                                else {"error_code": "ITEM_ID_INVALID"})
+                return await _partial_edit_result(
+                    plan, error_code="EDIT_ADD_ID_UNVERIFIED",
+                    error="追加アイテムを一意に特定できません。追加・削除を続けずitemsで確認してください。",
+                    failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
+                    added=added, details=details, bindings=[], committed=committed,
+                    scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
+                    scene_details=scene_details, extra={"verification": verification}, outcome_unknown=True)
             added += 1
             scene_added += 1
-            item_id = res.get("item_id")
-            if isinstance(item_id, str) and item_id:
-                scene_added_ids.append(item_id)
+            created_item_ids.add(item_id)
+            scene_added_ids.append(item_id)
             scene_details.append({"id": op["id"], "op": "add", "item_id": item_id,
                                   "revision": res.get("revision"), "kind": op["kind"],
                                   "scene_id": scene_id, "result": res})
@@ -2067,7 +2144,7 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                         error="追加結果の実長を確定できません。推定尺で続行せずitemsで確認してください。",
                         failed_id=op["id"], failed_index=op_index, failed_scene=scene_id,
                         added=added, details=details, bindings=bindings, committed=committed,
-                        scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic,
+                        scenes=scene_reports, scene_added_ids=scene_added_ids, atomic=atomic, timeline_id=timeline_id,
                         scene_details=scene_details, scene_bindings=scene_bindings)
                 cursor[scene_id] = payload.get("frame", 0) + op.get("length", 1) + gap
         bindings.extend(scene_bindings)
@@ -2080,15 +2157,16 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
 
     try:
         verified_snapshot = await ymm4_get("/items")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         verified_snapshot = {"error": str(exc)}
-    if (not isinstance(verified_snapshot, dict) or verified_snapshot.get("success") is False
-            or "error" in verified_snapshot or not isinstance(verified_snapshot.get("items"), list)):
+    inventory_error = _edit_plan_inventory_error(verified_snapshot)
+    if inventory_error is not None or (
+            isinstance(verified_snapshot, dict) and verified_snapshot.get("timeline_id") != timeline_id):
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",
                 "error": "適用後のタイムラインを確認できません。itemsを確認してから再実行してください",
                 "added": added, "details": details, "outcome_unknown": True, "rolled_back": False,
                 "atomic_scenes": atomic, "committed_scenes": committed, "scenes": scene_reports,
-                "verification": verified_snapshot}
+                "verification": inventory_error if inventory_error is not None else verified_snapshot}
     verification_failures = editplan.verify_applied_items(details, verified_snapshot["items"])
     if verification_failures:
         return {"success": False, "error_code": "EDIT_VERIFY_FAILED",

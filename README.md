@@ -268,6 +268,10 @@ Voice の実際の長さが計画より伸びて次のシーンの開始位置�
 
 同じキーで計画を変えると `IDEMPOTENCY_KEY_CONFLICT`、適用済みアイテムの revision が変わると `EDIT_STATE_CONFLICT` で編集前に停止します。全シーンが通ったあとは `/api/items` の実状態を照合し、不一致や取得失敗は `EDIT_VERIFY_FAILED`、バインディング保存失敗は `BINDINGS_NOT_SAVED` を返します。これらは追加済みアイテムを巻き戻さないため、`details` と最新の `items` を確認してから再実行してください。再適用情報を読み取れない場合は `BINDINGS_UNAVAILABLE` で編集せず停止します。
 
+`apply_edit` は、対応するプラグインで各アイテムを追加する直前と適用後の読み戻し時に、編集開始時のタイムラインと照合します。シーン失敗時は、同じタイムラインで削除し、`/api/items` の再取得で追加アイテムが消えたと確認してから `rolled_back: true` を返します。アイテムが残る場合、タイムラインが切り替わった場合、取得結果を確認できない場合は `rollback.error_code: ROLLBACK_VERIFY_FAILED` を返します。タイムラインIDが未実装の旧版プラグインでは従来どおり追加でき、自動削除は確認不能として扱います。
+
+EditPlanは開始前と適用後にアイテム一覧の件数とIDも検証します。開始時に一覧を確認できなければ編集を始めず、適用後に一覧を確認できなければ `EDIT_VERIFY_FAILED` を返して再適用情報の保存を止めます。追加成功の応答に有効な新規IDがない場合や既存IDと重複する場合は `EDIT_ADD_ID_UNVERIFIED` と `outcome_unknown: true` を返し、追加・削除・再適用情報の保存を停止します。
+
 チェックポイントは `item_id` のスナップショットです。rollbackは「後から増えたアイテムの削除」であり、削除済みアイテムやプロパティ変更は復元しません。完全復元が必要なら `backup=true` で `.ymmp` をコピーし、`control/open` で開きます。
 
 ```python
