@@ -5,9 +5,9 @@ import unittest
 from ripple_verification import verify_ripple_result
 
 
-def item(identity, frame, **kwargs):
+def item(identity, frame, *, revision="r1", **kwargs):
     return {"item_id": identity, "frame": frame, "length": 10, "layer": 1,
-            "revision": "r1", "end_frame": frame + 10,
+            "revision": revision, "end_frame": frame + 10,
             "type": "VideoItem", "source_path": "C:/a.mp4", **kwargs}
 
 
@@ -25,7 +25,7 @@ class RippleIntegrityTests(unittest.TestCase):
         self.after = snap(item("moved", 10,
             effects=[{"type": "fade", "opacity": 0.5}],
             keyframes={"Zoom": [{"frame": 0, "value": 1.0}]},
-            volume=0.25, source_offset=7), item("untouched", 0,
+            volume=0.25, source_offset=7, revision="r2"), item("untouched", 0,
             effects=[{"type": "blur", "radius": 3}]))
         self.revisions = {"cut": "r1", "moved": "r1"}
 
@@ -97,10 +97,13 @@ class RippleIntegrityTests(unittest.TestCase):
         a["items"][0]["source_path"] = "\ud800"
         self.assertEqual(self.check(a)["error_code"], "RIPPLE_AFTER_SNAPSHOT_INVALID")
 
-    def test_revision_can_advance(self):
+    def test_move_with_unchanged_revision_fails(self):
         a = copy.deepcopy(self.after)
-        a["items"][0]["revision"] = "r2"
-        self.assertTrue(self.check(a)["passed"])
+        a["items"][0]["revision"] = "r1"
+        result = self.check(a)
+        self.assertFalse(result["passed"])
+        self.assertIn({"code": "RIPPLE_REVISION_UNCHANGED", "item_id": "moved"},
+                      result["issues"])
 
     def test_inputs_unchanged(self):
         before, after = copy.deepcopy(self.before), copy.deepcopy(self.after)

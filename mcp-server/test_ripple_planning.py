@@ -52,6 +52,27 @@ class RipplePlanningTests(unittest.TestCase):
                       end_frame=20, expected_revisions={"a": "r1"})
         self.assertEqual(result["error_code"], "RIPPLE_CONFLICT")
 
+    def test_explicit_expectations_are_checked_for_missing_and_out_of_scope_items(self):
+        for items, conflicts in (
+            ([], [{"item_id": "a", "reason": "expected_item_missing"}]),
+            ([item("a", 0, revision="r2")],
+             [{"item_id": "a", "reason": "expected_revision_mismatch"}]),
+            ([item("a", 20, layer=2, revision="r2")],
+             [{"item_id": "a", "reason": "expected_revision_mismatch"}]),
+            ([item("a", 0)], []),
+            ([item("a", 20, layer=2)], []),
+        ):
+            with self.subTest(items=items):
+                result = plan({"items": items}, start_frame=10, end_frame=20, layers=[1],
+                              expected_revisions={"a": "r1"})
+                self.assertEqual(result["success"], not conflicts)
+                if conflicts:
+                    self.assertEqual(result["error_code"], "RIPPLE_CONFLICT")
+                    self.assertEqual(result["conflicts"], conflicts)
+                    self.assertEqual(result["affected_item_ids"], [])
+                else:
+                    self.assertEqual(result["operations"], [])
+
     def test_duplicate_id_across_layers(self):
         result = plan({"items": [item("a", 0), item("a", 20, layer=2)]},
                       start_frame=10, end_frame=20)

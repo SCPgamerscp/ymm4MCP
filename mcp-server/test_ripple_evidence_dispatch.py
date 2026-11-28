@@ -38,6 +38,8 @@ class RippleEvidenceDispatchTests(unittest.IsolatedAsyncioTestCase):
                 {"action": "verify_ripple_delete", "plan_id": plan["plan_id"]})
         self.assertTrue(result["passed"])
         self.assertFalse(result["atomicity_verified"])
+        self.assertFalse(plan["timeline_identity_captured"])
+        self.assertFalse(result["timeline_identity_checked"])
         self.assertEqual(result["before_sha256"], plan["before_sha256"])
         self.assertEqual(get.await_count, 6)
         post.assert_not_awaited()
@@ -64,6 +66,37 @@ class RippleEvidenceDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "RIPPLE_EVIDENCE_UNAVAILABLE")
         self.assertNotIn("plan_id", result)
+
+    async def test_captured_timeline_identity_must_match_live_readback(self):
+        timeline_id = "timeline:" + "a" * 32
+        before = {**BEFORE, "timeline_id": timeline_id}
+        for after, expected_error in (
+            ({**AFTER, "timeline_id": timeline_id}, None),
+            ({**AFTER, "timeline_id": "timeline:" + "b" * 32}, "RIPPLE_TIMELINE_CHANGED"),
+            (AFTER, "RIPPLE_TIMELINE_UNAVAILABLE"),
+            ({**AFTER, "timeline_id": None}, "RIPPLE_TIMELINE_UNAVAILABLE"),
+            ({**AFTER, "timeline_id": "invalid"}, "RIPPLE_TIMELINE_UNAVAILABLE"),
+        ):
+            with self.subTest(after=after), \
+                    patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                        PROJECT, before, PROJECT, PROJECT, after, PROJECT])), \
+                    patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                plan = await server.dispatch(self.plan_args())
+                self.assertTrue(plan["timeline_identity_captured"])
+                result = await server.dispatch({
+                    "action": "verify_ripple_delete", "plan_id": plan["plan_id"]})
+                self.assertEqual(result.get("error_code"), expected_error)
+                self.assertEqual(result["passed"], expected_error is None)
+                if expected_error is None:
+                    self.assertTrue(result["timeline_identity_checked"])
+                post.assert_not_awaited()
+
+    async def test_explicitly_unavailable_timeline_cannot_be_captured(self):
+        with patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                PROJECT, {**BEFORE, "timeline_id": None}, PROJECT])):
+            plan = await server.dispatch(self.plan_args())
+        self.assertEqual(plan["error_code"], "RIPPLE_EVIDENCE_UNAVAILABLE")
+        self.assertNotIn("plan_id", plan)
 
     async def test_project_switch_during_capture_fails_without_plan_handle(self):
         with patch.object(server, "ymm4_get", new_callable=AsyncMock,

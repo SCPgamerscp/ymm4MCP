@@ -4,6 +4,7 @@ This does NOT execute edits or prove atomicity. The caller supplies a trusted
 pre-edit /items snapshot and this module compares it with a fresh post-edit one.
 """
 import json
+import re
 from ripple_planning import MAX_ITEMS, _frame, _item_id, _revision, plan_ripple_delete
 
 MAX_ISSUES = 100
@@ -17,6 +18,16 @@ def _canonical(value):
     """Type-sensitive, deterministic JSON representation; reject unsafe evidence."""
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def snapshot_timeline_id(snapshot):
+    """A missing ID denotes a legacy response. A supplied ID must be usable."""
+    if "timeline_id" not in snapshot:
+        return None
+    identity = snapshot["timeline_id"]
+    if not isinstance(identity, str) or re.fullmatch(r"timeline:[0-9a-f]{32}", identity) is None:
+        raise ValueError("live timeline identity is unavailable")
+    return identity
 
 
 def _inventory(snapshot):
@@ -78,6 +89,15 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
     if new is None:
         return {"success": False, "passed": False,
                 "error_code": "RIPPLE_AFTER_SNAPSHOT_INVALID"}
+    try:
+        before_timeline = snapshot_timeline_id(before)
+        after_timeline = snapshot_timeline_id(after)
+    except ValueError:
+        return {"success": False, "passed": False, "error_code": "RIPPLE_TIMELINE_UNAVAILABLE"}
+    if before_timeline != after_timeline:
+        return {"success": False, "passed": False,
+                "error_code": ("RIPPLE_TIMELINE_UNAVAILABLE" if None in (before_timeline, after_timeline)
+                               else "RIPPLE_TIMELINE_CHANGED")}
 
     operations = {op["item_id"]: op for op in plan["operations"]}
     issues = []
@@ -107,12 +127,15 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
             if type(actual[field]) is not type(expected) or actual[field] != expected:
                 issue("RIPPLE_FIELD_MISMATCH", identity, field=field,
                       expected=expected, actual=actual[field])
-        # An edited item must remain addressable by a valid optimistic revision.
+        # The host includes the frame in the revision, so a move must change it.
         # Unaffected items cannot silently gain/lose/change their revisions:
         # such drift could mean a concurrent editor touched the timeline.
         if operation:
-            if not _revision(actual.get("revision")):
+            revision = actual.get("revision")
+            if not _revision(revision):
                 issue("RIPPLE_REVISION_UNAVAILABLE", identity)
+            elif revision == operation["expected_revision"]:
+                issue("RIPPLE_REVISION_UNCHANGED", identity)
         elif ("revision" in item) != ("revision" in actual) or (
                 item.get("revision") != actual.get("revision")):
             issue("RIPPLE_CONTENT_CHANGED", identity, field="revision")
@@ -138,6 +161,7 @@ def verify_ripple_result(before, after, *, start_frame, end_frame,
             "checked_before_count": len(old), "checked_after_count": len(new),
             "planned_delete_count": plan["delete_count"],
             "planned_move_count": plan["move_count"], "issues": issues,
+            "timeline_identity_checked": before_timeline is not None,
             "executed": False, "atomicity_verified": False,
             "scope": "Read-only complete snapshot geometry/identity/all-observed-field comparison; "
                      "does not prove atomicity, source trimming, save/reopen or visual QA"}

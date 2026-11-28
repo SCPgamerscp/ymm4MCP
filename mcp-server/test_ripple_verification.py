@@ -36,6 +36,14 @@ class RippleVerificationTests(unittest.TestCase):
         self.assertFalse(result["atomicity_verified"])
         self.assertEqual((result["planned_delete_count"], result["planned_move_count"]), (1, 1))
 
+    def test_expected_item_missing_from_before_snapshot_prevents_noop_pass(self):
+        result = verify(snap(), snap(), start_frame=10, end_frame=20,
+                        expected_revisions={"cut": "r1"})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_code"], "RIPPLE_PREFLIGHT_FAILED")
+        self.assertEqual(result["preflight"]["conflicts"],
+                         [{"item_id": "cut", "reason": "expected_item_missing"}])
+
     def test_deleted_item_still_present(self):
         after = snap(*self.after["items"], self.before["items"][1])
         self.assertIn("RIPPLE_ITEM_NOT_DELETED",

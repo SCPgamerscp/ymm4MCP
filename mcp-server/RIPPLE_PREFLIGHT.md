@@ -12,7 +12,13 @@ range, and `move` operations for items starting at or after the end.
 An item crossing a cut boundary returns `RIPPLE_SPLIT_REQUIRED` rather than
 silently shortening the source. Missing, stale or ambiguous item IDs/revisions
 return `RIPPLE_CONFLICT` or `RIPPLE_ID_AMBIGUOUS`. Malformed snapshots are
-rejected. Plans are sorted by layer/frame/ID to make review reproducible.
+rejected. A live preflight requires `/api/items` to report an integer `count`
+matching `items`, including `count: 0` for an empty timeline. Plans are sorted
+by layer/frame/ID to make review reproducible.
+Every explicitly supplied `expected_revisions` entry is checked, even if
+the current cut would leave the item untouched. An ID absent from the
+inventory is reported as `expected_item_missing`. A matching revision for
+an untouched item is allowed and does not add an operation.
 
 **Safety limit:** `success=true` means the plan passed static preflight,
 not that the edit is complete or even executable. The response deliberately
@@ -57,8 +63,9 @@ hardcoded set of text/source fields. Missing/added fields and type changes
 are reported as `RIPPLE_CONTENT_CHANGED`. The only excluded comparison
 fields are `frame` (checked against the plan), `end_frame` **or the
 actual YMM4 host spelling `endFrame`** (if present, must equal
-`frame + length` and retain field presence), and `revision` (which may
-advance after a legitimate edit).
+`frame + length` and retain field presence), and `revision`. A moved item
+must have a new revision because its frame is part of the revision hash.
+An unchanged revision is reported as `RIPPLE_REVISION_UNCHANGED`.
 
 Inventories with inconsistent `count`, duplicate IDs, impossible
 `end_frame`, non-finite JSON values or invalid Unicode are rejected.
@@ -130,6 +137,15 @@ separators. POSIX absolute paths retain their case (two different project files
 may differ only by case). Drive-relative paths, Windows root-relative paths,
 bare UNC shares, and device-namespace paths cannot be used as evidence
 identities. This is still a path-based check, not an immutable project ID.
+
+Hosts that supply `timeline_id` in `/api/items` also allow verification of
+the active timeline within the project. Capture reports
+`timeline_identity_captured`, and verification reports
+`timeline_identity_checked` after comparing the two IDs. A changed ID
+returns `RIPPLE_TIMELINE_CHANGED`. An invalid or missing ID on either side
+of a comparison with identity data returns `RIPPLE_TIMELINE_UNAVAILABLE`.
+When both snapshots omit the field, the legacy item comparison still runs
+and reports `timeline_identity_checked=false`.
 
 This is **not** a project-instance lock. Reopening the same path, switching
 away and back between individual reads, or changing the underlying file

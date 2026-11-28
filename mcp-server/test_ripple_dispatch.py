@@ -6,8 +6,41 @@ import server
 
 
 class RippleDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_preflight_requires_an_explicit_inventory_count(self):
+        item = {"item_id": "native:cut", "frame": 10, "length": 10,
+                "layer": 1, "revision": "r1"}
+        for items, count, valid in (([], {}, False), ([item], {}, False),
+                                    ([item], {"count": True}, False),
+                                    ([item], {"count": 2}, False),
+                                    ([], {"count": 0}, True), ([item], {"count": 1}, True)):
+            with self.subTest(items=items, count=count), \
+                 patch.object(server, "ymm4_get", AsyncMock(return_value={"items": items, **count})) as get, \
+                 patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
+                result = await server.dispatch({
+                    "action": "plan_ripple_delete", "start_frame": 10, "end_frame": 20,
+                    "expected_revisions": {"native:cut": "r1"} if items else {}})
+                self.assertEqual(result["success"], valid)
+                if not valid:
+                    self.assertEqual(result["error_code"], "RIPPLE_SNAPSHOT_UNAVAILABLE")
+                    self.assertNotIn("operations", result)
+                get.assert_awaited_once_with("/items")
+                post.assert_not_awaited()
+
+    async def test_caller_snapshot_with_a_different_timeline_id_does_not_pass(self):
+        before = {"count": 1, "items": [
+            {"item_id": "after", "frame": 20, "length": 10, "layer": 1, "revision": "r1"}],
+            "timeline_id": "timeline:" + "a" * 32}
+        after = {"count": 1, "items": [{**before["items"][0], "frame": 10, "revision": "r2"}],
+                 "timeline_id": "timeline:" + "b" * 32}
+        with patch.object(server, "ymm4_get", AsyncMock(return_value=after)):
+            result = await server.dispatch({
+                "action": "verify_ripple_delete", "before_snapshot": before,
+                "start_frame": 10, "end_frame": 20, "expected_revisions": {"after": "r1"}})
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_code"], "RIPPLE_TIMELINE_CHANGED")
+
     async def test_dispatch_only_reads_live_items(self):
-        snapshot = {"success": True, "items": [
+        snapshot = {"success": True, "count": 2, "items": [
             {"item_id": "native:cut", "frame": 10, "length": 10,
              "layer": 1, "revision": "r1"},
             {"item_id": "native:after", "frame": 20, "length": 10,
@@ -33,7 +66,7 @@ class RippleDispatchTests(unittest.IsolatedAsyncioTestCase):
             get.assert_not_awaited()
 
     async def test_stale_revision_fails_without_post(self):
-        snapshot = {"items": [{"item_id": "native:a", "frame": 30,
+        snapshot = {"count": 1, "items": [{"item_id": "native:a", "frame": 30,
                                "length": 10, "layer": 1, "revision": "new"}]}
         with (patch.object(server, "ymm4_get", new_callable=AsyncMock, return_value=snapshot),
               patch.object(server, "ymm4_post", new_callable=AsyncMock) as post):

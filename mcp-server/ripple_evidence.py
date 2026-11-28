@@ -12,7 +12,7 @@ import posixpath
 import secrets
 import time
 
-from ripple_verification import _inventory, verify_ripple_result
+from ripple_verification import _inventory, snapshot_timeline_id, verify_ripple_result
 
 
 @dataclass(frozen=True)
@@ -91,6 +91,7 @@ class RippleEvidenceStore:
         identity = project_identity(project_info)
         if _inventory(before) is None:
             raise ValueError("complete host inventory with count/items is required")
+        timeline_id = snapshot_timeline_id(before)
         parameters = dict(start_frame=start_frame, end_frame=end_frame,
                           layers=layers, expected_revisions=expected_revisions)
         try:
@@ -111,6 +112,7 @@ class RippleEvidenceStore:
                                                parameters_json, digest, identity)
         return {"plan_id": token, "before_sha256": digest,
                 "project_identity_checked": True,
+                "timeline_identity_captured": timeline_id is not None,
                 "evidence_source": "server_captured_host_inventory",
                 "evidence_expires_in_seconds": self.TTL_SECONDS}
 

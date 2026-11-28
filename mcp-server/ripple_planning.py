@@ -37,7 +37,7 @@ def _conflict(code, message, **details):
 
 
 def plan_ripple_delete(snapshot, *, start_frame, end_frame,
-                       layers=None, expected_revisions=None):
+                       layers=None, expected_revisions=None, require_count=False):
     """Preflight [start_frame, end_frame) without mutating the host.
 
     Fully enclosed items are deleted; later items are shifted left. Items
@@ -67,21 +67,22 @@ def plan_ripple_delete(snapshot, *, start_frame, end_frame,
             or "error" in snapshot or "error_code" in snapshot
             or not isinstance(snapshot.get("items"), list)
             or len(snapshot["items"]) > MAX_ITEMS
-            or ("count" in snapshot and
-                (type(snapshot["count"]) is not int
+            or ((require_count or "count" in snapshot) and
+                (type(snapshot.get("count")) is not int
                  or snapshot["count"] != len(snapshot["items"])))):
         return _conflict("RIPPLE_SNAPSHOT_UNAVAILABLE", "Complete timeline inventory is required")
 
-    seen, operations, affected = set(), [], []
+    observed_revisions, operations, affected = {}, [], []
     boundary_conflicts, revision_conflicts = [], []
     delta = end - start
     for index, item in enumerate(snapshot["items"]):
         if not isinstance(item, dict):
             return _conflict("RIPPLE_SNAPSHOT_INVALID", "Malformed timeline item", index=index)
         identity = item.get("item_id")
-        if not _item_id(identity) or identity in seen:
+        if not _item_id(identity) or identity in observed_revisions:
             return _conflict("RIPPLE_ID_AMBIGUOUS", "Missing, invalid or duplicate item ID", index=index)
-        seen.add(identity)
+        revision = item.get("revision")
+        observed_revisions[identity] = revision
         try:
             frame = _frame(item.get("frame"), "item frame")
             length = _frame(item.get("length"), "item length", 1)
@@ -114,7 +115,6 @@ def plan_ripple_delete(snapshot, *, start_frame, end_frame,
         else:
             continue
         affected.append(identity)
-        revision = item.get("revision")
         expected = expected_revisions.get(identity)
         if not _revision(revision) or expected != revision:
             revision_conflicts.append({"item_id": identity,
@@ -128,9 +128,21 @@ def plan_ripple_delete(snapshot, *, start_frame, end_frame,
         return _conflict("RIPPLE_SPLIT_REQUIRED",
                          "Boundary-crossing items need source-aware split/trim before ripple deletion",
                          conflicts=boundary_conflicts)
+    # A previously reviewed item may disappear or move out of scope before
+    # this read. Check explicit expectations even if there is no operation.
+    for identity in sorted(expected_revisions.keys() - set(affected)):
+        if identity not in observed_revisions:
+            reason = "expected_item_missing"
+        elif not _revision(observed_revisions[identity]):
+            reason = "missing_revision"
+        elif observed_revisions[identity] != expected_revisions[identity]:
+            reason = "expected_revision_mismatch"
+        else:
+            continue
+        revision_conflicts.append({"item_id": identity, "reason": reason})
     if revision_conflicts:
         return _conflict("RIPPLE_CONFLICT",
-                         "Affected items require matching optimistic revisions",
+                         "Affected items and explicitly expected items require matching revisions",
                          conflicts=revision_conflicts, affected_item_ids=affected)
     operations.sort(key=lambda op: (op["layer"], op.get("frame", op.get("from_frame")),
                                     op["item_id"]))
