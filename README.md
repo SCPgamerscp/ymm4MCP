@@ -128,6 +128,7 @@ PRではWindowsのGitHub Actionsが公式YMM4 LiteのDLLを参照して `.ymme` 
 | `POST /api/project/save` | プロジェクト保存 |
 | `POST /api/project/open` | `.ymmp` をパス指定で開く |
 | `POST /api/project/save-as` | 別名保存（`overwrite`で上書き）。既存ファイルは先にバックアップ |
+| `POST /api/project/save-template-as` | `expected_template_path` が保存済みのまま開かれていることを確認して別名保存。上書き不可 |
 | `POST /api/project/export` | 完成動画書き出しを**ジョブとして投入**。すぐ `job_id` を返す |
 | `GET  /api/jobs` | 最近のジョブ一覧 |
 | `GET  /api/jobs/{id}` | 進捗・phase・検証結果 |
@@ -245,7 +246,7 @@ action="control", sub_action="save_as", path="C:/proj/b.ymmp", overwrite=True
 
 `open` は未保存変更がある場合 `UNSAVED_CHANGES`、保存状態を取得できない場合 `PROJECT_SAVE_STATE_UNKNOWN` を返して停止します。現在の内容を確認して保存した後に再実行するか、破棄を意図する場合は `force=True` を指定してください。YMM4本体の確認ダイアログが表示される場合は、その操作も必要です。
 
-テンプレートから新しい制作を始める場合は `ymm4_interact(action="create_from_template", template_path="C:/projects/template.ymmp", path="C:/projects/new.ymmp")` を使います。元の `.ymmp` の存在、保存先が未使用であること、現在開いているプロジェクトに未保存変更がないことを確認してから、テンプレートを開き、別名保存し、開いているパスと保存状態を再確認します。`dry_run=true` は事前確認のみです。保存に失敗するとテンプレートが開いた状態で残るため、`opened_template_path` とエラーを確認してください。保存先の上書きや未保存変更の強制破棄は行いません。YMM4 の起動は事前に必要です。
+テンプレートから新しい制作を始める場合は `ymm4_interact(action="create_from_template", template_path="C:/projects/template.ymmp", path="C:/projects/new.ymmp")` を使います。元の `.ymmp` の存在、保存先が未使用であること、現在開いているプロジェクトに未保存変更がないことを確認してから、テンプレートを開き、別名保存し、開いているパスと保存状態、保存先に空でないファイルが作成されたことをYMM4側で再確認します。ファイルの確認後、保存先のプロジェクトが引き続き開かれ、保存済みであることも確認します。開く操作や保存の結果が不明な場合は、編集を続行せず結果不明を返します。適用には `guarded_template_save` に対応したYMM4プラグインが必要です。保存直前にプロジェクトが切り替わっていたり、テンプレートに未保存変更があったりする場合は `TEMPLATE_SOURCE_CHANGED` で停止します。`dry_run=true` は事前確認のみです。保存エラーの後はYMM4で開いているプロジェクトとエラーを確認してください。保存先の上書きや未保存変更の強制破棄は行いません。YMM4 の起動は事前に必要です。
 
 `save` と `save_as` で既存の `.ymmp` を上書きする前に、以前の内容をローカルの `YMM4MCP/project-backups` にコピーします。応答の `backup_path` から退避先を確認できます。コピーに失敗した場合は `BACKUP_FAILED` で保存せず停止します。新規保存または現在のプロジェクトパスを取得できない場合はバックアップ先が `null` です。退避ファイルの整理は利用者が行ってください。
 

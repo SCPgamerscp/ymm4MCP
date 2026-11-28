@@ -239,6 +239,7 @@ namespace YMM4McpPlugin
                     ("POST", "/api/project/save") => SaveCurrentProject(),
                     ("POST", "/api/project/open") => await OpenProject(req),
                     ("POST", "/api/project/save-as") => await SaveProjectAs(req),
+                    ("POST", "/api/project/save-template-as") => await SaveProjectAs(req, templateCopy: true),
                     // ── 全機能アクセス用 汎用API ──────────────────────
                     ("POST", "/api/command") => await ExecCommandApi(req),
                     ("GET",  "/api/commands") => ListCommands(),
@@ -297,7 +298,7 @@ namespace YMM4McpPlugin
                 persistent_item_ids = "native_when_available", final_video_export = true,
                 resumable_jobs = true, transactions = true, scene_transactions = true,
                 checkpoints = true, keyframe_api = true,
-                automatic_visual_audio_qa = false, project_open_save_as = true,
+                automatic_visual_audio_qa = false, project_open_save_as = true, guarded_template_save = true,
                 declarative_edits = true, idempotent_edits = true
             },
             limitations = new[] { "Native operations require an open YMM4 timeline and a compatible MainModel signature.",
