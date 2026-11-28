@@ -583,6 +583,15 @@ async def restore_checkpoint_backup(checkpoint_id: str) -> dict:
             _same_project_path(backup, original) or
             not isinstance(digest, str) or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None):
         return {**unknown, "details": restored}
+    try:
+        expected_project = project_identity({"success": True, "projectPath": backup})
+        opened = await ymm4_get("/project")
+        opened_project = project_identity(opened)
+    except (httpx.HTTPError, ValueError) as exc:
+        return {**unknown, "backup_path": backup, "error": str(exc)}
+    if opened_project != expected_project or opened.get("isSaved") is not True:
+        return {**unknown, "backup_path": backup, "verification": opened,
+                "error": "指定したバックアップが保存済みプロジェクトとして開かれていることを確認できません"}
     return restored
 
 

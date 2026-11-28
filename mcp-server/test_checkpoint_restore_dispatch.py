@@ -19,14 +19,43 @@ RESTORED = {
     "backup_sha256": "A" * 64,
     "original_project_path": "C:/projects/original.ymmp",
 }
+OPENED = {"success": True, "projectPath": "C:/CHECKPOINTS/cp_12345678.ymmp", "isSaved": True}
 
 
 class CheckpointRestoreDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirmed_restore_uses_only_the_restore_endpoint(self):
-        with patch.object(server, "ymm4_post", AsyncMock(return_value=RESTORED)) as post:
+        with (
+            patch.object(server, "ymm4_post", AsyncMock(return_value=RESTORED)) as post,
+            patch.object(server, "ymm4_get", AsyncMock(return_value=OPENED)) as get,
+        ):
             self.assertEqual(await server.dispatch(RESTORE), RESTORED)
         post.assert_awaited_once_with("/edits/restore-backup", {
             "checkpoint_id": CHECKPOINT, "confirm_restore_backup": True})
+        get.assert_awaited_once_with("/project")
+
+    async def test_success_receipt_does_not_certify_a_different_or_unverified_open_project(self):
+        for state in (
+            {**OPENED, "projectPath": RESTORED["original_project_path"]},
+            {**OPENED, "isSaved": False},
+            {**OPENED, "isSaved": 1},
+            {**OPENED, "error_code": "UNAVAILABLE"},
+            None,
+            httpx.ReadTimeout("project readback timed out"),
+            ValueError("invalid project JSON"),
+        ):
+            with self.subTest(state=state):
+                with (
+                    patch.object(server, "ymm4_post", AsyncMock(return_value=RESTORED)) as post,
+                    patch.object(server, "ymm4_get", AsyncMock(side_effect=[state])) as get,
+                ):
+                    result = await server.dispatch(RESTORE)
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "RESTORE_OUTCOME_UNKNOWN")
+                self.assertIs(result["outcome_unknown"], True)
+                self.assertEqual(result["backup_path"], RESTORED["backup_path"])
+                post.assert_awaited_once_with("/edits/restore-backup", {
+                    "checkpoint_id": CHECKPOINT, "confirm_restore_backup": True})
+                get.assert_awaited_once_with("/project")
 
     async def test_unconfirmed_or_invalid_restore_sends_no_edit(self):
         with patch.object(server, "ymm4_post", new_callable=AsyncMock) as post:
@@ -70,14 +99,19 @@ class CheckpointRestoreDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_only_explicit_false_outcome_unknown_can_confirm_restore(self):
         for flag in (True, None, 0, "false", False):
             receipt = {**RESTORED, "outcome_unknown": flag}
-            with self.subTest(flag=flag), \
-                 patch.object(server, "ymm4_post", AsyncMock(return_value=receipt)) as post:
+            with (
+                self.subTest(flag=flag),
+                patch.object(server, "ymm4_post", AsyncMock(return_value=receipt)) as post,
+                patch.object(server, "ymm4_get", AsyncMock(return_value=OPENED)) as get,
+            ):
                 result = await server.dispatch(RESTORE)
                 if flag is False:
                     self.assertEqual(result, receipt)
+                    get.assert_awaited_once_with("/project")
                 else:
                     self.assertIs(result["success"], False)
                     self.assertEqual(result["error_code"], "RESTORE_OUTCOME_UNKNOWN")
+                    get.assert_not_awaited()
             post.assert_awaited_once()
 
     async def test_restore_timeout_is_indeterminate_and_is_not_retried(self):
