@@ -46,8 +46,8 @@ class FakeYmm4:
         if request.url.path == "/api/items/keyframes":
             prop = request.url.params.get("prop")
             props = [prop] if prop else list(self.frames)
-            return httpx.Response(200, json={"success": True,
-                "item_id": self.animation_item_id,
+            identity = {} if self.animation_item_id is None else {"item_id": self.animation_item_id}
+            return httpx.Response(200, json={"success": True, **identity,
                 "inventory_complete": prop is None,
                 "revision": "r1", "animations": [{"prop": p,
                     "keyframes": self.frames[p]} for p in props]})
@@ -95,12 +95,14 @@ class KeyframePersistenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeError, "original live timeline is still active"):
             verify(self.client, BASE, HEADERS, self.snapshot)
 
-    def test_verify_rejects_animation_readback_from_another_image(self):
+    def test_verify_rejects_unidentified_or_different_animation_readback(self):
         self.capture()
         self.save()
-        self.fake.animation_item_id = "native:other"
-        with self.assertRaisesRegex(ProbeError, "Keyframe readback returned a different item"):
-            verify(self.client, BASE, HEADERS, self.snapshot)
+        for returned_id in (None, "native:other"):
+            with self.subTest(returned_id=returned_id):
+                self.fake.animation_item_id = returned_id
+                with self.assertRaisesRegex(ProbeError, "Keyframe readback did not identify the requested item"):
+                    verify(self.client, BASE, HEADERS, self.snapshot)
 
     def test_verify_rejects_missing_live_timeline_after_capture(self):
         self.fake.timeline_metadata = {"timeline_id": BEFORE_TIMELINE}

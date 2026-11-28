@@ -10,6 +10,7 @@ from check_keyframe_compat import ProbeError, run_probe
 BASE = "http://127.0.0.1:8765/api"
 HEADERS = {"X-Ymm4-Token": "fake-test-token"}
 TIMELINE_ID = "timeline:" + "a" * 32
+ITEM_ID = "native:test/with spaces"
 
 
 class FakeYmm4:
@@ -52,7 +53,7 @@ class FakeYmm4:
         if request.method == "GET":
             if request.url.path == "/api/items":
                 return httpx.Response(200, json={"timeline_id": self.timeline_id, "items": [
-                    {"item_id": "native:test/with spaces",
+                    {"item_id": ITEM_ID,
                      "length": self.item_length, "type": self.item_type,
                      "revision": f"r{self.revision}"}
                     for _ in range(self.item_count)]})
@@ -60,6 +61,7 @@ class FakeYmm4:
             if prop is None:
                 assert request.url.params.get("strict_inventory") == "1"
                 return httpx.Response(200, json={"success": True,
+                                                 "item_id": ITEM_ID,
                                                  "inventory_complete": self.inventory_complete,
                                                  "supports_expected_timeline_id": True,
                                                  "animations": [
@@ -84,9 +86,9 @@ class FakeYmm4:
                 self.frames[prop][-1]["value"] += 50
                 self.revision += 1
             if prop not in self.frames:
-                return httpx.Response(200, json={"success": True, "animations": [],
+                return httpx.Response(200, json={"success": True, "item_id": ITEM_ID, "animations": [],
                                                   "revision": f"r{self.revision}"})
-            return httpx.Response(200, json={"success": True, "animations": [
+            return httpx.Response(200, json={"success": True, "item_id": ITEM_ID, "animations": [
                 {"prop": prop, "keyframes": [dict(f) for f in self.frames[prop]]}],
                 "revision": f"r{self.revision}"})
         body = json.loads(request.content)
@@ -158,7 +160,7 @@ class FakeYmm4:
 
 def probe(fake, at=24):
     with httpx.Client(transport=httpx.MockTransport(fake), trust_env=False) as client:
-        run_probe(client, BASE, HEADERS, "native:test/with spaces", at,
+        run_probe(client, BASE, HEADERS, ITEM_ID, at,
                   {"Zoom": 1.25, "X": 80.0})
 
 
@@ -236,19 +238,25 @@ class LiveProbeProtocolTests(unittest.TestCase):
                     probe(incomplete_inventory, at=None)
                 self.assertEqual(fake.posts, [])
 
-    def test_readback_for_a_different_item_stops_before_keyframe_writes(self):
-        for property_read in (False, True):
-            with self.subTest(property_read=property_read):
+    def test_missing_or_mismatched_readback_id_stops_before_keyframe_writes(self):
+        for property_read, returned_id in ((False, None), (True, None),
+                                           (False, "native:other"), (True, "native:other")):
+            with self.subTest(property_read=property_read, returned_id=returned_id):
                 fake = FakeYmm4()
 
                 def mismatched_readback(request):
                     response = fake(request)
                     if (request.method == "GET" and request.url.path == "/api/items/keyframes"
                             and ("prop" in request.url.params) == property_read):
-                        return httpx.Response(200, json={**response.json(), "item_id": "native:other"})
+                        payload = response.json()
+                        if returned_id is None:
+                            payload.pop("item_id", None)
+                        else:
+                            payload["item_id"] = returned_id
+                        return httpx.Response(200, json=payload)
                     return response
 
-                with self.assertRaisesRegex(ProbeError, "Keyframe readback returned a different item"):
+                with self.assertRaisesRegex(ProbeError, "Keyframe readback did not identify the requested item"):
                     probe(mismatched_readback, at=None)
                 self.assertEqual(fake.posts, [])
 

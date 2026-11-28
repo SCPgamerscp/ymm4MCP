@@ -42,8 +42,8 @@ def _read_item_keyframes(client: httpx.Client, base: str, headers: dict[str, str
                          item_id: str, query: str) -> dict:
     path = f"/items/keyframes?item_id={quote(item_id, safe='')}&{query}"
     result = api(client, base, headers, "GET", path)
-    if result.get("item_id", item_id) != item_id:
-        raise ProbeError("Keyframe readback returned a different item")
+    if result.get("item_id") != item_id:
+        raise ProbeError("Keyframe readback did not identify the requested item")
     return result
 
 
