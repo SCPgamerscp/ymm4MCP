@@ -1,5 +1,6 @@
 """Read-only installation acceptance tests; no real YMM4 required."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,7 +26,8 @@ class InstallationAcceptanceTests(unittest.TestCase):
                       / "Roaming" / "Claude" / "claude_desktop_config.json")
         self.status = Mock(return_value={"status": "running", "port": 8765,
                                          "version": "1.5.0"})
-        self.mcp = Mock(return_value={"tool_count": 4})
+        self.mcp = Mock(side_effect=lambda _python, _server, *, env, expected_port:
+                        {"tool_count": 4, "status_port": expected_port})
         self.write_config(self.classic)
 
     def write_config(self, path, *, command=None, args=None, env=None):
@@ -36,9 +38,9 @@ class InstallationAcceptanceTests(unittest.TestCase):
             entry["env"] = env
         path.write_text(json.dumps({"mcpServers": {"ymm4": entry}}), encoding="utf-8")
 
-    def inspect(self):
+    def inspect(self, **options):
         return inspect_installation(self.local, self.appdata,
-                                    status_check=self.status, mcp_probe=self.mcp)
+                                    status_check=self.status, mcp_probe=self.mcp, **options)
 
     def test_real_install_and_authenticated_status(self):
         self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
@@ -46,7 +48,10 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.assertTrue(report["success"])
         self.assertEqual(report["claude_profiles_checked"], 2)
         self.assertEqual(report["mcp_profiles_checked"], 2)
+        self.assertEqual([call.kwargs["expected_port"] for call in self.mcp.call_args_list],
+                         [8765, 8765])
         self.assertEqual(report["mcp_stdio"], "ready")
+        self.assertEqual(report["mcp_status"], "running")
         self.assertEqual(self.mcp.call_count, 2)
         self.assertEqual(self.status.call_count, 2)
         self.assertNotIn("token", json.dumps(report).lower())
@@ -121,6 +126,28 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.inspect()
         self.status.assert_not_called()
 
+    def test_uninstall_during_stdio_probe_invalidates_accepted_installation(self):
+        def probe(_python, server, *, env, expected_port):
+            server.unlink()
+            return {"tool_count": 4, "status_port": expected_port}
+
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "Installation files changed"):
+            self.inspect()
+
+    def test_replacement_with_same_size_and_mtime_invalidates_accepted_installation(self):
+        def probe(python, _server, *, env, expected_port):
+            original = python.stat()
+            replacement = python.with_suffix(".tmp")
+            replacement.write_bytes(python.read_bytes())
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            replacement.replace(python)
+            return {"tool_count": 4, "status_port": expected_port}
+
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "Installation files changed"):
+            self.inspect()
+
     def test_stale_store_profile_fails_even_if_classic_is_valid(self):
         self.write_config(self.store, command="C:/old/removed/python.exe")
         with self.assertRaisesRegex(InstallationError, "persistent Python"):
@@ -131,6 +158,22 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.write_config(self.classic, args=["C:/temporary/server.py"])
         with self.assertRaisesRegex(InstallationError, "persistent server"):
             self.inspect()
+
+    def test_relative_profile_paths_do_not_depend_on_probe_working_directory(self):
+        previous = Path.cwd()
+        try:
+            os.chdir(self.server)
+            for field, value, error in (
+                ("command", str(self.python.relative_to(self.server)), "persistent Python"),
+                ("args", ["server.py"], "persistent server"),
+            ):
+                with self.subTest(field=field):
+                    self.write_config(self.classic, **{field: value})
+                    with self.assertRaisesRegex(InstallationError, error):
+                        self.inspect()
+        finally:
+            os.chdir(previous)
+        self.status.assert_not_called()
 
     def test_configured_port_is_used_for_live_probe_and_restored(self):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
@@ -150,10 +193,62 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.inspect()
         self.status.assert_not_called()
 
+    def test_profiles_with_loopback_aliases_agree_on_port(self):
+        self.write_config(self.classic, env={"YMM4_API_BASE": "http://localhost:8765/api"})
+        self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api/"})
+        self.assertEqual(self.inspect()["port"], 8765)
+        self.assertEqual(self.status.call_count, 2)
+        self.assertEqual(self.mcp.call_count, 2)
+
     def test_port_mismatch_fails(self):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:9000/api"})
         with self.assertRaisesRegex(InstallationError, "port differs"):
             self.inspect()
+
+    def test_expected_port_rejects_stale_configuration_or_live_status(self):
+        self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:8765/api"})
+        with self.assertRaisesRegex(InstallationError, "configured port differs"):
+            self.inspect(expected_port=8766)
+        self.status.assert_not_called()
+        self.write_config(self.classic)
+        with self.assertRaisesRegex(InstallationError, "Running YMM4 port differs"):
+            self.inspect(expected_port=8766)
+        self.status.assert_called_once()
+        self.mcp.assert_not_called()
+
+    def test_expected_port_bounds_fail_before_probing(self):
+        for port in (True, 1023, 65536, "8766"):
+            with self.subTest(port=port), self.assertRaisesRegex(InstallationError, "1024..65535"):
+                self.inspect(expected_port=port)
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
+
+    def test_expected_port_requires_default_descriptor_even_with_profile_overrides(self):
+        self.write_config(self.classic, env={"YMM4_API_BASE": "http://127.0.0.1:8766/api",
+                                            "YMM4_API_TOKEN": "profile-token"})
+        descriptor = self.local / "YMM4MCP" / "connection.json"
+        with patch.dict(os.environ, {"YMM4_CONNECTION_FILE": "unrelated.json",
+                                     "YMM4_API_BASE": "http://127.0.0.1:9999/api",
+                                     "YMM4_API_TOKEN": "terminal-token"}):
+            for descriptor_port in (8765, 8766):
+                with self.subTest(descriptor_port=descriptor_port):
+                    def authenticate():
+                        if os.environ.get("YMM4_CONNECTION_FILE") == str(descriptor):
+                            self.assertNotIn("YMM4_API_BASE", os.environ)
+                            self.assertNotIn("YMM4_API_TOKEN", os.environ)
+                            return {"status": "running", "port": descriptor_port}
+                        self.assertEqual(os.environ["YMM4_API_TOKEN"], "profile-token")
+                        return {"status": "running", "port": 8766}
+
+                    self.status.reset_mock()
+                    self.status.side_effect = authenticate
+                    if descriptor_port == 8765:
+                        with self.assertRaisesRegex(InstallationError, "descriptor differs"):
+                            self.inspect(expected_port=8766)
+                    else:
+                        self.assertEqual(self.inspect(expected_port=8766)["port"], 8766)
+                    self.assertEqual(self.status.call_count, 2)
+                    self.assertEqual(os.environ["YMM4_CONNECTION_FILE"], "unrelated.json")
 
     def test_external_api_url_rejected_before_network(self):
         self.write_config(self.classic, env={"YMM4_API_BASE": "http://example.org:8765/api"})
@@ -168,8 +263,27 @@ class InstallationAcceptanceTests(unittest.TestCase):
 
     def test_missing_claude_config_fails(self):
         self.classic.unlink()
+        self.classic.parent.rmdir()
         with self.assertRaisesRegex(InstallationError, "No initialized"):
             self.inspect()
+
+    def test_initialized_profile_without_config_fails_even_if_other_profile_is_valid(self):
+        self.store.parent.mkdir(parents=True)
+        with self.assertRaisesRegex(InstallationError, "Missing Claude Desktop configuration"):
+            self.inspect()
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
+
+        self.write_config(self.store)
+        self.classic.unlink()
+        with self.assertRaisesRegex(InstallationError, "Missing Claude Desktop configuration"):
+            self.inspect()
+        self.status.assert_not_called()
+        self.mcp.assert_not_called()
+
+    def test_uninitialized_store_package_does_not_require_configuration(self):
+        (self.local / "Packages" / "Claude_Test").mkdir(parents=True)
+        self.assertEqual(self.inspect()["claude_profiles_checked"], 1)
 
     def test_invalid_authenticated_status_fails(self):
         self.status.return_value = {"status": "stopped", "port": 8765}
@@ -228,9 +342,20 @@ class InstallationAcceptanceTests(unittest.TestCase):
         self.status.assert_called_once()
 
     def test_stdio_missing_required_tools_blocks_acceptance(self):
+        self.mcp.side_effect = None
         self.mcp.return_value = {"tool_count": 0}
         with self.assertRaisesRegex(InstallationError, "tool discovery failed"):
             self.inspect()
+
+    def test_stdio_status_failure_cannot_be_hidden_by_direct_http_success(self):
+        self.mcp.side_effect = [
+            {"tool_count": 4, "status_port": 8765},
+            {"tool_count": 4, "status_port": 8766},
+        ]
+        self.write_config(self.store)
+        with self.assertRaisesRegex(InstallationError, "status port was not verified"):
+            self.inspect()
+        self.assertEqual(self.status.call_count, 2)
 
     def test_claude_profile_environment_is_used_for_stdio(self):
         self.write_config(self.classic, env={
@@ -247,12 +372,36 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.assertNotIn("YMM4_API_BASE", self.mcp.call_args.kwargs["env"])
 
     def test_profile_change_during_stdio_blocks_acceptance(self):
-        def probe(_python, _server, *, env):
+        def probe(_python, _server, *, env, expected_port):
             self.write_config(self.classic, command="C:/old/python.exe")
-            return {"tool_count": 4}
+            return {"tool_count": 4, "status_port": expected_port}
         self.mcp.side_effect = probe
         with self.assertRaisesRegex(InstallationError, "changed during"):
             self.inspect()
+
+    def test_store_profile_initialized_during_stdio_blocks_acceptance(self):
+        def probe(_python, _server, *, env, expected_port):
+            self.write_config(self.store, env={"YMM4_API_BASE": "http://127.0.0.1:8766/api"})
+            return {"tool_count": 4, "status_port": expected_port}
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "profiles changed during"):
+            self.inspect()
+        self.assertEqual(self.mcp.call_count, 1)
+        self.assertEqual(self.status.call_count, 1)
+
+        # The subsequent run sees the new profile and rejects its old port.
+        with self.assertRaisesRegex(InstallationError, "differs from the running"):
+            self.inspect()
+
+    def test_new_store_profile_directory_without_config_blocks_acceptance(self):
+        def probe(_python, _server, *, env, expected_port):
+            self.store.parent.mkdir(parents=True)
+            return {"tool_count": 4, "status_port": expected_port}
+
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "profiles changed during"):
+            self.inspect()
+        self.assertEqual(self.mcp.call_count, 1)
 
     def test_non_string_claude_env_rejected_before_network(self):
         self.write_config(self.classic, env={"GEMINI_API_KEY": 123})

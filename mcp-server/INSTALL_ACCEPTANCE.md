@@ -9,12 +9,24 @@
 
 `check_installation.cmd` は**読み取り専用**です。永続インストール先のPython・server.py・requirements.txt、通常版と初期化済みMicrosoft Store版のClaude Desktop設定、Pythonとserver.pyの絶対パス、設定されたループバックポートを検査します。さらに**初期化済みのClaude Desktopプロファイルごとに**、そのプロファイルの接続先・トークン・接続ディスクリプタで `check_connection.check()` を実行し、正しいトークンでstatusが成功し、不正なトークンではHTTP 401になることを確認します。プロファイル間で接続ポートが違う場合は失敗します。検証用ターミナルだけに設定された `YMM4_API_BASE`・`YMM4_API_TOKEN`・`YMM4_CONNECTION_FILE` は継承しません。APIトークンやClaudeの環境変数の値は表示しません。
 
+通常版またはMicrosoft Store版の設定ディレクトリが作成済みで、`claude_desktop_config.json` が欠けている場合は失敗します。検査中にプロファイルの初期化や設定ファイルの変更が検出された場合も、変更が終わってから再実行してください。
+
 失敗した場合は、YMM4のMCPサーバーが起動しているか、Claude Desktop設定が古いZIP展開先を指していないか、ポートが一致しているかを確認してください。失敗時も設定を変更しません。テストは`python -m unittest -v test_check_installation`で実行でき、HTTPはモックです。
 
 **未検証事項:** この検証は実機のYMM4を自動操作せず、`.ymme` のダブルクリック操作そのもの、正式Releaseのasset公開、Claude Desktop内での実際のMCPツール実行は証明しません。これらの実機確認と関連PRのマージが完了するまでIssue #22はOpenのままにします。
 
+## ポート変更後の確認
+
+YMM4の画面でポートを変更し、MCPサーバーを再起動します。Claude Desktopでポートを明示設定している場合は、新しいポートに合わせてください。変更先が8766の場合はPowerShellで以下を実行します。
+
+```powershell
+& "$env:LOCALAPPDATA\YMM4MCP\mcp-server\check_installation.cmd" --expected-port 8766
+```
+
+`--expected-port` を指定すると、初期化済みのClaudeプロファイルがすべて変更先のポートで認証できることを確認します。ユーザー既定の `connection.json` からも認証し、Claude側に個別設定がある場合でも、プラグインが更新した接続先を検査します。
+
 ## MCP stdio の実接続検査
 
-`check_installation.cmd` は認証付きHTTP statusに加え、インストール先のPythonを**実際に子プロセス起動**して、各Claude Desktopプロファイルの環境変数でMCP `initialize` と `tools/list` を実行します。`ymm4_interact`・`ymm4_preview`・`ymm4_analyze_video` の3ツールが見えなければ失敗します。危険な `ymm4_advanced` は設定で明示的に有効化した場合だけ公開されるため必須にしません。**編集ツールの呼び出しは行いません**。成功時の `mcp_stdio: ready` と `mcp_profiles_checked` はClaudeのプロセス起動・MCPハンドシェイクの確認であり、Claude DesktopのGUIから実際に利用できることの保証ではありません。失敗時にAPIキー・トークン・プロファイル環境変数を出力しません。
+`check_installation.cmd` は認証付きHTTP statusに加え、インストール先のPythonを**実際に子プロセス起動**して、各Claude Desktopプロファイルの環境変数でMCP `initialize` と `tools/list` を実行します。`ymm4_interact`・`ymm4_preview`・`ymm4_analyze_video` の3ツールが見えなければ失敗します。危険な `ymm4_advanced` は設定で明示的に有効化した場合だけ公開されるため必須にしません。続けて読み取り専用の `ymm4_interact/get_info/status` を子プロセス経由で呼び、YMM4が稼働中であり、直接のHTTP検査とポートが一致することを確認します。成功時は `mcp_stdio: ready`、`mcp_status: running`、`mcp_profiles_checked` を返します。Claude DesktopのGUIからの操作は別途確認してください。失敗時にAPIキー・トークン・プロファイル環境変数を出力しません。
 
-CIでは `python -m unittest -v test_check_mcp_stdio` により同じSDKを用いた実プロセスのMCP初期化を確認します。これはWindows/YMM4実機での配布・プラグイン読み込み確認とは区別してください。
+CIでは `python -m unittest -v test_check_mcp_stdio` により同じSDKを用いた実プロセスのMCP初期化と、ローカルのテスト用HTTPサーバーへのstatus呼び出しを確認します。これはWindows/YMM4実機での配布・プラグイン読み込み確認とは区別してください。
