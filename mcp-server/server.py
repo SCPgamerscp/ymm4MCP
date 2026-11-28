@@ -810,7 +810,8 @@ async def run_bgm_ducking(args: dict) -> dict:
         return {"success": False, "error_code": "BGM_DUCKING_PROJECT_CONFLICT",
                 "backup_path": backup, "applied": []}
     try:
-        conflict = await quality_guard.verify_snapshot(ymm4_get, snapshot["items"])
+        conflict = await quality_guard.verify_snapshot(
+            ymm4_get, snapshot["items"], initial_inventory=snapshot)
     except Exception as exc:
         return {"success": False, "error_code": "BGM_DUCKING_SNAPSHOT_UNKNOWN",
                 "error": str(exc), "backup_path": backup, "applied": []}

@@ -98,6 +98,30 @@ class DuckingDispatchTests(unittest.IsolatedAsyncioTestCase):
                 result = await self._apply_with_checkpoint_readback(readback)
                 self.assertEqual(result["error_code"], "BGM_DUCKING_VOLUME_UNAVAILABLE")
 
+    async def test_active_timeline_is_rechecked_after_checkpoint(self):
+        initial = {**ITEMS, "count": 2, "timeline_id": "timeline:" + "a" * 32}
+        project = {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}
+        backup = {"success": True, "backup_path": "C:/backup/cp.ymmp",
+                  "project_path": project["projectPath"]}
+        for current, code in (
+            ({**initial, "timeline_id": "timeline:" + "b" * 32}, "BGM_DUCKING_TIMELINE_CHANGED"),
+            ({**ITEMS, "count": 2}, "BGM_DUCKING_TIMELINE_ID_UNAVAILABLE"),
+            ({**initial, "count": 3}, "BGM_DUCKING_ITEMS_INVENTORY_INCOMPLETE"),
+        ):
+            with self.subTest(code=code):
+                gets = [initial, KEYS, project, current, KEYS]
+                with (
+                    patch.object(server, "ymm4_get", AsyncMock(side_effect=gets)),
+                    patch.object(server, "ymm4_post", AsyncMock(return_value=backup)) as post,
+                ):
+                    result = await server.dispatch({"action": "duck_bgm", "bgm_item_id": "bgm:1",
+                                                    "dry_run": False})
+                post.assert_awaited_once_with("/edits/checkpoint", {
+                    "backup": True, "reason": "Before BGM ducking"})
+                self.assertEqual(result["error_code"], code)
+                self.assertEqual(result["applied"], [])
+                self.assertEqual(result["backup_path"], backup["backup_path"])
+
     async def _apply_with_checkpoint_readback(self, readback):
         backup = {"success": True, "backup_path": "C:/backup/cp.ymmp", "project_path": "C:/Projects/episode.ymmp"}
         gets = [ITEMS, KEYS, {"success": True, "isSaved": True, "projectPath": "C:/Projects/episode.ymmp"}, ITEMS, readback]
