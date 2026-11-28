@@ -769,6 +769,24 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertIsNone(error)
 
+    async def test_binding_for_an_item_outside_the_plan_stops_before_editing(self):
+        record = one_text_record()
+        unexpected = {"id": "other", "item_id": "native:other", "revision": "r2"}
+        record["items"].append(unexpected)
+        for action in ("plan_edit", "apply_edit", "reconcile_edit"):
+            with self.subTest(action=action):
+                get = AsyncMock(side_effect=[
+                    {"characters": []}, {"items": []}, {"bindings": [record]}, {"items": []},
+                ])
+                with patch.object(server, "ymm4_get", get), patch.object(
+                        server, "ymm4_post", new_callable=AsyncMock) as posted:
+                    result = await server.dispatch({"action": action, **one_text_plan()})
+                posted.assert_not_awaited()
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+                self.assertEqual(result["unexpected_binding_ids"], ["other"])
+                self.assertFalse(result["rolled_back"])
+
     async def test_partial_edit_reports_unconfirmed_binding_save(self):
         for saved in (None, {}, {"success": 1}, {"success": True, "error": "disk error"},
                       {"success": True, "item_count": 0},

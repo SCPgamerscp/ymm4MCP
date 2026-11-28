@@ -381,7 +381,7 @@ def pick_binding(bindings, key):
 
 
 def binding_conflict(plan, current_items, record):
-    """Reject key reuse or edits to items already claimed by this plan."""
+    """Reject key reuse, unrelated bindings, or edits to items claimed by this plan."""
     if not isinstance(record, dict):
         return None
     expected_hash = plan_hash(plan)
@@ -393,11 +393,20 @@ def binding_conflict(plan, current_items, record):
             "plan_hash": expected_hash, "bound_plan_hash": record.get("plan_hash"),
             "rolled_back": False,
         }
+    desired = flatten_items(plan)
+    mapped = bindings_map(record)
+    unexpected = sorted(mapped.keys() - {item["id"] for item in desired})
+    if unexpected:
+        return {
+            "success": False, "error_code": "EDIT_STATE_CONFLICT",
+            "error": "Saved bindings contain item identifiers outside this EditPlan",
+            "idempotency_key": plan.get("idempotency_key"),
+            "unexpected_binding_ids": unexpected, "rolled_back": False,
+        }
     current_by_id = {item.get("item_id"): item for item in current_items
                      if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
-    mapped = bindings_map(record)
     changed = []
-    for item in flatten_items(plan):
+    for item in desired:
         bound = mapped.get(item["id"])
         if not bound:
             continue
