@@ -19,6 +19,29 @@ namespace YMM4McpPlugin
         private readonly SemaphoreSlim _editGate = new(1, 1);
         private static readonly ConditionalWeakTable<object, RuntimeItemIdentity> RuntimeItemIdentities = new();
         private static readonly ConditionalWeakTable<object, RuntimeItemRevision> RuntimeItemRevisions = new();
+        private static readonly ConditionalWeakTable<object, string> RuntimeTimelineIds = new();
+
+        private static object? GetTimelineModel(object timelineViewModel)
+            => timelineViewModel.GetType().GetField("timeline", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.GetValue(timelineViewModel);
+
+        private static string? GetTimelineId(object? timelineModel)
+            => timelineModel == null ? null : RuntimeTimelineIds.GetValue(timelineModel,
+                static _ => "timeline:" + Guid.NewGuid().ToString("N"));
+
+        private static string? GetExpectedTimelineId(Dictionary<string, JsonElement> body)
+        {
+            if (!body.ContainsKey("expected_timeline_id")) return null;
+            string id = GetStr(body, "expected_timeline_id", "");
+            if (!id.StartsWith("timeline:", StringComparison.Ordinal) ||
+                !Guid.TryParseExact(id[9..], "N", out _))
+                throw new ArgumentException("expected_timeline_id must be a live timeline identifier");
+            return id;
+        }
+
+        private static bool IsCurrentTimeline(object vm, object timeline, string expectedId)
+            => ReferenceEquals(GetPropObj(vm, "ActiveTimelineViewModel"), timeline)
+                && GetTimelineId(GetTimelineModel(timeline)) == expectedId;
 
         private sealed class RuntimeItemIdentity
         {

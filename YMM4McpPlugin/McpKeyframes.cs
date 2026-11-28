@@ -101,6 +101,7 @@ namespace YMM4McpPlugin
                     layer = located.layer,
                     properties = names,
                     inventory_complete = strictInventory,
+                    supports_expected_timeline_id = true,
                     animations
                 };
             });
@@ -113,8 +114,11 @@ namespace YMM4McpPlugin
             int tl = GetInt(body, "layer", -1);
             string itemId = GetStr(body, "item_id", "");
             string expectedRevision = GetStr(body, "expected_revision", "");
+            string? expectedTimelineId = GetExpectedTimelineId(body);
             if (expectedRevision.Length > 0 && itemId.Length == 0)
                 return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
+            if (expectedTimelineId != null && itemId.Length == 0)
+                return Failure("TIMELINE_REQUIRES_ITEM_ID", "expected_timeline_id を使う場合は item_id も指定してください");
             TimelineInputValidation.RequireItemTarget(body);
             string prop = GetStr(body, "prop", "");
             if (string.IsNullOrWhiteSpace(prop)) throw new ArgumentException("prop is required");
@@ -130,6 +134,16 @@ namespace YMM4McpPlugin
             {
                 var located = LocateTimelineItem(itemId, tf, tl);
                 if (located.error != null) return located.error;
+                if (expectedTimelineId != null)
+                {
+                    // Keep the check in the same dispatcher operation as
+                    // item selection and the native keyframe write.
+                    var activeVm = GetMainViewModel();
+                    var activeTimeline = activeVm == null ? null : GetPropObj(activeVm, "ActiveTimelineViewModel");
+                    if (activeVm == null || activeTimeline == null ||
+                        !IsCurrentTimeline(activeVm, activeTimeline, expectedTimelineId))
+                        return Failure("KEYFRAME_TIMELINE_CHANGED", "キーフレーム編集対象のタイムラインが切り替わりました");
+                }
                 var item = located.item!;
                 var conflict = RevisionConflict(item, expectedRevision);
                 if (conflict != null) return conflict;

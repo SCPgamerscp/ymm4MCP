@@ -9,6 +9,7 @@ from check_keyframe_compat import ProbeError, run_probe
 
 BASE = "http://127.0.0.1:8765/api"
 HEADERS = {"X-Ymm4-Token": "fake-test-token"}
+TIMELINE_ID = "timeline:" + "a" * 32
 
 
 class FakeYmm4:
@@ -36,6 +37,7 @@ class FakeYmm4:
         self.item_length = 100
         self.item_type = "ImageItem"
         self.item_count = 1
+        self.timeline_id = TIMELINE_ID
         self.inventory_complete = True
         self.force_revision_conflict = False
         self.external_change_before_cleanup = None
@@ -49,7 +51,7 @@ class FakeYmm4:
         assert request.url.host == "127.0.0.1"
         if request.method == "GET":
             if request.url.path == "/api/items":
-                return httpx.Response(200, json={"items": [
+                return httpx.Response(200, json={"timeline_id": self.timeline_id, "items": [
                     {"item_id": "native:test/with spaces",
                      "length": self.item_length, "type": self.item_type,
                      "revision": f"r{self.revision}"}
@@ -59,6 +61,7 @@ class FakeYmm4:
                 assert request.url.params.get("strict_inventory") == "1"
                 return httpx.Response(200, json={"success": True,
                                                  "inventory_complete": self.inventory_complete,
+                                                 "supports_expected_timeline_id": True,
                                                  "animations": [
                     {"prop": name, "keyframes": [dict(f) for f in frames]}
                     for name, frames in self.frames.items()],
@@ -88,6 +91,9 @@ class FakeYmm4:
                 "revision": f"r{self.revision}"})
         body = json.loads(request.content)
         self.posts.append(body)
+        if body.get("expected_timeline_id", self.timeline_id) != self.timeline_id:
+            return httpx.Response(200, json={"success": False,
+                                              "error_code": "KEYFRAME_TIMELINE_CHANGED"})
         prop, at, action = body["prop"], body["at"], body["action"]
         if body["expected_revision"] != f"r{self.revision}":
             return httpx.Response(200, json={"success": False,
@@ -157,6 +163,58 @@ def probe(fake, at=24):
 
 
 class LiveProbeProtocolTests(unittest.TestCase):
+    def test_missing_timeline_identity_prevents_writes(self):
+        fake = FakeYmm4()
+
+        def old_host(request):
+            response = fake(request)
+            if request.url.path == "/api/items":
+                payload = response.json()
+                payload.pop("timeline_id")
+                return httpx.Response(200, json=payload)
+            return response
+
+        with self.assertRaisesRegex(ProbeError, "requires a live timeline identity"):
+            probe(old_host)
+        self.assertEqual(fake.posts, [])
+
+    def test_timeline_identity_without_host_write_guard_prevents_writes(self):
+        fake = FakeYmm4()
+
+        def host_without_write_guard(request):
+            response = fake(request)
+            if request.url.params.get("strict_inventory") == "1":
+                payload = response.json()
+                payload.pop("supports_expected_timeline_id")
+                return httpx.Response(200, json=payload)
+            return response
+
+        with self.assertRaisesRegex(ProbeError, "requires host support for timeline-bound keyframe writes"):
+            probe(host_without_write_guard)
+        self.assertEqual(fake.posts, [])
+
+    def test_timeline_switch_at_insert_reedit_or_cleanup_is_rejected_by_host(self):
+        for switch_at in (0, 1, 2):
+            with self.subTest(switch_at=switch_at):
+                fake = FakeYmm4()
+                active_before = None
+
+                def switched_at_post(request):
+                    nonlocal active_before
+                    if request.method == "POST" and len(fake.posts) == switch_at:
+                        # A different timeline has the same item ID, animation
+                        # state and revision when the queued write arrives.
+                        fake.timeline_id = "timeline:" + "b" * 32
+                        active_before = json.dumps(fake.frames)
+                    return fake(request)
+
+                with self.assertRaisesRegex(ProbeError, "KEYFRAME_TIMELINE_CHANGED"):
+                    probe(switched_at_post)
+                self.assertEqual(len(fake.posts), switch_at + 1)
+                self.assertEqual([post["expected_timeline_id"] for post in fake.posts],
+                                 [TIMELINE_ID] * (switch_at + 1))
+                self.assertEqual(json.dumps(fake.frames), active_before)
+
     def test_incomplete_item_inventory_stops_before_keyframe_writes(self):
         for invalid in (
             {"count": 2},
@@ -214,7 +272,9 @@ class LiveProbeProtocolTests(unittest.TestCase):
                         identity = (new_identity if item_reads > 1 and len(fake.posts) >= switch_after
                                     else initial)
                         payload = response.json()
-                        if identity is not None:
+                        if identity is None:
+                            payload.pop("timeline_id")
+                        else:
                             payload["timeline_id"] = identity
                         return httpx.Response(200, json=payload)
                     return response
@@ -235,6 +295,7 @@ class LiveProbeProtocolTests(unittest.TestCase):
 
         probe(same_timeline, at=None)
         self.assertEqual([post["action"] for post in fake.posts], ["set", "set", "remove"] * 2)
+        self.assertEqual([post["expected_timeline_id"] for post in fake.posts], [TIMELINE_ID] * 6)
 
     def test_last_frame_uses_live_item_length_for_every_write(self):
         fake = FakeYmm4()
