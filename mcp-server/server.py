@@ -871,6 +871,10 @@ async def set_expression(args: dict) -> dict:
     if len(matches) != 1 or not scene_media.is_known_item_type(
             matches[0].get("type"), ("faceitem", "tachiefaceitem")):
         return {"success": False, "error_code": "FACE_ITEM_NOT_FOUND", "item_id": item_id}
+    timeline_id = snapshot.get("timeline_id")
+    if "timeline_id" in snapshot and (not isinstance(timeline_id, str)
+                                       or re.fullmatch(r"timeline:[0-9a-f]{32}", timeline_id) is None):
+        return {"success": False, "error_code": "FACE_TIMELINE_UNAVAILABLE", "item_id": item_id}
     revision = matches[0].get("revision")
     if not ducking.valid_identifier(revision, max_length=256):
         return {"success": False, "error_code": "FACE_REVISION_UNAVAILABLE", "item_id": item_id}
@@ -882,15 +886,18 @@ async def set_expression(args: dict) -> dict:
         return result
     unknown = {"success": False, "error_code": "EXPRESSION_OUTCOME_UNKNOWN",
                "item_id": item_id, "outcome_unknown": True}
+    payload = {"item_id": item_id, "expected_revision": revision, "FacePath": mapping[expression],
+               "require_face_path_readback": True}
+    if timeline_id is not None:
+        payload["expected_timeline_id"] = timeline_id
     try:
-        changed = await ymm4_post("/items/face/param", {
-            "item_id": item_id, "expected_revision": revision, "FacePath": mapping[expression],
-            "require_face_path_readback": True})
+        changed = await ymm4_post("/items/face/param", payload)
     except (httpx.HTTPError, ValueError) as exc:
         return {**unknown, "error": str(exc)}
     if (isinstance(changed, dict) and changed.get("success") is False and
-            changed.get("changed", False) is False and
-            changed.get("outcome_unknown", False) is False):
+            changed.get("outcome_unknown", False) is False and
+            (changed.get("changed") is False or
+             ("changed" not in changed and changed.get("outcome_unknown") is False))):
         return {"success": False, "error_code": "EXPRESSION_UPDATE_FAILED",
                 "item_id": item_id, "details": changed}
     if (not isinstance(changed, dict) or changed.get("success") is not True or

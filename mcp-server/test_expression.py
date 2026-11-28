@@ -37,6 +37,40 @@ class ExpressionTests(unittest.IsolatedAsyncioTestCase):
             "item_id": "native:face", "expected_revision": "r1", "FacePath": "C:/faces/angry.png",
             "require_face_path_readback": True})
 
+    async def test_expression_write_is_bound_to_the_timeline_from_inventory(self):
+        timeline_id = "timeline:" + "a" * 32
+        items = {**ITEMS, "count": 1, "timeline_id": timeline_id}
+        rejected = {"success": False, "changed": False, "outcome_unknown": False,
+                    "error_code": "FACE_TIMELINE_CHANGED"}
+
+        async def apply(path, body, **kwargs):
+            # A second timeline with the same item ID and revision is
+            # active on the host when this queued request is handled.
+            if body.get("expected_timeline_id") == timeline_id:
+                return rejected
+            return VERIFIED
+
+        with (
+            patch.object(server, "ymm4_get", AsyncMock(return_value=items)),
+            patch.object(server, "ymm4_post", AsyncMock(side_effect=apply)) as post,
+        ):
+            result = await server.dispatch({**ARGS, "dry_run": False})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["details"]["error_code"], "FACE_TIMELINE_CHANGED")
+        post.assert_awaited_once()
+
+    async def test_unidentified_live_timeline_stops_before_expression_write(self):
+        for invalid in (None, "", "garbled"):
+            with self.subTest(timeline_id=invalid):
+                items = {**ITEMS, "count": 1, "timeline_id": invalid}
+                with (
+                    patch.object(server, "ymm4_get", AsyncMock(return_value=items)),
+                    patch.object(server, "ymm4_post", AsyncMock(return_value=VERIFIED)) as post,
+                ):
+                    result = await server.dispatch({**ARGS, "dry_run": False})
+                post.assert_not_awaited()
+                self.assertEqual(result["error_code"], "FACE_TIMELINE_UNAVAILABLE")
+
     async def test_unverified_write_cannot_certify_expression_change(self):
         replies = [
             {"success": True, "revision": "r2"},
@@ -48,6 +82,7 @@ class ExpressionTests(unittest.IsolatedAsyncioTestCase):
             {**VERIFIED, "error_code": "FACE_PARAM_UNVERIFIED"},
             {**VERIFIED, "changed": False},
             {"success": False, "outcome_unknown": True, "error_code": "FACE_PARAM_UNVERIFIED"},
+            {"success": False},
             {"success": False, "changed": 1, "error_code": "FACE_PARAM_INVALID"},
             {"success": False, "changed": None, "error_code": "FACE_PARAM_INVALID"},
         ]
