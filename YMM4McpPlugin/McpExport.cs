@@ -156,7 +156,8 @@ namespace YMM4McpPlugin
                     return null;
                 }
                 var invocation = NativeExports.TryStart(() =>
-                    StartNativeExport(discovery, outputPath, format, out completionUnavailable));
+                    StartNativeExport(discovery, outputPath, format, token, out completionUnavailable),
+                    token);
                 if (invocation is null)
                     startErrorCode = NativeExports.CompletionUnknown
                         ? "EXPORT_COMPLETION_UNAVAILABLE" : "EXPORT_NATIVE_BUSY";
@@ -598,7 +599,8 @@ namespace YMM4McpPlugin
         }
 
         private static (bool invoked, string method, string target, Task? task) StartNativeExport(
-            ExportDiscovery discovery, string outputPath, string format, out bool completionUnavailable)
+            ExportDiscovery discovery, string outputPath, string format, CancellationToken token,
+            out bool completionUnavailable)
         {
             completionUnavailable = false;
             foreach (var (target, method, obj) in discovery.Methods)
@@ -613,6 +615,7 @@ namespace YMM4McpPlugin
                     ? new object[] { outputPath } : new object[] { outputPath, format };
                 // A thrown host call may have already started work. Do not
                 // also invoke a fallback exporter for this job.
+                token.ThrowIfCancellationRequested();
                 var result = method.Invoke(obj, args);
                 return (true, method.Name, target, ExportInvocationPolicy.GetCompletionTask(result));
             }
@@ -636,6 +639,7 @@ namespace YMM4McpPlugin
                 {
                     continue;
                 }
+                token.ThrowIfCancellationRequested();
                 var result = execute.Invoke(command, new object[] { outputPath });
                 return (true, name, target, ExportInvocationPolicy.GetCompletionTask(result));
             }

@@ -48,6 +48,18 @@ int invocations = 0;
     return (true, "OutputAsync", "Project", task);
 }
 
+using var cancelledDuringPreparation = new CancellationTokenSource();
+cancelledDuringPreparation.Token.ThrowIfCancellationRequested();
+cancelledDuringPreparation.Cancel();
+cancelled = false;
+try
+{
+    tracker.TryStart(() => Start(active.Task), cancelledDuringPreparation.Token);
+}
+catch (OperationCanceledException) { cancelled = true; }
+Check(cancelled && invocations == 0 && !tracker.CompletionUnknown,
+    "Cancellation after preparation starts must prevent the native call");
+
 var first = tracker.TryStart(() =>
 {
     Check(tracker.TryStart(() => Start(null)) is null,

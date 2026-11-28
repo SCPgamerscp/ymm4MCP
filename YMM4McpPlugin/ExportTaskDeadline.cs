@@ -38,8 +38,10 @@ namespace YMM4McpPlugin
         internal bool CompletionUnknown { get; private set; }
 
         internal (bool invoked, string method, string target, Task? task)? TryStart(
-            Func<(bool invoked, string method, string target, Task? task)> start)
+            Func<(bool invoked, string method, string target, Task? task)> start,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (starting || CompletionUnknown || pending is { IsCompleted: false })
                 return null;
 
