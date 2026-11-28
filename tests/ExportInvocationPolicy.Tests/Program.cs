@@ -119,6 +119,17 @@ try
 }
 finally { Directory.Delete(outputDirectory, recursive: true); }
 
+var stability = new ExportOutputStability();
+var outputTime = new DateTime(2026, 11, 28, 0, 0, 0, DateTimeKind.Utc);
+for (int sample = 0; sample < 5; sample++)
+    Check(!stability.Observe((128, outputTime.AddSeconds(sample))),
+        "Same-size rewrites must keep the export unstable");
+var settled = (128L, outputTime.AddSeconds(4));
+Check(!stability.Observe(settled) && !stability.Observe(settled) && stability.Observe(settled),
+    "An unchanged export can be verified after three matching polls");
+Check(!stability.Observe(null) && !stability.Observe(settled),
+    "A disappearance or discarded verification must restart the stability window");
+
 Console.WriteLine("Export invocation policy tests passed");
 
 class ExportMethods

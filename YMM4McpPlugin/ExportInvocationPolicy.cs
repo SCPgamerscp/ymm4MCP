@@ -24,6 +24,12 @@ namespace YMM4McpPlugin
             return true;
         }
 
+        internal static (long length, DateTime lastWriteUtc)? ReadOutputSnapshot(string path)
+        {
+            var file = new FileInfo(path);
+            return file.Exists ? (file.Length, file.LastWriteTimeUtc) : null;
+        }
+
         // Format names must be whole CamelCase/acronym tokens. Substrings such as
         // "avi" in "Saving" or "wav" in "Waving" are not export formats.
         private static bool HasFormatToken(string name, string format)
@@ -135,5 +141,18 @@ namespace YMM4McpPlugin
         internal static bool HasDialogOnlyMethod(IEnumerable<MethodInfo> methods, string requestedFormat) =>
             methods.Any(method => MatchesFormat(method.Name, requestedFormat)
                 && method.GetParameters().Length == 0);
+    }
+
+    internal sealed class ExportOutputStability
+    {
+        private (long length, DateTime lastWriteUtc)? previous;
+        private int unchanged;
+
+        internal bool Observe((long length, DateTime lastWriteUtc)? output)
+        {
+            unchanged = output.HasValue && output == previous ? unchanged + 1 : 0;
+            previous = output;
+            return output is { } sample && sample.length >= 32 && unchanged >= 3;
+        }
     }
 }

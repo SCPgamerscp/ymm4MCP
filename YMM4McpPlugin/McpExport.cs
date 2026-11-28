@@ -214,44 +214,45 @@ namespace YMM4McpPlugin
                 return;
             }
 
-            long lastSize = -1;
-            int stable = 0;
+            var stability = new ExportOutputStability();
             bool outputWasRemoved = false;
             while (DateTime.UtcNow < deadline)
             {
                 token.ThrowIfCancellationRequested();
-                var outputInfo = File.Exists(outputPath) ? new FileInfo(outputPath) : null;
-                if (outputInfo == null) outputWasRemoved = true;
-                if (outputInfo != null && (previousOutput == null || outputWasRemoved ||
-                    outputInfo.Length != previousOutput.Value.length ||
-                    outputInfo.LastWriteTimeUtc != previousOutput.Value.lastWriteUtc))
+                var observed = ExportInvocationPolicy.ReadOutputSnapshot(outputPath);
+                if (observed == null) outputWasRemoved = true;
+                var candidate = outputWasRemoved || observed != previousOutput ? observed : null;
+                bool stable = stability.Observe(candidate);
+                if (candidate is { } output)
                 {
-                    long size = outputInfo.Length;
-                    if (size > 0 && size == lastSize) stable++;
-                    else stable = 0;
-                    lastSize = size;
+                    long size = output.length;
                     int progress = (int)Math.Clamp(20 + (DateTime.UtcNow - (deadline - TimeSpan.FromSeconds(timeoutSeconds))).TotalSeconds / timeoutSeconds * 70, 20, 90);
                     UpdateJob(job, "running", phase: "render", progress: progress,
                         message: "出力ファイルを検出: " + size + " bytes",
                         checkpoint: new { output_path = outputPath, bytes = size });
-                    if (stable >= 3 && size >= 32)
+                    if (stable)
                     {
                         var verify = VerifyMediaFile(outputPath, format);
-                        if (!verify.ok)
+                        // Discard verification if the file changed while it was inspected.
+                        var afterVerification = ExportInvocationPolicy.ReadOutputSnapshot(outputPath);
+                        if (afterVerification != candidate)
+                        {
+                            if (afterVerification == null) outputWasRemoved = true;
+                            stability.Observe(null);
+                        }
+                        else if (!verify.ok)
                         {
                             UpdateJob(job, "failed", phase: "verify", progress: 95,
                                 message: verify.error, error: verify.error, errorCode: verify.errorCode, result: verify.payload);
                             return;
                         }
-                        UpdateJob(job, "completed", phase: "verify", progress: 100,
-                            message: "書き出し完了", result: verify.payload);
-                        return;
+                        else
+                        {
+                            UpdateJob(job, "completed", phase: "verify", progress: 100,
+                                message: "書き出し完了", result: verify.payload);
+                            return;
+                        }
                     }
-                }
-                else
-                {
-                    stable = 0;
-                    lastSize = -1;
                 }
                 await Task.Delay(1000, token);
             }
