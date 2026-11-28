@@ -727,20 +727,82 @@ class EditPlanDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["rolled_back"])
 
     async def test_unavailable_bindings_stop_before_post(self):
-        async def get(path):
-            if path == "/characters":
-                return {"success": True, "characters": []}
-            if path == "/items":
-                return {"items": []}
-            if path == "/edits/state":
-                return {"success": False, "error": "disk error"}
-            raise AssertionError(path)
+        record = one_text_record()
+        item = record["items"][0]
+        for state in (
+            {"success": False, "error": "disk error"},
+            {"success": True, "bindings": [], "error_code": "DISK_ERROR"},
+            {"success": 1, "bindings": []},
+            {"success": True, "bindings": [record, record]},
+            {"success": True, "bindings": [{**record, "items": None}]},
+            {"success": True, "bindings": [{**record, "items": [item, {**item, "id": "other"}]}]},
+            {"success": True, "bindings": [{**record, "items": [item, {**item, "item_id": "other"}]}]},
+        ):
+            with self.subTest(state=state):
+                get = AsyncMock(side_effect=[{"characters": []}, {"items": []}, state])
+                with patch.object(server, "ymm4_get", get), patch.object(
+                        server, "ymm4_post", new_callable=AsyncMock) as posted:
+                    result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
+                posted.assert_not_awaited()
+                self.assertEqual(result["error_code"], "BINDINGS_UNAVAILABLE")
 
-        with patch.object(server, "ymm4_get", AsyncMock(side_effect=get)), patch.object(
-                server, "ymm4_post", new_callable=AsyncMock) as posted:
-            result = await server.dispatch({"action": "apply_edit", **one_text_plan()})
-            posted.assert_not_awaited()
-        self.assertEqual(result["error_code"], "BINDINGS_UNAVAILABLE")
+    async def test_binding_receipt_fields_are_checked_against_the_save_request(self):
+        plan = editplan.parse_plan(one_text_plan())
+        record = one_text_record()
+        receipt = {"success": True, "idempotency_key": record["idempotency_key"],
+                   "plan_hash": record["plan_hash"], "item_count": 1}
+        for changes, mismatches in (
+            ({}, []),
+            ({"idempotency_key": "another-edit"}, ["idempotency_key"]),
+            ({"plan_hash": "f" * 64}, ["plan_hash"]),
+            ({"item_count": 0}, ["item_count"]),
+            ({"item_count": True}, ["item_count"]),
+        ):
+            with self.subTest(changes=changes):
+                saved = {**receipt, **changes}
+                with patch.object(server, "ymm4_post", AsyncMock(return_value=saved)) as post:
+                    error = await server._persist_edit_bindings(plan, record["items"])
+                post.assert_awaited_once_with("/edits/bindings", record)
+                if mismatches:
+                    self.assertEqual(error["error_code"], "BINDINGS_NOT_SAVED")
+                    self.assertEqual(error["mismatched_fields"], mismatches)
+                else:
+                    self.assertIsNone(error)
+
+    async def test_binding_for_an_item_outside_the_plan_stops_before_editing(self):
+        record = one_text_record()
+        unexpected = {"id": "other", "item_id": "native:other", "revision": "r2"}
+        record["items"].append(unexpected)
+        for action in ("plan_edit", "apply_edit", "reconcile_edit"):
+            with self.subTest(action=action):
+                get = AsyncMock(side_effect=[
+                    {"characters": []}, {"items": []}, {"bindings": [record]}, {"items": []},
+                ])
+                with patch.object(server, "ymm4_get", get), patch.object(
+                        server, "ymm4_post", new_callable=AsyncMock) as posted:
+                    result = await server.dispatch({"action": action, **one_text_plan()})
+                posted.assert_not_awaited()
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error_code"], "EDIT_STATE_CONFLICT")
+                self.assertEqual(result["unexpected_binding_ids"], ["other"])
+                self.assertFalse(result["rolled_back"])
+
+    async def test_partial_edit_reports_unconfirmed_binding_save(self):
+        for saved in (None, {}, {"success": 1}, {"success": True, "error": "disk error"},
+                      {"success": True, "item_count": 0},
+                      ValueError("invalid JSON")):
+            with self.subTest(saved=saved):
+                get, posted = self._patches([], [{"name": "ゆっくり霊夢"}], [
+                    {"success": True, "item_id": "native:bg", "revision": "r1", "frame": 0, "length": 300},
+                    {"success": False, "error": "voice generation failed"},
+                    saved,
+                ])
+                with get, posted:
+                    result = await server.dispatch({"action": "apply_edit", "atomic_scenes": False, **sample_plan()})
+                self.assertEqual(result["error_code"], "EDIT_PARTIAL_FAILURE")
+                self.assertEqual(result["added"], 1)
+                self.assertEqual(result["warning"], "BINDINGS_NOT_SAVED")
+                self.assertEqual(result["binding_error"]["error_code"], "BINDINGS_NOT_SAVED")
 
     async def test_invalid_initial_items_stop_before_post(self):
         async def get(path):

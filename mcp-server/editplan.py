@@ -356,14 +356,32 @@ def pick_binding(bindings, key):
         records = bindings
     if not key:
         return None
-    for record in records:
-        if isinstance(record, dict) and record.get("idempotency_key") == key:
-            return record
-    return None
+    matching = [record for record in records if isinstance(record, dict) and record.get("idempotency_key") == key]
+    if not matching:
+        return None
+    if len(matching) != 1:
+        raise ValueError("EditPlan bindings contain duplicate idempotency keys")
+    record = matching[0]
+    items = record.get("items")
+    if not isinstance(items, list):
+        raise ValueError("EditPlan binding item list is unavailable")
+    logical_ids, native_ids = set(), set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("EditPlan binding item is invalid")
+        logical_id, native_id = item.get("id"), item.get("item_id")
+        if not isinstance(logical_id, str) or not logical_id.strip() or \
+                not isinstance(native_id, str) or not native_id.strip():
+            raise ValueError("EditPlan binding item identifiers are unavailable")
+        if logical_id in logical_ids or native_id in native_ids:
+            raise ValueError("EditPlan binding item identifiers are ambiguous")
+        logical_ids.add(logical_id)
+        native_ids.add(native_id)
+    return record
 
 
 def binding_conflict(plan, current_items, record):
-    """Reject key reuse or edits to items already claimed by this plan."""
+    """Reject key reuse, unrelated bindings, or edits to items claimed by this plan."""
     if not isinstance(record, dict):
         return None
     expected_hash = plan_hash(plan)
@@ -375,11 +393,20 @@ def binding_conflict(plan, current_items, record):
             "plan_hash": expected_hash, "bound_plan_hash": record.get("plan_hash"),
             "rolled_back": False,
         }
+    desired = flatten_items(plan)
+    mapped = bindings_map(record)
+    unexpected = sorted(mapped.keys() - {item["id"] for item in desired})
+    if unexpected:
+        return {
+            "success": False, "error_code": "EDIT_STATE_CONFLICT",
+            "error": "Saved bindings contain item identifiers outside this EditPlan",
+            "idempotency_key": plan.get("idempotency_key"),
+            "unexpected_binding_ids": unexpected, "rolled_back": False,
+        }
     current_by_id = {item.get("item_id"): item for item in current_items
                      if isinstance(item, dict) and isinstance(item.get("item_id"), str)}
-    mapped = bindings_map(record)
     changed = []
-    for item in flatten_items(plan):
+    for item in desired:
         bound = mapped.get(item["id"])
         if not bound:
             continue

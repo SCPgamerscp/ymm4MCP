@@ -1774,7 +1774,8 @@ async def _load_edit_binding(key: str | None) -> dict | None:
     if not key:
         return None
     state = await ymm4_get("/edits/state")
-    if (not isinstance(state, dict) or state.get("success") is False or "error" in state
+    if (not isinstance(state, dict) or ("success" in state and state["success"] is not True)
+            or "error" in state or "error_code" in state
             or not isinstance(state.get("bindings"), list)):
         raise ValueError("EditPlan bindings are unavailable")
     return editplan.pick_binding(state.get("bindings"), key)
@@ -1801,17 +1802,29 @@ async def _delete_item_ids(item_ids: list[str]) -> dict:
 async def _persist_edit_bindings(plan: dict, bindings: list[dict]) -> dict | None:
     if not plan.get("idempotency_key") or not bindings:
         return None
+    key = plan["idempotency_key"]
+    plan_hash = editplan.plan_hash(plan)
     try:
         saved = await ymm4_post("/edits/bindings", {
-            "idempotency_key": plan["idempotency_key"],
-            "plan_hash": editplan.plan_hash(plan),
+            "idempotency_key": key,
+            "plan_hash": plan_hash,
             "items": bindings,
         })
-        if isinstance(saved, dict) and saved.get("success") is False:
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"error_code": "BINDINGS_NOT_SAVED", "error": str(exc)}
+    if isinstance(saved, dict):
+        if saved.get("success") is True and "error" not in saved and "error_code" not in saved:
+            expected = {"idempotency_key": key, "plan_hash": plan_hash, "item_count": len(bindings)}
+            # Older hosts may return only success. Any supplied receipt field
+            # must still describe this write, including an actual integer count.
+            mismatches = [field for field, value in expected.items() if field in saved and
+                          (type(saved[field]) is not type(value) or saved[field] != value)]
+            if not mismatches:
+                return None
+            return {"error_code": "BINDINGS_NOT_SAVED", "mismatched_fields": mismatches, "response": saved}
+        if saved.get("success") is False:
             return saved
-    except httpx.HTTPError:
-        return {"error_code": "BINDINGS_NOT_SAVED"}
-    return None
+    return {"error_code": "BINDINGS_NOT_SAVED", "response": saved}
 
 
 async def _partial_edit_result(plan, *, error_code, error, failed_id, failed_index, failed_scene,
@@ -2097,22 +2110,13 @@ async def run_edit_plan(args: dict, dry_run: bool) -> dict:
                 "outcome_unknown": True, "rolled_back": False, "atomic_scenes": atomic,
                 "committed_scenes": committed, "scenes": scene_reports}
 
-    if plan.get("idempotency_key"):
-        try:
-            saved = await ymm4_post("/edits/bindings", {
-                "idempotency_key": plan["idempotency_key"],
-                "plan_hash": editplan.plan_hash(plan),
-                "items": bindings,
-            })
-        except httpx.HTTPError as exc:
-            saved = {"error": str(exc)}
-        if not isinstance(saved, dict) or saved.get("success") is not True:
-            code = saved.get("error_code") if isinstance(saved, dict) else None
-            return {"success": False, "error_code": code or "BINDINGS_NOT_SAVED",
-                    "error": "EditPlanは適用されましたが、再適用情報を保存できませんでした",
-                    "added": added, "details": details, "binding_error": saved,
-                    "rolled_back": False, "atomic_scenes": atomic,
-                    "committed_scenes": committed, "scenes": scene_reports}
+    binding_error = await _persist_edit_bindings(plan, bindings)
+    if binding_error is not None:
+        return {"success": False, "error_code": binding_error.get("error_code") or "BINDINGS_NOT_SAVED",
+                "error": "EditPlanは適用されましたが、再適用情報を保存できませんでした",
+                "added": added, "details": details, "binding_error": binding_error,
+                "rolled_back": False, "atomic_scenes": atomic,
+                "committed_scenes": committed, "scenes": scene_reports}
     result = {
         "success": True, "replayed": False, "dry_run": False, "added": added,
         "kept": sum(d["op"] == "keep" for d in details), "details": details,
