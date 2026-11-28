@@ -98,6 +98,36 @@ class DecodedQATailAndOutputTests(unittest.TestCase):
                                                     for part in call)
                             for call in calls))
 
+    def test_full_signal_budget_expiring_between_video_and_audio_fails(self):
+        metadata = json.dumps({
+            "format": {"duration": "4", "start_time": "0"},
+            "streams": [{"codec_type": kind, "start_time": "0", "duration": "4"}
+                        for kind in ("video", "audio")],
+        })
+        now = 0
+        scanned = []
+
+        def fake(command, timeout):
+            nonlocal now
+            if command[0] == "ffprobe":
+                return subprocess.CompletedProcess(command, 0, metadata, "")
+            if any("pts=PTS-STARTPTS" in option for option in command):
+                scanned.append(command[command.index("-map") + 1])
+                now = 901
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(qa, "run", side_effect=fake), \
+                patch.object(qa, "time") as clock:
+            clock.monotonic.side_effect = lambda: now
+            report = qa.inspect(str(self.video), full_decode=True, full_signal_scan=True,
+                                max_silence_seconds=1)
+
+        self.assertEqual(scanned, ["0:v:0"])
+        self.assertFalse(report["passed"], report)
+        self.assertEqual(report["signal_scope"], "sampled_only")
+        self.assertIn({"code": "EXPORT_FULL_SIGNAL_TIMEOUT", "severity": "error",
+                       "stream_type": "audio", "stream_ordinal": 0}, report["issues"])
+
     def test_subprocess_stdout_requires_utf8_but_stderr_is_diagnostic(self):
         # Metadata must never be silently altered by replacement decoding.
         invalid_stdout = [sys.executable, "-c",

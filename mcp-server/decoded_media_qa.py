@@ -1958,8 +1958,6 @@ def inspect(path, *, require_audio=True, sample_seconds=8, full_decode=False,
                         if not record_signal(signal_kind, event, issue_code, destination):
                             return failure("EXPORT_SIGNAL_LIMIT",
                                            "全尺信号検出イベント数が上限を超えました")
-            if full_deadline - time.monotonic() <= 0:
-                break
     # Measure integrated loudness over each complete audio track, not a peak
     # sampled from a few windows. This is opt-in because every track requires
     # an additional full-length FFmpeg loudnorm first pass.
