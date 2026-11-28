@@ -175,6 +175,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
 
     problems = []
     layers = {}
+    layers_with_unverified_items = set()
     voices = []
     subtitles = []
     seen_item_ids = {}
@@ -200,20 +201,29 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                                  "message": "Multiple timeline items share the same item_id"})
             else:
                 seen_item_ids[item_id] = index
+        layer = None
         try:
             if not isinstance(item, dict):
                 raise ValueError("item must be an object")
+            layer = integer(item.get("layer"), "layer")
             frame = integer(item.get("frame"), "frame")
             length = integer(item.get("length"), "length", 1)
-            layer = integer(item.get("layer"), "layer")
             end = integer(frame + length, "end frame")
+            if "endFrame" in item and integer(item["endFrame"], "endFrame") != end:
+                raise ValueError("endFrame must equal frame + length")
         except ValueError as exc:
+            if layer is not None:
+                layers_with_unverified_items.add(layer)
             ids = _item_ids(items, [index])
             problems.append({"code": "INVALID_ITEM", "severity": "error", "index": index,
                              "item_ids": ids, "message": str(exc)})
             continue
         valid_indices.add(index)
         layers.setdefault(layer, []).append((frame, end, index))
+        item_id = item.get("item_id")
+        unique_item_id = _valid_item_id(item_id) and id_counts[item_id] == 1
+        if not unique_item_id:
+            layers_with_unverified_items.add(layer)
         if subtitle_layers is not None:
             kind = item.get("type")
             # Compare the actual CLR type name, not an arbitrary suffix such as
@@ -230,8 +240,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
             if frame < duration:
                 # A repair hint must identify exactly one real item. An absent,
                 # malformed or duplicated ID could edit the wrong item.
-                item_id = item.get("item_id")
-                if _valid_item_id(item_id) and id_counts[item_id] == 1:
+                if unique_item_id:
                     problem["suggested_fix"] = {"action": "edit_item", "sub_action": "property",
                                                 "item_id": item_id,
                                                 "prop": "Length", "value": duration - frame}
@@ -252,16 +261,13 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
                 problem = {"code": "OVERLAP", "severity": "error", "layer": layer,
                            "indices": affected, "item_ids": _item_ids(items, affected),
                            "frame_range": [frame, min(active_end, tail)]}
-                # Do not suggest a layer-wide mutation when any item on that
-                # layer lacks an unambiguous stable identity.
-                layer_indices = [entry[2] for entry in spans]
-                if all(_valid_item_id(items[i].get("item_id")) and
-                       id_counts[items[i]["item_id"]] == 1 for i in layer_indices):
+                # A layer-wide mutation also touches items excluded from these spans.
+                if layer not in layers_with_unverified_items:
                     problem["suggested_fix"] = {"action": "edit_item",
                                                 "sub_action": "resolve_overlaps",
                                                 "layers": [layer]}
                 else:
-                    problem["message"] = "Cannot safely resolve overlaps on a layer with ambiguous item IDs"
+                    problem["message"] = "Cannot safely resolve overlaps on a layer with invalid item timing or ambiguous item IDs"
                 problems.append(problem)
             elif include_gaps and active_index is not None and frame > active_end:
                 problems.append({"code": "GAP", "severity": "warning", "layer": layer,
@@ -275,7 +281,7 @@ def validate_timeline(items, expected=None, duration=None, include_gaps=True, su
         for frame, end, index in voices:
             voice_text = items[index].get("text")
             if not isinstance(voice_text, str) or not voice_text.strip():
-                problems.append({"code": "SUBTITLE_CHECK_SKIPPED", "severity": "warning",
+                problems.append({"code": "SUBTITLE_CHECK_SKIPPED", "severity": "error",
                                  "index": index, "item_ids": _item_ids(items, [index]),
                                  "frame_range": [frame, end], "message": "発話テキストを取得できません"})
                 continue

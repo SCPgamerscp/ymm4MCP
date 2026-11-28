@@ -46,6 +46,25 @@ class SafeDurationRepairTests(unittest.TestCase):
         self.assertNotIn("suggested_fix", issue)
 
 
+class SafeOverlapRepairTests(unittest.TestCase):
+    def test_rejected_item_blocks_only_its_layer_wide_repair(self):
+        overlaps = [item("a", frame=0, length=20, layer=0),
+                    item("b", frame=10, length=20, layer=0),
+                    item("c", frame=0, length=20, layer=1),
+                    item("d", frame=10, length=20, layer=1)]
+        bad_end = {**item("e", frame=15, length=10, layer=0), "endFrame": 26}
+        missing_id = {key: value for key, value in bad_end.items() if key != "item_id"}
+        bad_frame = item("f", frame=-1, layer=0)
+        for rejected in (missing_id, bad_end, bad_frame):
+            with self.subTest(rejected=rejected):
+                report = editing.validate_timeline([*overlaps, rejected])
+                self.assertIn("INVALID_ITEM", [issue["code"] for issue in report["issues"]])
+                by_layer = {issue["layer"]: issue for issue in report["issues"]
+                            if issue["code"] == "OVERLAP"}
+                self.assertNotIn("suggested_fix", by_layer[0])
+                self.assertEqual(by_layer[1]["suggested_fix"]["layers"], [1])
+
+
 class ExpectedSelectorSafetyTests(unittest.TestCase):
     def test_control_characters_in_stable_id_selector_rejected(self):
         for identity in ("bad\nname", "bad\x00name", "bad\x7fname"):

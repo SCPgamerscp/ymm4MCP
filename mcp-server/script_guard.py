@@ -2,7 +2,29 @@
 import re
 
 import editplan
+import quality_guard
 from editing import plan_script
+
+
+async def read_snapshot(get, expected=None):
+    """Return the item list only after checking the host inventory and any expected hash."""
+    try:
+        snapshot = await get("/items")
+    except Exception as exc:
+        return None, {"success": False, "error_code": "SNAPSHOT_VERIFY_UNKNOWN", "error": str(exc)}
+    failure = quality_guard.timeline_inventory_error(snapshot)
+    if failure is not None:
+        return None, failure
+    if expected is not None:
+        try:
+            actual = editplan.snapshot_hash(snapshot["items"])
+        except Exception as exc:
+            return None, {"success": False, "error_code": "SNAPSHOT_VERIFY_UNKNOWN", "error": str(exc)}
+        if expected != actual:
+            return None, {"success": False, "error_code": "SNAPSHOT_CONFLICT",
+                          "expected_snapshot_hash": expected, "actual_snapshot_hash": actual,
+                          "added": 0}
+    return snapshot["items"], None
 
 
 async def apply(args, get, add_script):
@@ -14,22 +36,9 @@ async def apply(args, get, add_script):
     # Planning requires dry_run=True, but snapshot preflight must also validate
     # real writes without changing the arguments sent to the host.
     plan_script({**args, "dry_run": True})  # Side-effect-free input validation.
-    try:
-        snapshot = await get("/items")
-    except Exception as exc:
-        return {"success": False, "error_code": "SNAPSHOT_VERIFY_UNKNOWN", "error": str(exc)}
-    if (not isinstance(snapshot, dict) or
-            ("success" in snapshot and snapshot["success"] is not True) or
-            "error" in snapshot or "error_code" in snapshot or
-            not isinstance(snapshot.get("items"), list)):
-        return {"success": False, "error_code": "ITEMS_UNAVAILABLE", "details": snapshot}
-    try:
-        actual = editplan.snapshot_hash(snapshot["items"])
-    except Exception as exc:
-        return {"success": False, "error_code": "SNAPSHOT_VERIFY_UNKNOWN", "error": str(exc)}
-    if expected != actual:
-        return {"success": False, "error_code": "SNAPSHOT_CONFLICT",
-                "expected_snapshot_hash": expected, "actual_snapshot_hash": actual}
+    _, failure = await read_snapshot(get, expected)
+    if failure is not None:
+        return failure
     # Recheck inside add_script after character/FPS/append preflight, immediately
     # before its first voice write. The first check alone can become stale there.
     result = await add_script(args, expected_snapshot=expected)
@@ -42,5 +51,5 @@ async def apply(args, get, add_script):
                 "error": "Script host returned a malformed or contradictory result"}
     # A failed dry run must not be decorated with a trusted snapshot marker.
     if result["success"] is True and args.get("dry_run"):
-        return {**result, "snapshot_hash": actual}
+        return {**result, "snapshot_hash": expected}
     return result
