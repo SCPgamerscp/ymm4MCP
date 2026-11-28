@@ -337,30 +337,32 @@ namespace YMM4McpPlugin
                 if (vm == null) return (object)new { error = "MainViewModel取得失敗", items = Array.Empty<object>() };
                 var tvm = GetPropObj(vm, "ActiveTimelineViewModel");
                 if (tvm == null) return (object)new { error = "TimelineVM取得失敗", items = Array.Empty<object>() };
+                var timelineModel = GetTimelineModel(tvm);
                 var rawItems = GetPropEnum(tvm, "Items");
+                if (rawItems == null) return Failure("ITEMS_UNAVAILABLE", "タイムライン項目を取得できません");
                 var items = new List<object>();
-                if (rawItems != null)
+                foreach (var iv in rawItems)
                 {
-                    foreach (var iv in rawItems)
+                    var info = ReadItemInfo(iv);
+                    var identity = GetItemIdentity(info.item);
+                    items.Add(new
                     {
-                        var info = ReadItemInfo(iv);
-                        var identity = GetItemIdentity(info.item);
-                        items.Add(new
-                        {
-                            item_id = identity.id,
-                            revision = GetItemRevision(info.item),
-                            identity_persistent = identity.persistent,
-                            layer = info.layer,
-                            frame = info.frame,
-                            length = info.length,
-                            endFrame = (long)info.frame + info.length,
-                            type = info.type,
-                            text = info.text,
-                            source_path = GetPropObj(info.item, "FilePath")?.ToString(),
-                        });
-                    }
+                        item_id = identity.id,
+                        revision = GetItemRevision(info.item),
+                        identity_persistent = identity.persistent,
+                        layer = info.layer,
+                        frame = info.frame,
+                        length = info.length,
+                        endFrame = (long)info.frame + info.length,
+                        type = info.type,
+                        text = info.text,
+                        source_path = GetPropObj(info.item, "FilePath")?.ToString(),
+                    });
                 }
-                return (object)new { items, count = items.Count };
+                var timelineId = ReferenceEquals(timelineModel, GetTimelineModel(tvm))
+                    ? GetTimelineId(timelineModel) : null;
+                return (object)new { items, count = items.Count,
+                    timeline_id = timelineId };
             });
         }
 
@@ -1157,15 +1159,33 @@ namespace YMM4McpPlugin
             int tf = GetInt(b, "frame", -1); int tl = GetInt(b, "layer", -1);
             string itemId = GetStr(b, "item_id", "");
             string expectedRevision = GetStr(b, "expected_revision", "");
+            string? expectedTimelineId = GetExpectedTimelineId(b);
             if (expectedRevision.Length > 0 && itemId.Length == 0)
                 return Failure("REVISION_REQUIRES_ITEM_ID", "expected_revision を使う場合は item_id も指定してください");
-            if (!b.Keys.Any(k => k is not ("frame" or "layer" or "item_id" or "expected_revision")))
+            if (expectedTimelineId != null && itemId.Length == 0)
+                return Failure("TIMELINE_REQUIRES_ITEM_ID", "expected_timeline_id を使う場合は item_id も指定してください");
+            bool verifyFacePath = b.TryGetValue("require_face_path_readback", out var verify);
+            if (verifyFacePath && (verify.ValueKind != JsonValueKind.True ||
+                    string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(expectedRevision) ||
+                    !b.ContainsKey("FacePath") || b.Keys.Any(k => k is not
+                        ("item_id" or "expected_revision" or "expected_timeline_id" or "FacePath" or "require_face_path_readback"))))
+                throw new ArgumentException("require_face_path_readback requires one FacePath and a versioned item_id");
+            if (!b.Keys.Any(k => k is not
+                    ("frame" or "layer" or "item_id" or "expected_revision" or "expected_timeline_id" or "require_face_path_readback")))
                 throw new ArgumentException("at least one face parameter is required");
             // keyValuePairs: { "FacePath": "...", etc. }
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var located = LocateTimelineItem(itemId, tf, tl);
                 if (located.error != null) return located.error;
+                if (expectedTimelineId != null)
+                {
+                    var activeVm = GetMainViewModel();
+                    var activeTimeline = activeVm == null ? null : GetPropObj(activeVm, "ActiveTimelineViewModel");
+                    if (activeVm == null || activeTimeline == null ||
+                        !IsCurrentTimeline(activeVm, activeTimeline, expectedTimelineId))
+                        return Failure("FACE_TIMELINE_CHANGED", "表情の変更対象のタイムラインが切り替わりました");
+                }
                 var targetItem = located.item!;
                 if (!targetItem.GetType().Name.Contains("Face", StringComparison.OrdinalIgnoreCase))
                     return Failure("FACE_ITEM_REQUIRED", "対象はFaceItemではありません");
@@ -1181,7 +1201,9 @@ namespace YMM4McpPlugin
                 // A typo or invalid value must not leave a partially edited face item.
                 foreach (var kv in b)
                 {
-                    if (kv.Key is "frame" or "layer" or "item_id" or "expected_revision") continue;
+                    if (kv.Key is "frame" or "layer" or "item_id" or "expected_revision"
+                        or "expected_timeline_id" or "require_face_path_readback")
+                        continue;
                     var directProp = targetItem.GetType().GetProperty(kv.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     var nestedProp = faceParam?.GetType().GetProperty(kv.Key, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     var prop = directProp ?? nestedProp;
@@ -1196,19 +1218,49 @@ namespace YMM4McpPlugin
                         var raw = kv.Value.ValueKind == JsonValueKind.String ? kv.Value.GetString() : kv.Value.ToString();
                         var type = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
                         object? value = type.IsEnum ? Enum.Parse(type, raw ?? "", true) : Convert.ChangeType(raw, type);
+                        if (verifyFacePath && (prop.GetGetMethod(true) == null || value is not string))
+                        {
+                            results.Add("FacePath=UNREADABLE");
+                            continue;
+                        }
                         pending.Add((prop, owner, value, kv.Key));
                     }
                     catch (Exception ex) { results.Add($"{kv.Key}=NG({ex.Message})"); }
                 }
                 if (results.Count > 0)
                     return (object)new { success = false, changed = false, error_code = "FACE_PARAM_INVALID", results };
+                string? facePath = null;
+                bool facePathUnverified = false;
                 foreach (var change in pending)
                 {
-                    try { change.property.SetValue(change.owner, change.value); results.Add($"{change.name}=OK"); }
-                    catch (Exception ex) { results.Add($"{change.name}=NG({ex.Message})"); break; }
+                    try
+                    {
+                        if (verifyFacePath)
+                            facePath = FacePathMutation.SetAndVerify((string)change.value!,
+                                () => change.property.SetValue(change.owner, change.value),
+                                () =>
+                                {
+                                    // The setter can replace FaceParameter. Read from the current
+                                    // item instead of confirming a change to the detached object.
+                                    var owner = ReferenceEquals(change.owner, targetItem)
+                                        ? targetItem : fpProp?.GetValue(targetItem);
+                                    return owner == null ? null : change.property.GetValue(owner);
+                                });
+                        else
+                            change.property.SetValue(change.owner, change.value);
+                        results.Add($"{change.name}=OK");
+                    }
+                    catch (Exception ex)
+                    {
+                        facePathUnverified = verifyFacePath;
+                        results.Add($"{change.name}=NG({ex.Message})");
+                        break;
+                    }
                 }
                 bool changed = results.Any(result => result.EndsWith("=OK", StringComparison.Ordinal));
-                if (changed)
+                // A FacePath setter can write before it throws, or its readback
+                // can fail after writing. Preserve undo in either case.
+                if (changed || facePathUnverified)
                 {
                     MarkItemChanged(targetItem);
                     var vm = GetMainViewModel();
@@ -1218,9 +1270,10 @@ namespace YMM4McpPlugin
                 bool complete = changed && results.Count == pending.Count &&
                     results.All(result => result.EndsWith("=OK", StringComparison.Ordinal));
                 return (object)new { success = complete, changed, item_id = GetItemIdentity(targetItem).id,
-                    revision = GetItemRevision(targetItem), results,
-                    error_code = complete ? null : changed ? "FACE_PARAM_PARTIAL" : "FACE_PARAM_UNCHANGED",
-                    outcome_unknown = changed && !complete };
+                    revision = GetItemRevision(targetItem), results, face_path = facePath,
+                    error_code = complete ? null : facePathUnverified ? "FACE_PARAM_UNVERIFIED"
+                        : changed ? "FACE_PARAM_PARTIAL" : "FACE_PARAM_UNCHANGED",
+                    outcome_unknown = facePathUnverified || (changed && !complete) };
             });
         }
 
