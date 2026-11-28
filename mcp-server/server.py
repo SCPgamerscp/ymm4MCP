@@ -549,6 +549,34 @@ async def run_visual_qa(args: dict) -> dict:
     return result
 
 
+def _template_receipt_outcome(receipt: object) -> bool | None:
+    if (not isinstance(receipt, dict) or type(receipt.get("success")) is not bool or
+            receipt.get("outcome_unknown", False) is not False):
+        return None
+    if receipt["success"] and ("error" in receipt or "error_code" in receipt):
+        return None
+    return receipt["success"]
+
+
+def _template_project_is_saved(state: object, path: str | None = None) -> bool:
+    return (isinstance(state, dict) and _template_receipt_outcome(state) is True and
+            state.get("isSaved") is True and
+            (path is None or isinstance(state.get("projectPath"), str) and
+             _same_project_path(path, state["projectPath"])))
+
+
+async def _verify_template_destination_project(destination: str) -> dict | None:
+    try:
+        verified = await ymm4_get("/project")
+    except Exception as exc:
+        return {"success": False, "error_code": "TEMPLATE_VERIFY_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "error": str(exc), "destination_path": destination}
+    if not _template_project_is_saved(verified, destination):
+        return {"success": False, "error_code": "TEMPLATE_VERIFY_FAILED", "outcome_unknown": True,
+                "details": verified, "destination_path": destination}
+    return None
+
+
 def _same_project_path(a: str, b: str) -> bool:
     if len(a) >= 2 and a[1] == ":" or a.startswith("\\\\"):
         return ntpath.normcase(ntpath.normpath(a)) == ntpath.normcase(ntpath.normpath(b))
@@ -566,12 +594,12 @@ async def create_from_template(args: dict) -> dict:
     source = await ymm4_get(f"/media/info?path={quote(template, safe='')}")
     destination_info_path = f"/media/info?path={quote(destination, safe='')}"
     target = await ymm4_get(destination_info_path)
-    if source.get("success") is not True or source.get("exists") is not True:
+    if _template_receipt_outcome(source) is not True or source.get("exists") is not True:
         return {"success": False, "error_code": "TEMPLATE_NOT_FOUND", "details": source}
-    if target.get("success") is not True or target.get("exists") is not False:
+    if _template_receipt_outcome(target) is not True or target.get("exists") is not False:
         return {"success": False, "error_code": "TEMPLATE_DESTINATION_UNAVAILABLE", "details": target}
     current = await ymm4_get("/project")
-    if current.get("success") is not True or current.get("isSaved") is not True:
+    if not _template_project_is_saved(current):
         return {"success": False, "error_code": "CURRENT_PROJECT_NOT_SAVED", "details": current}
     if dry_run:
         return {"success": True, "dry_run": True, "template_path": template,
@@ -579,8 +607,7 @@ async def create_from_template(args: dict) -> dict:
                 "steps": ["open_template", "save_as_new_path", "verify_project_path"]}
     capabilities = await ymm4_get("/capabilities")
     features = capabilities.get("features") if isinstance(capabilities, dict) else None
-    if (not isinstance(features, dict) or capabilities.get("success") is not True or
-            "error" in capabilities or "error_code" in capabilities or
+    if (not isinstance(features, dict) or _template_receipt_outcome(capabilities) is not True or
             features.get("guarded_template_save") is not True):
         return {"success": False, "error_code": "TEMPLATE_GUARDED_SAVE_UNAVAILABLE"}
     try:
@@ -588,7 +615,11 @@ async def create_from_template(args: dict) -> dict:
     except Exception as exc:
         return {"success": False, "error_code": "TEMPLATE_OPEN_OUTCOME_UNKNOWN",
                 "outcome_unknown": True, "error": str(exc)}
-    if opened.get("success") is not True:
+    open_outcome = _template_receipt_outcome(opened)
+    if open_outcome is None:
+        return {"success": False, "error_code": "TEMPLATE_OPEN_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "details": opened}
+    if open_outcome is False:
         return {"success": False, "error_code": "TEMPLATE_OPEN_FAILED", "details": opened}
     opened_state = None
     for attempt in range(20):
@@ -597,10 +628,7 @@ async def create_from_template(args: dict) -> dict:
         except Exception as exc:
             return {"success": False, "error_code": "TEMPLATE_OPEN_NOT_VERIFIED",
                     "outcome_unknown": True, "error": str(exc), "opened_template_path": template}
-        if opened_state.get("success") is True and \
-                isinstance(opened_state.get("projectPath"), str) and \
-                _same_project_path(opened_state["projectPath"], template) and \
-                opened_state.get("isSaved") is True:
+        if _template_project_is_saved(opened_state, template):
             break
         if attempt < 19:
             await asyncio.sleep(0.15)
@@ -613,37 +641,36 @@ async def create_from_template(args: dict) -> dict:
     except Exception as exc:
         return {"success": False, "error_code": "TEMPLATE_SAVE_OUTCOME_UNKNOWN",
                 "outcome_unknown": True, "error": str(exc), "opened_template_path": template}
-    if saved.get("success") is not True:
+    save_outcome = _template_receipt_outcome(saved)
+    if save_outcome is None:
+        return {"success": False, "error_code": "TEMPLATE_SAVE_OUTCOME_UNKNOWN",
+                "outcome_unknown": True, "details": saved, "opened_template_path": template}
+    if save_outcome is False:
         if saved.get("error_code") == "TEMPLATE_SOURCE_CHANGED":
             return {"success": False, "error_code": "TEMPLATE_SOURCE_CHANGED", "details": saved,
                     "template_path": template, "destination_path": destination}
         return {"success": False, "error_code": "TEMPLATE_SAVE_FAILED", "details": saved,
                 "opened_template_path": template}
-    try:
-        verified = await ymm4_get("/project")
-    except Exception as exc:
-        return {"success": False, "error_code": "TEMPLATE_VERIFY_OUTCOME_UNKNOWN",
-                "outcome_unknown": True, "error": str(exc), "destination_path": destination}
-    if (not isinstance(verified, dict) or verified.get("success") is not True or
-            "error" in verified or "error_code" in verified or
-            not isinstance(verified.get("projectPath"), str) or
-            not _same_project_path(destination, verified["projectPath"]) or verified.get("isSaved") is not True):
-        return {"success": False, "error_code": "TEMPLATE_VERIFY_FAILED", "outcome_unknown": True,
-                "details": verified, "destination_path": destination}
+    failed = await _verify_template_destination_project(destination)
+    if failed is not None:
+        return failed
     try:
         written = await ymm4_get(destination_info_path)
     except (httpx.HTTPError, ValueError) as exc:
         return {"success": False, "error_code": "TEMPLATE_VERIFY_OUTCOME_UNKNOWN",
                 "outcome_unknown": True, "check": "destination_file",
                 "error": str(exc), "destination_path": destination}
-    if (not isinstance(written, dict) or written.get("success") is not True or
-            "error" in written or "error_code" in written or
+    if (_template_receipt_outcome(written) is not True or
             written.get("exists") is not True or
             type(written.get("bytes")) is not int or written["bytes"] <= 0 or
             not isinstance(written.get("path"), str) or
             not _same_project_path(destination, written["path"])):
         return {"success": False, "error_code": "TEMPLATE_VERIFY_FAILED", "outcome_unknown": True,
                 "check": "destination_file", "details": written, "destination_path": destination}
+    # The file probe can complete after the editor has switched projects again.
+    failed = await _verify_template_destination_project(destination)
+    if failed is not None:
+        return failed
     return {"success": True, "dry_run": False, "template_path": template,
             "destination_path": destination, "verified": True}
 

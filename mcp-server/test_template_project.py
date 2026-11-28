@@ -28,7 +28,8 @@ class TemplateProjectTests(unittest.IsolatedAsyncioTestCase):
                 {"success": True, "isSaved": True}, CAPABILITIES,
                 {"success": True, "isSaved": True, "projectPath": "C:/projects/template.ymmp"},
                 {"success": True, "isSaved": True, "projectPath": "c:\\projects\\new.ymmp"},
-                {"success": True, "exists": True, "bytes": 123, "path": "c:\\projects\\new.ymmp"}])) as get, \
+                {"success": True, "exists": True, "bytes": 123, "path": "c:\\projects\\new.ymmp"},
+                {"success": True, "isSaved": True, "projectPath": "c:\\projects\\new.ymmp"}])) as get, \
              patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
             result = await server.dispatch(ARGS)
         self.assertTrue(result["verified"])
@@ -36,7 +37,44 @@ class TemplateProjectTests(unittest.IsolatedAsyncioTestCase):
                          ["/project/open", "/project/save-template-as"])
         self.assertEqual(post.await_args_list[-1].args[1], {
             "path": ARGS["path"], "expected_template_path": ARGS["template_path"]})
-        self.assertEqual(get.await_args.args, (f"/media/info?path={quote(ARGS['path'], safe='')}",))
+        self.assertEqual([call.args[0] for call in get.await_args_list[-2:]],
+                         [f"/media/info?path={quote(ARGS['path'], safe='')}", "/project"])
+
+    async def test_unconfirmed_write_receipt_stops_without_retry(self):
+        for phase in ("OPEN", "SAVE"):
+            for reply in (None, {}, {"success": 1},
+                          {"success": False, "outcome_unknown": True},
+                          {"success": True, "outcome_unknown": True},
+                          {"success": True, "error_code": "PROJECT_UNAVAILABLE"}):
+                reads = [{"success": True, "exists": True}, {"success": True, "exists": False},
+                         {"success": True, "isSaved": True}, CAPABILITIES,
+                         {"success": True, "isSaved": True, "projectPath": ARGS["template_path"]},
+                         {"success": True, "isSaved": True, "projectPath": ARGS["path"]},
+                         {"success": True, "exists": True, "bytes": 123, "path": ARGS["path"]}]
+                writes = [reply] if phase == "OPEN" else [{"success": True}, reply]
+                with self.subTest(phase=phase, reply=reply), \
+                     patch.object(server, "ymm4_get", AsyncMock(side_effect=reads)) as get, \
+                     patch.object(server, "ymm4_post", AsyncMock(side_effect=writes)) as post:
+                    result = await server.dispatch(ARGS)
+                    self.assertEqual(result["error_code"], f"TEMPLATE_{phase}_OUTCOME_UNKNOWN")
+                    self.assertTrue(result["outcome_unknown"])
+                    self.assertEqual(get.await_count, 4 if phase == "OPEN" else 5)
+                    self.assertEqual(post.await_count, len(writes))
+
+    async def test_project_switch_during_destination_probe_is_not_verified(self):
+        for changed in ({"success": True, "isSaved": True, "projectPath": ARGS["template_path"]},
+                        {"success": True, "isSaved": False, "projectPath": ARGS["path"]}):
+            with self.subTest(changed=changed), patch.object(server, "ymm4_get", AsyncMock(side_effect=[
+                {"success": True, "exists": True}, {"success": True, "exists": False},
+                {"success": True, "isSaved": True}, CAPABILITIES,
+                {"success": True, "isSaved": True, "projectPath": ARGS["template_path"]},
+                {"success": True, "isSaved": True, "projectPath": ARGS["path"]},
+                {"success": True, "exists": True, "bytes": 123, "path": ARGS["path"]}, changed,
+            ])), patch.object(server, "ymm4_post", AsyncMock(return_value={"success": True})) as post:
+                result = await server.dispatch(ARGS)
+                self.assertEqual(result["error_code"], "TEMPLATE_VERIFY_FAILED")
+                self.assertTrue(result["outcome_unknown"])
+                self.assertEqual(post.await_count, 2)
 
     async def test_saved_ui_state_requires_nonempty_file_at_the_destination(self):
         found = {"success": True, "exists": True, "bytes": 123, "path": ARGS["path"]}
