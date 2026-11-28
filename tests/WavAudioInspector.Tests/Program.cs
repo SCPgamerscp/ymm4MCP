@@ -65,10 +65,11 @@ static byte[] FloatWave(float[] samples, bool extensible = false, int channels =
     return bytes;
 }
 
-static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate = 8000)
+static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate = 8000, int? validBits = null)
 {
     int sampleBytes = bits / 8, fmtSize = extensible ? 40 : 16, offset = 20 + fmtSize;
-    var bytes = new byte[offset + 8 + samples.Length * sampleBytes];
+    int dataSize = samples.Length * sampleBytes;
+    var bytes = new byte[offset + 8 + dataSize + (dataSize & 1)];
     Encoding.ASCII.GetBytes("RIFF").CopyTo(bytes, 0);
     BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), (uint)(bytes.Length - 8));
     Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(bytes, 8);
@@ -82,14 +83,16 @@ static byte[] PcmWave(int[] samples, int bits, bool extensible = false, int rate
     if (extensible)
     {
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(36, 2), 22);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(38, 2), (ushort)bits);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(38, 2), (ushort)(validBits ?? bits));
         new Guid("00000001-0000-0010-8000-00aa00389b71").TryWriteBytes(bytes.AsSpan(44, 16));
     }
     Encoding.ASCII.GetBytes("data").CopyTo(bytes, offset);
-    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4, 4), (uint)(samples.Length * sampleBytes));
+    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4, 4), (uint)dataSize);
     for (int i = 0; i < samples.Length; i++)
         for (int b = 0; b < sampleBytes; b++)
-            bytes[offset + 8 + i * sampleBytes + b] = (byte)(samples[i] >> (b * 8));
+            bytes[offset + 8 + i * sampleBytes + b] = bits == 8
+                ? (byte)(samples[i] + 128)
+                : (byte)(samples[i] >> (b * 8));
     return bytes;
 }
 
@@ -102,8 +105,14 @@ try
     var qa = WavAudioInspector.Inspect(path, 1.5);
     Check(qa.Success && !qa.Passed && qa.DurationSeconds == 3, "valid PCM detection failed");
     Check(qa.Issues.Any(i => i.Code == "LONG_SILENCE" && i.EndSeconds == 2), "silence missing");
-    Check(qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING"), "clipping missing");
+    Check(qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING" && i.StartSeconds == 2 && i.EndSeconds == 3),
+        "clipping interval reaching EOF is missing");
     Check(qa.Issues.Any(i => i.Code == "CHANNEL_IMBALANCE"), "channel imbalance missing");
+    Check(qa.ChannelLevels.Length == 2
+        && qa.ChannelLevels[0].Channel == 1 && qa.ChannelLevels[0].Peak == 32767.0 / 32768
+        && Math.Abs(qa.ChannelLevels[0].Rms - (32767.0 / 32768) / Math.Sqrt(3)) < 1e-9
+        && qa.ChannelLevels[1] == new AudioQaChannelLevel(2, 0, 0),
+        "stereo peak and RMS measurements must include the silent channel");
 
     var clean = new short[8000 * 2];
     for (int frame = 0; frame < 8000; frame++)
@@ -113,6 +122,58 @@ try
     }
     File.WriteAllBytes(path, Wave(clean));
     Check(WavAudioInspector.Inspect(path).Passed, "clean stereo should pass");
+
+    // The longest run spans two read buffers and is below the whole-file
+    // clipped-sample threshold. The right channel is unaffected.
+    const int clipStart = 2035, clipLength = 40, testRate = 8000;
+    var mostlyClean = new short[testRate * 10 * 2];
+    for (int frame = 0; frame < mostlyClean.Length / 2; frame++)
+    {
+        short value = (short)(frame % 2 == 0 ? 8192 : -8192);
+        mostlyClean[frame * 2] = value;
+        mostlyClean[frame * 2 + 1] = value;
+    }
+    var localClip = (short[])mostlyClean.Clone();
+    for (int frame = clipStart; frame < clipStart + clipLength; frame++)
+        localClip[frame * 2] = short.MaxValue;
+    File.WriteAllBytes(path, Wave(localClip));
+    var localQa = WavAudioInspector.Inspect(path);
+    Check(localQa.Success && !localQa.Passed && localQa.Issues.Any(i =>
+        i.Code == "AUDIO_CLIPPING" && i.StartSeconds == (double)clipStart / testRate
+        && i.EndSeconds == (double)(clipStart + clipLength) / testRate),
+        "local clipping must report its exact interval across buffers");
+
+    // Alternating which channel reaches full scale is not a continuous
+    // clipping run on either channel.
+    for (int frame = clipStart; frame < clipStart + clipLength; frame++)
+        mostlyClean[frame * 2 + frame % 2] = short.MaxValue;
+    File.WriteAllBytes(path, Wave(mostlyClean));
+    Check(WavAudioInspector.Inspect(path).Passed,
+        "alternating channels must not count as a continuous clipping run");
+
+    // Isolated clips on one channel can exceed 0.1% on that channel even
+    // when they account for less than 0.1% of the interleaved samples.
+    const int sparseFrames = 10_000;
+    for (int channel = 0; channel < 2; channel++)
+    {
+        var sparseClip = Enumerable.Repeat((short)8192, sparseFrames * 2).ToArray();
+        for (int index = 0; index < 10; index++)
+            sparseClip[(100 + index * 20) * 2 + channel] = short.MaxValue;
+        File.WriteAllBytes(path, Wave(sparseClip));
+        Check(WavAudioInspector.Inspect(path).Passed,
+            "an isolated clipped-sample fraction of exactly 0.1% must pass");
+
+        for (int index = 10; index < 15; index++)
+            sparseClip[(100 + index * 20) * 2 + channel] = short.MaxValue;
+        File.WriteAllBytes(path, Wave(sparseClip));
+        var sparseQa = WavAudioInspector.Inspect(path);
+        var sparseIssue = sparseQa.Issues.SingleOrDefault(issue => issue.Code == "AUDIO_CLIPPING");
+        Check(sparseQa.Success && !sparseQa.Passed && sparseIssue != null
+            && sparseIssue.StartSeconds == null && sparseIssue.EndSeconds == null
+            && sparseIssue.Message.Contains($"チャンネル {channel + 1} ", StringComparison.Ordinal),
+            "isolated clipping above 0.1% must fail and identify the affected channel");
+    }
+
     File.WriteAllBytes(path, Wave(new short[8000 * 2]));
     var shortSilence = WavAudioInspector.Inspect(path, 2);
     Check(shortSilence.Success && !shortSilence.Passed &&
@@ -210,16 +271,64 @@ try
     Check(WavAudioInspector.Inspect(path).ErrorCode == "AUDIO_FILE_INVALID",
         "truncated trailing RIFF chunk header accepted");
 
-    foreach (int bits in new[] { 24, 32 })
+    foreach (int bits in new[] { 8, 24, 32 })
         foreach (bool extensible in new[] { false, true })
         {
-            int halfScale = bits == 24 ? 4194304 : 1073741824;
+            int halfScale = 1 << (bits - 2);
             var pcmSamples = Enumerable.Range(0, 8000).Select(i => i % 2 == 0 ? halfScale : -halfScale).ToArray();
             File.WriteAllBytes(path, PcmWave(pcmSamples, bits, extensible));
             var pcmQa = WavAudioInspector.Inspect(path);
             Check(pcmQa.Passed && pcmQa.Peak == 0.5 && pcmQa.Rms == 0.5,
                 $"PCM {bits}-bit extensible={extensible} QA failed");
+            Check(pcmQa.ChannelLevels.SequenceEqual(new[] { new AudioQaChannelLevel(1, 0.5, 0.5) }),
+                $"PCM {bits}-bit mono channel levels incorrect");
         }
+    foreach (int rail in new[] { -128, 127 })
+    {
+        File.WriteAllBytes(path, PcmWave(new[] { rail, 0, 0 }, 8));
+        var pcm8Qa = WavAudioInspector.Inspect(path);
+        Check(pcm8Qa.Success && pcm8Qa.DurationSeconds == 3.0 / 8000
+            && pcm8Qa.Issues.Any(i => i.Code == "AUDIO_CLIPPING"),
+            "PCM8 must detect both clipping endpoints without including RIFF padding as audio");
+    }
+    foreach (var (bits, validBits, positiveRail, nextNegative) in new[]
+        { (8, 8, 127, -127), (8, 7, 126, -126), (16, 8, 32512, -32512) })
+    {
+        File.WriteAllBytes(path, PcmWave(Enumerable.Repeat(positiveRail, 8000).ToArray(),
+            bits, extensible: true, validBits: validBits));
+        var clippedQa = WavAudioInspector.Inspect(path);
+        Check(clippedQa.Success && !clippedQa.Passed && clippedQa.Issues.Any(i =>
+            i.Code == "AUDIO_CLIPPING" && i.StartSeconds == 0 && i.EndSeconds == 1),
+            $"PCM {validBits}/{bits} positive endpoint must be detected");
+        File.WriteAllBytes(path, PcmWave(Enumerable.Repeat(nextNegative, 8000).ToArray(),
+            bits, extensible: true, validBits: validBits));
+        Check(WavAudioInspector.Inspect(path).Passed,
+            $"PCM {validBits}/{bits} next negative code must keep the common negative threshold");
+    }
+    File.WriteAllBytes(path, PcmWave(new int[80], 8, extensible: true, validBits: 1));
+    var oneBitSilence = WavAudioInspector.Inspect(path);
+    Check(oneBitSilence.Success && oneBitSilence.Issues.Any(i => i.Code == "AUDIO_SILENT")
+        && !oneBitSilence.Issues.Any(i => i.Code == "AUDIO_CLIPPING"),
+        "one-bit silence must not be counted as clipping");
+
+    foreach (int bits in new[] { 8, 16, 24, 32 })
+    {
+        const int precision = 4;
+        int lowBits = (1 << (bits - precision)) - 1;
+        File.WriteAllBytes(path, PcmWave(Enumerable.Repeat(lowBits, 80).ToArray(),
+            bits, extensible: true, validBits: precision));
+        var paddedSilence = WavAudioInspector.Inspect(path);
+        Check(paddedSilence.Success && !paddedSilence.Passed && paddedSilence.Peak == 0
+            && paddedSilence.Issues.Any(i => i.Code == "AUDIO_SILENT"),
+            $"PCM {precision}/{bits} unused bits must not turn silence into signal");
+
+        int halfScale = 1 << (bits - 2);
+        File.WriteAllBytes(path, PcmWave(new[] { halfScale | lowBits, -halfScale | lowBits },
+            bits, extensible: true, validBits: precision));
+        var paddedSignal = WavAudioInspector.Inspect(path);
+        Check(paddedSignal.Passed && paddedSignal.Peak == 0.5 && paddedSignal.Rms == 0.5,
+            $"PCM {precision}/{bits} peak and RMS must use only the declared PCM bits");
+    }
     var floatSamples = new float[8000 * 2];
     Array.Fill(floatSamples, 0.25f);
     foreach (bool extensible in new[] { false, true })
@@ -228,6 +337,23 @@ try
         var floatQa = WavAudioInspector.Inspect(path);
         Check(floatQa.Passed && floatQa.Peak == 0.25 && floatQa.Rms == 0.25,
             "IEEE float mono/stereo QA failed");
+
+        const int firstPeakFrame = 4097;
+        int peakIndex = firstPeakFrame * 2 + 1;
+        floatSamples[peakIndex] = extensible ? -1f : 1f;
+        File.WriteAllBytes(path, FloatWave(floatSamples, extensible));
+        Check(WavAudioInspector.Inspect(path).Passed,
+            "a single sample exactly at full scale must keep the existing clipping threshold");
+
+        floatSamples[peakIndex] = extensible ? -1.25f : MathF.BitIncrement(1f);
+        File.WriteAllBytes(path, FloatWave(floatSamples, extensible));
+        var overRangeQa = WavAudioInspector.Inspect(path);
+        Check(overRangeQa.Success && !overRangeQa.Passed && overRangeQa.Issues.Count(i =>
+            i.Code == "AUDIO_CLIPPING") == 1 && overRangeQa.Issues.Any(i =>
+            i.Code == "AUDIO_CLIPPING" && i.StartSeconds == firstPeakFrame / 8000.0 &&
+            i.EndSeconds == (firstPeakFrame + 1) / 8000.0),
+            "an isolated float sample beyond full scale must fail QA at its actual frame");
+        floatSamples[peakIndex] = 0.25f;
     }
     floatSamples[0] = float.NaN;
     File.WriteAllBytes(path, FloatWave(floatSamples));
