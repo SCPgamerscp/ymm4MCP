@@ -126,6 +126,28 @@ class InstallationAcceptanceTests(unittest.TestCase):
             self.inspect()
         self.status.assert_not_called()
 
+    def test_uninstall_during_stdio_probe_invalidates_accepted_installation(self):
+        def probe(_python, server, *, env, expected_port):
+            server.unlink()
+            return {"tool_count": 4, "status_port": expected_port}
+
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "Installation files changed"):
+            self.inspect()
+
+    def test_replacement_with_same_size_and_mtime_invalidates_accepted_installation(self):
+        def probe(python, _server, *, env, expected_port):
+            original = python.stat()
+            replacement = python.with_suffix(".tmp")
+            replacement.write_bytes(python.read_bytes())
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            replacement.replace(python)
+            return {"tool_count": 4, "status_port": expected_port}
+
+        self.mcp.side_effect = probe
+        with self.assertRaisesRegex(InstallationError, "Installation files changed"):
+            self.inspect()
+
     def test_stale_store_profile_fails_even_if_classic_is_valid(self):
         self.write_config(self.store, command="C:/old/removed/python.exe")
         with self.assertRaisesRegex(InstallationError, "persistent Python"):

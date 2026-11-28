@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from urllib.parse import urlsplit
 
@@ -51,6 +52,17 @@ def _same_path(actual, expected):
     if not isinstance(actual, str) or not Path(actual).is_absolute():
         return False
     return os.path.normcase(os.path.abspath(actual)) == os.path.normcase(os.path.abspath(expected))
+
+
+def _installation_file_signature(path: Path) -> tuple[int, int, int, int, int]:
+    try:
+        info = path.stat()
+    except OSError as exc:
+        raise InstallationError(f"Missing persistent installation file: {path.name}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise InstallationError(f"Missing persistent installation file: {path.name}")
+    # Ignore access time because running the probe can update it.
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
 def _initialized_config_paths(local_appdata: Path, appdata: Path):
@@ -101,9 +113,8 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
     root = local_appdata / "YMM4MCP" / "mcp-server"
     python = root / ".venv" / "Scripts" / "python.exe"
     server = root / "server.py"
-    for path in (python, server, root / "requirements.txt"):
-        if not path.is_file():
-            raise InstallationError(f"Missing persistent installation file: {path.name}")
+    installed_files = {path: _installation_file_signature(path)
+                       for path in (python, server, root / "requirements.txt")}
     configs = _initialized_config_paths(local_appdata, appdata)
     if not configs:
         raise InstallationError("No initialized Claude Desktop configuration was found")
@@ -203,6 +214,13 @@ def inspect_installation(local_appdata: Path, appdata: Path, *,
             raise InstallationError("Claude Desktop port differs from the running YMM4 plugin")
     if set(_initialized_config_paths(local_appdata, appdata)) != snapshots.keys():
         raise InstallationError("Claude Desktop profiles changed during acceptance check")
+    for path, original in installed_files.items():
+        try:
+            current = _installation_file_signature(path)
+        except InstallationError as exc:
+            raise InstallationError(f"Installation files changed during acceptance check: {path.name}") from exc
+        if current != original:
+            raise InstallationError(f"Installation files changed during acceptance check: {path.name}")
     return {"success": True, "persistent_install": True,
             "claude_profiles_checked": len(configs),
             "authenticated_status": "running", "port": status["port"],
