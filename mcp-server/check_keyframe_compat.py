@@ -35,10 +35,18 @@ def api(client: httpx.Client, base: str, headers: dict[str, str],
     return result
 
 
+def _read_item_keyframes(client: httpx.Client, base: str, headers: dict[str, str],
+                         item_id: str, query: str) -> dict:
+    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&{query}"
+    result = api(client, base, headers, "GET", path)
+    if result.get("item_id", item_id) != item_id:
+        raise ProbeError("Keyframe readback returned a different item")
+    return result
+
+
 def keyframes(client: httpx.Client, base: str, headers: dict[str, str],
               item_id: str, prop: str) -> tuple[list[dict], str]:
-    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&prop={quote(prop, safe='')}"
-    result = api(client, base, headers, "GET", path)
+    result = _read_item_keyframes(client, base, headers, item_id, f"prop={quote(prop, safe='')}")
     animations = result.get("animations")
     if not isinstance(animations, list):
         raise ProbeError(f"{prop}: malformed animation response")
@@ -68,8 +76,7 @@ def snapshot_all_animations(client: httpx.Client, base: str,
     Removing a test key can alter unrelated animations; a successful cleanup
     must restore the complete observable item state.
     """
-    path = f"/items/keyframes?item_id={quote(item_id, safe='')}&strict_inventory=1"
-    result = api(client, base, headers, "GET", path)
+    result = _read_item_keyframes(client, base, headers, item_id, "strict_inventory=1")
     if result.get("inventory_complete") is not True:
         raise ProbeError("Incomplete animation inventory; refusing edit")
     animations = result.get("animations")
@@ -107,9 +114,15 @@ def validate_test_item(client: httpx.Client, base: str,
         payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise ProbeError(f"Cannot inspect target timeline item: {exc}") from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+    if (not isinstance(payload, dict) or payload.get("success", True) is not True
+            or "error" in payload or "error_code" in payload
+            or not isinstance(payload.get("items"), list)):
         raise ProbeError("Malformed timeline item inventory; refusing edit")
-    matches = [item for item in payload["items"]
+    items = payload["items"]
+    count = payload.get("count", len(items))
+    if type(count) is not int or count != len(items):
+        raise ProbeError("Malformed timeline item inventory; reported count does not match")
+    matches = [item for item in items
                if isinstance(item, dict) and item.get("item_id") == item_id]
     if len(matches) != 1:
         raise ProbeError("Target item must exist exactly once; refusing edit")

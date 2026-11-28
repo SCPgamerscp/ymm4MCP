@@ -24,6 +24,7 @@ class FakeYmm4:
         self.item_id = "native:test"
         self.length = 100
         self.item_revision = "r1"
+        self.animation_item_id = self.item_id
         self.timeline_metadata = {}
         self.frames = {"Zoom": [{"at": 0, "value": 1.0}, {"at": 24, "value": 1.25}],
                        "X": [{"at": 0, "value": 0.0}, {"at": 24, "value": 80.0}],
@@ -46,6 +47,7 @@ class FakeYmm4:
             prop = request.url.params.get("prop")
             props = [prop] if prop else list(self.frames)
             return httpx.Response(200, json={"success": True,
+                "item_id": self.animation_item_id,
                 "inventory_complete": prop is None,
                 "revision": "r1", "animations": [{"prop": p,
                     "keyframes": self.frames[p]} for p in props]})
@@ -91,6 +93,13 @@ class KeyframePersistenceTests(unittest.TestCase):
         self.capture()
         self.save()
         with self.assertRaisesRegex(ProbeError, "original live timeline is still active"):
+            verify(self.client, BASE, HEADERS, self.snapshot)
+
+    def test_verify_rejects_animation_readback_from_another_image(self):
+        self.capture()
+        self.save()
+        self.fake.animation_item_id = "native:other"
+        with self.assertRaisesRegex(ProbeError, "Keyframe readback returned a different item"):
             verify(self.client, BASE, HEADERS, self.snapshot)
 
     def test_verify_rejects_missing_live_timeline_after_capture(self):

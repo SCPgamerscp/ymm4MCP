@@ -157,6 +157,43 @@ def probe(fake, at=24):
 
 
 class LiveProbeProtocolTests(unittest.TestCase):
+    def test_incomplete_item_inventory_stops_before_keyframe_writes(self):
+        for invalid in (
+            {"count": 2},
+            {"count": True},
+            {"success": False},
+            {"error": "timeline unavailable"},
+            {"error_code": "TIMELINE_UNAVAILABLE"},
+        ):
+            with self.subTest(invalid=invalid):
+                fake = FakeYmm4()
+
+                def incomplete_inventory(request):
+                    response = fake(request)
+                    if request.url.path == "/api/items":
+                        return httpx.Response(200, json={**response.json(), **invalid})
+                    return response
+
+                with self.assertRaisesRegex(ProbeError, "Malformed timeline item inventory"):
+                    probe(incomplete_inventory, at=None)
+                self.assertEqual(fake.posts, [])
+
+    def test_readback_for_a_different_item_stops_before_keyframe_writes(self):
+        for property_read in (False, True):
+            with self.subTest(property_read=property_read):
+                fake = FakeYmm4()
+
+                def mismatched_readback(request):
+                    response = fake(request)
+                    if (request.method == "GET" and request.url.path == "/api/items/keyframes"
+                            and ("prop" in request.url.params) == property_read):
+                        return httpx.Response(200, json={**response.json(), "item_id": "native:other"})
+                    return response
+
+                with self.assertRaisesRegex(ProbeError, "Keyframe readback returned a different item"):
+                    probe(mismatched_readback, at=None)
+                self.assertEqual(fake.posts, [])
+
     def test_live_timeline_switch_stops_writes_even_with_matching_revisions(self):
         for at, switch_after, new_identity in (
             (24, 0, "timeline:" + "b" * 32),
@@ -192,7 +229,8 @@ class LiveProbeProtocolTests(unittest.TestCase):
         def same_timeline(request):
             response = fake(request)
             if request.method == "GET" and request.url.path == "/api/items":
-                return httpx.Response(200, json={**response.json(), "timeline_id": "timeline:" + "a" * 32})
+                return httpx.Response(200, json={**response.json(), "count": 1,
+                                                 "timeline_id": "timeline:" + "a" * 32})
             return response
 
         probe(same_timeline, at=None)
